@@ -13,7 +13,7 @@ include $(DEVKITARM)/3ds_rules
 TARGET          := 3ds-recorder
 # The CIA's title version: raise it with each build that goes to a console, or the HOME Menu
 # keeps showing the banner it cached for the installed version.
-APP_VERSION := 0.9.13
+APP_VERSION := 0.9.14
 # "beta" for the open beta, empty for a release: shown next to the version on the panel
 APP_CHANNEL     := beta
 APP_TITLE       := 3DS Recorder
@@ -55,6 +55,10 @@ all: $(BUILD)
 	@python3 ../tools/build-web.py ../web romfs/web/index.html.gz
 	@# the 3dsx embeds romfs but its rule only follows the ELF: rebuild it when romfs changed
 	@if [ -f $(TARGET).3dsx ] && [ -n "$$(find romfs -newer $(TARGET).3dsx -type f)" ]; then rm -f $(TARGET).3dsx; fi
+	@# the objects that print the version: rebuilt when APP_VERSION / APP_CHANNEL change (make does not
+	@# follow CFLAGS; 0.9.12-0.9.14 showed "0.9.11" on the panel, 2026-11-08)
+	@mkdir -p $(BUILD); if [ "$$(cat $(BUILD)/.app_version 2>/dev/null)" != "$(APP_VERSION) $(APP_CHANNEL)" ]; then \
+		rm -f $(BUILD)/app.o $(BUILD)/recorder.o; echo "$(APP_VERSION) $(APP_CHANNEL)" > $(BUILD)/.app_version; fi
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):

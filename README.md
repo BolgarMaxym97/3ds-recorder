@@ -30,7 +30,7 @@ You do not need a PC or a capture card. The console turns each recording into a 
 send it to your phone over Wi-Fi by scanning a QR code.
 
 > [!WARNING]
-> **This is a beta (0.9.13).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
+> **This is a beta (0.9.14).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
 > console, game and SD card, so bugs are possible. If something goes wrong, please
 > [open an issue](../../issues/new) and attach the log (see [Problems and feedback](#problems-and-feedback)) —
 > every report helps make the release better.
@@ -90,7 +90,8 @@ send it to your phone over Wi-Fi by scanning a QR code.
   leaves Luma's plugin loader a one-time order to load a tiny launcher plugin (about 1 KB) into that game, which
   starts the recorder again and does nothing else. If the plugin loader is off, it is turned on for that one game
   and off again afterwards. The game gets 2 MB less memory, the recorder keeps its buffers in those 2 MB, and the
-  video is less smooth there. When such a game closes, the recording is saved; open 3DS Recorder to record again.
+  video is less smooth there; recording only the top screen (Settings → Screens → Top) makes it smoother. When such a
+  game closes, the recording is saved; open 3DS Recorder to record again.
   A New 3DS does not restart for these games.
 - On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: only the left half.
 
@@ -161,7 +162,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
 
 > [!WARNING]
-> **Це бета-версія (0.9.13).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
+> **Це бета-версія (0.9.14).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
 > й SD-картці, тож можливі баги. Якщо щось пішло не так, будь ласка, [створіть issue](../../issues/new) і додайте
 > журнал (див. [Проблеми і відгуки](#проблеми-і-відгуки)) — кожен звіт допомагає зробити реліз кращим.
 
@@ -219,7 +220,8 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
   завантажувачу плагінів Luma одноразову інструкцію завантажити в цю гру крихітний плагін-запускач (близько 1 КБ),
   який лише знову запускає рекордер. Якщо завантажувач плагінів вимкнено, він вмикається лише на цю гру і потім
   вимикається. Грі лишається на 2 МБ менше пам'яті, рекордер тримає свої буфери в цих 2 МБ, і відео там менш
-  плавне. Коли така гра закривається, запис зберігається; щоб писати далі, відкрийте 3DS Recorder. New 3DS для цих
+  плавне; запис лише верхнього екрана (Налаштування → Екрани → Верхній) робить його плавнішим. Коли така гра
+  закривається, запис зберігається; щоб писати далі, відкрийте 3DS Recorder. New 3DS для цих
   ігор не перезапускається.
 - На New 3DS кілька ігор із **широким верхнім екраном 800 пікселів** записуються у 400 пікселях: лише ліва половина.
 

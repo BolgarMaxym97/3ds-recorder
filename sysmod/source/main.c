@@ -1539,13 +1539,16 @@ static void LogMemory(const char *when)
 /* ------------------------------------------------------------------ priority boost */
 
 static Thread g_writerThread, g_convThread;
+static bool g_convOnGameCore;   /* Old 3DS: the converter runs on core 0 at the lowest priority */
 
 static void SetBoost(bool on, const char *why)
 {
     if (on == g_boosted || !g_writerThread || !g_convThread)
         return;
     g_boosted = on;
-    svcSetThreadPriority(threadGetHandle(g_convThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+    /* on the game's core a boost would take time from the game itself: the converter stays lowest */
+    if (!g_convOnGameCore)
+        svcSetThreadPriority(threadGetHandle(g_convThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
     svcSetThreadPriority(threadGetHandle(g_writerThread), on ? CONVERTER_PRIO_BOOST - 1 : CONVERTER_PRIO - 1);
     Log("priority %s (converter %02X): %s", on ? "boosted" : "normal", on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO, why);
 }
@@ -2429,7 +2432,19 @@ int main(void)
     /* the writer sits just above the converter: it mostly waits on the SD, and a starved writer
        fills the ring */
     Thread writer = threadCreate(WriterMain, NULL, 8 * KB, CONVERTER_PRIO - 1, 1, false);
-    Thread conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
+    /* Old 3DS: the system core has little time to spare while a game runs (Smash: ~22 + 11 ms of
+       encoding per pair of frames there, "no free slot" drops). On the game's core, at the lowest
+       priority, the converter takes only the time the game's own threads leave idle while they
+       wait for the GPU or the next screen refresh. (The idea comes from Luma3DS-Flashback's notes;
+       no code from it.) The DMA, the writer and the audio stay on the system core. New 3DS: the
+       system core keeps up; a game can also leave its core with little idle time there. */
+    s64 isNew3ds = 0;
+    svcGetSystemInfo(&isNew3ds, 0x10000, 0x201);
+    Thread conv = NULL;
+    if (!isNew3ds && (conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 0, false)) != NULL)
+        g_convOnGameCore = true;
+    if (!conv)
+        conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
     g_writerThread = writer;
     g_convThread = conv;
     /* highest non-privileged priority: a poll late by more than ~6 ms loses a frame
@@ -2456,11 +2471,11 @@ int main(void)
     svcGetSystemInfo(&n3ds, 0x10000, 0x201);
     const u32 kv = osGetKernelVersion();
     Log("recorder started (build " __DATE__ " " __TIME__ ", %s, Luma %lu.%lu.%lu, kernel %lu.%lu-%lu, hotkey mask %03lX, "
-        "fps %lu, screens %s, audio %s, file limit %lu MB, SYSTEM free %lu KB, SD free %lu MB)",
+        "fps %lu, screens %s, audio %s, file limit %lu MB, SYSTEM free %lu KB, SD free %lu MB, converter on core %d)",
         n3ds ? "New 3DS" : "Old 3DS", (u32)(luma >> 24) & 0xFF, (u32)(luma >> 16) & 0xFF, (u32)(luma >> 8) & 0xFF,
         GET_VERSION_MAJOR(kv), GET_VERSION_MINOR(kv), GET_VERSION_REVISION(kv), g_cfg.hotkey, g_cfg.fps,
         g_cfg.bottom ? "both" : "top", g_cfg.audio ? "on" : "off", g_cfg.maxFileMb, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
-        SdFreeMb());
+        SdFreeMb(), g_convOnGameCore ? 0 : 1);
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
     g_shared.state = REC_STATE_IDLE;

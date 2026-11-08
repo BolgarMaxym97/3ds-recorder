@@ -21,7 +21,7 @@ Option:
 
 AccessControlInfo:
   IdealProcessor                : 1
-  AffinityMask                  : 2
+  AffinityMask                  : 3   # core 0 too: the converter runs there on Old 3DS (lowest priority)
   Priority                      : 8   # makerom adds 32 -> main thread 0x28 (v0.1-0.3 had 40 -> 72: invalid, main thread never ran)
 
   DisableDebug                  : false
