@@ -1405,6 +1405,12 @@ static void draw_firstrun_top(App *a)
 static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6};
 static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY};
 
+/* The author's Telegram channel (news, questions), opposite "Y How to use". */
+static void help_channel(void)
+{
+    ui_text_right(386, 219.5f, 9, FONT_BOLD, COL_SOFT, "Telegram · t.me/side_quest_ua");
+}
+
 static void draw_help_top(App *a)
 {
     char buf[48];
@@ -1431,6 +1437,7 @@ static void draw_help_top(App *a)
             p = e ? e + 1 : p + n;
         }
         ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
+        help_channel();
         return;
     }
     /* the "how to record" topic names the configured hotkey */
@@ -1439,6 +1446,7 @@ static void draw_help_top(App *a)
     snprintf(body, sizeof(body), T(HELP_BODY[a->helpTopic]), hk, hk);
     ui_text_wrap(14, 54, 372, 10, FONT_REG, COL_SOFT, body);
     ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
+    help_channel();
 }
 
 static void draw_lang_top(App *a)
