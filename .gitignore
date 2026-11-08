@@ -1,0 +1,40 @@
+# Build output (rebuilt with make; releases are attached to GitHub Releases)
+build/
+*.3dsx
+*.cia
+*.cxi
+*.elf
+*.3gx
+*.smdh
+*.map
+*.lst
+*.o
+*.d
+
+# Generated into the app's romfs at build time (sysmod/rec3ds.cxi, web/ via tools/build-web.py)
+app/romfs/rec3ds.cxi
+app/romfs/web/
+
+# Host test and tool binaries
+tests/host/test_audio
+tests/host/test_bench
+tests/host/test_codec
+tests/host/test_convert
+tools/azahar/azwin
+tools/codecsim/codecsim
+tools/r3dconv/r3dconv
+tests/webcodecs/uploads/
+
+# The development log (kept privately)
+plan.md
+
+# Raw measurements from the consoles (gigabytes) and testers' logs / videos (private)
+bench-results/
+new_3ds_testing/
+
+# Editors, OS, Python
+.idea/
+.vscode/
+.DS_Store
+__pycache__/
+*.pyc

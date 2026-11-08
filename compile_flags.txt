@@ -1,0 +1,11 @@
+-DBENCH_HOST
+-Ilibbench/include
+-Icodec/include
+-Itests/benchplugin/Sources
+-Itests/benchplugin/Includes
+-Iprep/include
+-Itools/r3dconv
+-Ithird_party/minih264
+-Ithird_party/vo-aacenc/aacenc/inc
+-Ithird_party/vo-aacenc/aacenc/basic_op
+-Ithird_party/vo-aacenc/common/include

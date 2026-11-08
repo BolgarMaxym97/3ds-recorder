@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3DS Recorder UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<!--
+  Variant B "Studio" for the control app (roadmap phase 4-5), one design for Old and New 3DS.
+  Ported from the design canvas (claude.ai artifact K6Te9CinBVfErEVcLGc9U3, 2026-11-01) and brought
+  up to date with plan.md on 2026-11-03. Mockups are native x2: divide every px by 2 for the console.
+-->
+<style>
+:root {
+  --page: #0f1114; --frame: #2a2c30; --bg: #14161a; --surface: #1f232a; --surface2: #2a2f37; --track: #3a3f47;
+  --text: #e8eaed; --muted: #9aa3ad; --soft: #c3c9d0; --accent: #ff4d4f; --danger: #c62f31;
+  --err: #ff8a8c; --err-bg: #3a1d1f; --warn: #ffb15c; --warn-bg: #3a2a14; --info: #7ab8ff; --info-bg: #1b2a3d;
+  --ok: #5fd896; --ok-bg: #24372c; --led-blue: #4d9fff; --led-green: #2fbf71;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+a { color: var(--info); }
+header.page { max-width: 1920px; margin: 0 auto; padding: 48px 40px 8px; }
+header.page h1 { margin: 0 0 8px; font-size: 40px; }
+header.page p { margin: 0 0 6px; color: var(--soft); font-size: 18px; line-height: 1.5; max-width: 1200px; }
+.changes { margin: 18px 0 0; padding: 18px 22px 18px 40px; background: var(--surface); border-radius: 16px; max-width: 1200px;
+  color: var(--soft); font-size: 16px; line-height: 1.6; }
+.changes b { color: var(--text); }
+main { max-width: 1920px; margin: 0 auto; padding: 0 40px 80px; }
+h2.group { margin: 56px 0 6px; font-size: 30px; }
+p.group { margin: 0 0 24px; color: var(--muted); font-size: 17px; }
+.boards { display: flex; flex-wrap: wrap; gap: 40px; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+figcaption { font-size: 20px; font-weight: 600; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tag { font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--surface2); color: var(--soft); }
+.tag.n3ds { background: var(--info-bg); color: var(--info); }
+.tag.o3ds { background: var(--ok-bg); color: var(--ok); }
+.tag.phase { background: var(--warn-bg); color: var(--warn); }
+.tag.draft { background: var(--err-bg); color: var(--err); }
+figure > .note { max-width: 880px; font-size: 16px; color: var(--muted); line-height: 1.5; }
+
+/* device: 880x1100, top 800x480, bottom 640x480 (native 400x240 / 320x240 x2) */
+.device { width: 880px; height: 1100px; padding: 40px; background: var(--frame); border-radius: 40px;
+  display: flex; flex-direction: column; align-items: center; gap: 60px; }
+.top, .bot { background: var(--bg); position: relative; overflow: hidden; display: flex; flex-direction: column; }
+.top { width: 800px; height: 480px; padding: 28px; gap: 20px; }
+.bot { width: 640px; height: 480px; padding: 24px; gap: 14px; }
+.row { display: flex; align-items: center; gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 4px; }
+.between { justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.mt-auto { margin-top: auto; }
+.eyebrow { font-size: 18px; color: var(--muted); font-weight: 500; }
+.display { font-size: 34px; font-weight: 700; }
+.h1 { font-size: 30px; font-weight: 700; }
+.title { font-size: 22px; font-weight: 700; }
+.body { font-size: 20px; }
+.cap { font-size: 18px; color: var(--muted); }
+.soft { color: var(--soft); }
+.b { font-weight: 600; }
+.mono { font-family: var(--mono); }
+
+.card { background: var(--surface); border-radius: 14px; padding: 14px 16px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.stats.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.stats.three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.stat .l { font-size: 18px; color: var(--muted); }
+.stat .v { font-size: 26px; font-weight: 700; }
+.stats.two .stat .v, .stats.three .stat .v { font-size: 22px; }
+.stat .s { font-size: 18px; color: var(--muted); }
+.callout { border-radius: 14px; padding: 14px 16px; font-size: 18px; line-height: 1.45; display: flex; gap: 14px; align-items: flex-start; }
+.callout.info { background: var(--surface); color: var(--soft); }
+.callout.warn { background: var(--warn-bg); color: #ffd8a8; }
+.callout.err { background: var(--err-bg); color: #ffd0d1; }
+.callout svg { flex-shrink: 0; }
+
+.pill { display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px; border-radius: 999px; font-weight: 600; font-size: 18px; }
+.pill .dot { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.pill.on { background: var(--ok-bg); color: var(--ok); } .pill.on .dot { background: var(--ok); }
+.pill.rec { background: var(--err-bg); color: var(--err); } .pill.rec .dot { background: var(--accent); }
+.pill.off { background: var(--surface); color: var(--soft); } .pill.off .dot { border: 2px solid var(--muted); }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; flex: 1; }
+.tile { background: var(--surface); border-radius: 20px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
+.tile.focus { outline: 3px solid var(--accent); outline-offset: -3px; }
+.tile .t { font-size: 22px; font-weight: 600; }
+.tile .s { font-size: 18px; color: var(--muted); }
+.toggle { width: 64px; height: 36px; border-radius: 999px; background: var(--accent); position: relative; display: block; flex-shrink: 0; }
+.toggle::after { content: ""; position: absolute; right: 4px; top: 4px; width: 28px; height: 28px; border-radius: 50%; background: #fff; }
+.toggle.off { background: var(--track); }
+.toggle.off::after { right: auto; left: 4px; background: var(--soft); }
+.keys { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--muted); }
+.key { background: var(--surface2); color: var(--text); border-radius: 8px; padding: 6px 10px; font-weight: 600; }
+.hint { display: flex; align-items: center; justify-content: flex-start; gap: 10px; font-size: 18px; color: var(--muted); }
+.lang-btn { height: 34px; padding: 0 4px; border-radius: 8px; background: var(--surface2); display: inline-flex; align-items: center; justify-content: center; }
+.lang-btn svg { width: 42px; height: 26px; border-radius: 3px; display: block; }
+.phone { width: 380px; border-radius: 44px; background: #0b0c0e; border: 10px solid #2a2c30; overflow: hidden; display: flex; flex-direction: column; }
+.phone-bar { background: var(--surface); padding: 12px 16px; text-align: center; font-size: 14px; color: var(--soft); }
+.phone-body { padding: 18px 18px 22px; display: flex; flex-direction: column; gap: 12px; background: var(--bg); }
+.pitem { display: flex; gap: 12px; align-items: center; padding: 8px; border-radius: 12px; }
+.pitem.sel { background: var(--surface); outline: 2px solid var(--accent); outline-offset: -2px; }
+.help-btn { width: 34px; height: 34px; border-radius: 50%; background: var(--surface2); color: var(--text); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+.topics { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.topic { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; font-size: 18px; font-weight: 600; }
+.topic.sel { background: var(--surface); outline: 3px solid var(--accent); outline-offset: -3px; }
+.topic .n { width: 30px; height: 30px; border-radius: 8px; background: var(--surface2); display: inline-flex; align-items: center; justify-content: center; font-size: 15px; color: var(--soft); flex-shrink: 0; }
+.steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+.steps li { display: flex; gap: 14px; align-items: flex-start; font-size: 19px; line-height: 1.4; color: var(--soft); counter-increment: s; }
+.steps li::before { content: counter(s); width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 17px; }
+.steps b { color: var(--text); }
+.hints { display: flex; gap: 20px; font-size: 18px; color: var(--muted); }
+
+.navbar { display: flex; align-items: center; gap: 12px; }
+.back { width: 44px; height: 44px; border-radius: 12px; background: var(--surface); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.setrow { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border-radius: 14px;
+  padding: 6px 6px 6px 16px; min-height: 56px; }
+.setrow .k { font-size: 18px; font-weight: 600; }
+.setrow .k small { display: block; font-size: 15px; color: var(--muted); font-weight: 500; }
+.seg { display: flex; gap: 4px; background: var(--bg); border-radius: 10px; padding: 4px; font-size: 18px; font-weight: 600; }
+.seg span { padding: 9px 13px; border-radius: 8px; color: var(--soft); }
+.seg span.sel { background: var(--accent); color: #fff; }
+.seg span.dis { color: #5a616b; text-decoration: line-through; }
+.setrow.focus { outline: 3px solid var(--accent); outline-offset: -3px; }
+.dense .setrow { min-height: 44px; padding-top: 2px; padding-bottom: 2px; }
+.dense .seg span { padding: 6px 11px; }
+
+.btns { display: flex; gap: 12px; }
+.btn { flex: 1; height: 56px; border-radius: 14px; background: var(--surface); display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 600; }
+.btn.primary { background: var(--text); color: var(--bg); }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.dis { background: var(--surface2); color: var(--muted); }
+.bar { height: 14px; border-radius: 999px; background: var(--surface2); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.thumb { border-radius: 10px; background: repeating-linear-gradient(135deg, #3b4a5c 0 16px, #34424f 16px 32px);
+  display: flex; align-items: center; justify-content: center; color: #c9d3dd; font-size: 18px; flex-shrink: 0; }
+.list { display: flex; flex-direction: column; gap: 8px; flex: 1; overflow: hidden; }
+.item { display: flex; align-items: center; gap: 14px; padding: 10px; border-radius: 14px; }
+.item.sel { background: var(--surface); outline: 3px solid var(--accent); outline-offset: -3px; }
+.chip { font-size: 15px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--surface2); color: var(--soft); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.check { display: flex; align-items: center; gap: 14px; background: var(--surface); border-radius: 14px; padding: 14px 16px; }
+.check.bad { background: #2e1b1d; }
+
+/* LED */
+.leds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.led { background: var(--surface); border-radius: 14px; padding: 16px; display: flex; gap: 16px; align-items: center; }
+.led .lamp { width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 18px currentColor; }
+.lamp.blue { background: var(--led-blue); color: var(--led-blue); }
+.lamp.red { background: var(--accent); color: var(--accent); }
+.lamp.green { background: var(--led-green); color: var(--led-green); }
+.lamp.breath { animation: breath 2s linear infinite; }
+.lamp.twice { animation: twice 1.5s steps(1) infinite; }
+.lamp.thrice { animation: thrice 1.5s steps(1) infinite; }
+.lamp.once { animation: once 2.5s steps(1) infinite; }
+@keyframes breath { 0%, 100% { opacity: .08; } 50% { opacity: 1; } }
+@keyframes twice { 0% { opacity: 1; } 40% { opacity: .08; } 60% { opacity: 1; } 100% { opacity: .08; } }
+@keyframes thrice { 0% { opacity: 1; } 20% { opacity: .08; } 33% { opacity: 1; } 53% { opacity: .08; } 66% { opacity: 1; } 86%, 100% { opacity: .08; } }
+@keyframes once { 0% { opacity: 1; } 60%, 100% { opacity: .08; } }
+@media (prefers-reduced-motion: reduce) { .lamp { animation: none !important; } }
+.timeline { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: #0b0c0e; }
+.timeline i { display: block; height: 100%; }
+
+/* spec boards */
+.spec { width: 1360px; min-height: 1100px; padding: 48px; background: #0b0c0e; border-radius: 24px; display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 40px; align-content: start; }
+.spec h3 { margin: 0 0 4px; font-size: 28px; }
+.spec .sub { font-size: 16px; color: var(--muted); line-height: 1.5; }
+.swatches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; font-size: 15px; }
+.sw { display: flex; flex-direction: column; gap: 6px; }
+.sw i { height: 52px; border-radius: 10px; display: block; border: 1px solid #3a3f47; }
+.sw code { font-family: var(--mono); color: var(--soft); }
+.table { background: var(--surface); border-radius: 14px; overflow: hidden; font-size: 16px; }
+.table > div { display: grid; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--surface2); align-items: center; }
+.table > div:last-child { border-bottom: 0; }
+.table > div.h { color: var(--muted); font-weight: 600; }
+.t-nav > div { grid-template-columns: 170px 1fr 190px; }
+.t-type > div { grid-template-columns: 110px 1fr 70px 80px; }
+.t-led > div { grid-template-columns: 150px 1fr 1.2fr; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.rule { background: var(--surface); border-radius: 12px; padding: 14px 16px; font-size: 16px; line-height: 1.5; color: var(--soft); }
+.rule b { color: var(--text); }
+.comp { background: var(--surface); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.comp > .name { font-size: 15px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.comp > .dim { font-size: 15px; color: var(--muted); line-height: 1.5; font-family: var(--mono); }
+.compgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+
+@media (max-width: 960px) {
+  header.page, main { padding-left: 16px; padding-right: 16px; }
+  .boards { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 12px; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></g></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></g></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/><path d="M2 9a6 6 0 0 1 3-4M3.5 12a4 4 0 0 1 2-3" opacity=".7"/></g></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24"><g fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" stroke="#5fd896"/><path d="M8 12.5l3 3 5-6" stroke="#5fd896"/></g></symbol>
+    <symbol id="i-bad" viewBox="0 0 24 24"><g fill="none" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke="#ff8a8c"/><path d="M9 9l6 6M15 9l-6 6" stroke="#ff8a8c"/></g></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><g fill="none" stroke="#7ab8ff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></g></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><g fill="none" stroke="#ffb15c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></g></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><g fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></g></symbol>
+    <symbol id="i-rw" viewBox="0 0 24 24"><path d="M11 6l-7 6 7 6zM20 6l-7 6 7 6z" fill="currentColor"/></symbol>
+    <symbol id="i-ff" viewBox="0 0 24 24"><path d="M13 6l7 6-7 6zM4 6l7 6-7 6z" fill="currentColor"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></g></symbol>
+    <symbol id="f-ua" viewBox="0 0 30 20"><rect width="30" height="10" fill="#0057b7"/><rect y="10" width="30" height="10" fill="#ffd700"/></symbol>
+    <symbol id="f-us" viewBox="0 0 38 20"><rect width="38" height="20" fill="#fff"/><rect y="0.000" width="38" height="1.538" fill="#B22234"/><rect y="3.077" width="38" height="1.538" fill="#B22234"/><rect y="6.154" width="38" height="1.538" fill="#B22234"/><rect y="9.231" width="38" height="1.538" fill="#B22234"/><rect y="12.308" width="38" height="1.538" fill="#B22234"/><rect y="15.385" width="38" height="1.538" fill="#B22234"/><rect y="18.462" width="38" height="1.538" fill="#B22234"/><rect width="15.2" height="10.769" fill="#3C3B6E"/><circle cx="1.30" cy="1.10" r="0.45" fill="#fff"/><circle cx="3.90" cy="1.10" r="0.45" fill="#fff"/><circle cx="6.50" cy="1.10" r="0.45" fill="#fff"/><circle cx="9.10" cy="1.10" r="0.45" fill="#fff"/><circle cx="11.70" cy="1.10" r="0.45" fill="#fff"/><circle cx="14.30" cy="1.10" r="0.45" fill="#fff"/><circle cx="2.60" cy="2.27" r="0.45" fill="#fff"/><circle cx="5.20" cy="2.27" r="0.45" fill="#fff"/><circle cx="7.80" cy="2.27" r="0.45" fill="#fff"/><circle cx="10.40" cy="2.27" r="0.45" fill="#fff"/><circle cx="13.00" cy="2.27" r="0.45" fill="#fff"/><circle cx="1.30" cy="3.44" r="0.45" fill="#fff"/><circle cx="3.90" cy="3.44" r="0.45" fill="#fff"/><circle cx="6.50" cy="3.44" r="0.45" fill="#fff"/><circle cx="9.10" cy="3.44" r="0.45" fill="#fff"/><circle cx="11.70" cy="3.44" r="0.45" fill="#fff"/><circle cx="14.30" cy="3.44" r="0.45" fill="#fff"/><circle cx="2.60" cy="4.61" r="0.45" fill="#fff"/><circle cx="5.20" cy="4.61" r="0.45" fill="#fff"/><circle cx="7.80" cy="4.61" r="0.45" fill="#fff"/><circle cx="10.40" cy="4.61" r="0.45" fill="#fff"/><circle cx="13.00" cy="4.61" r="0.45" fill="#fff"/><circle cx="1.30" cy="5.78" r="0.45" fill="#fff"/><circle cx="3.90" cy="5.78" r="0.45" fill="#fff"/><circle cx="6.50" cy="5.78" r="0.45" fill="#fff"/><circle cx="9.10" cy="5.78" r="0.45" fill="#fff"/><circle cx="11.70" cy="5.78" r="0.45" fill="#fff"/><circle cx="14.30" cy="5.78" r="0.45" fill="#fff"/><circle cx="2.60" cy="6.95" r="0.45" fill="#fff"/><circle cx="5.20" cy="6.95" r="0.45" fill="#fff"/><circle cx="7.80" cy="6.95" r="0.45" fill="#fff"/><circle cx="10.40" cy="6.95" r="0.45" fill="#fff"/><circle cx="13.00" cy="6.95" r="0.45" fill="#fff"/><circle cx="1.30" cy="8.12" r="0.45" fill="#fff"/><circle cx="3.90" cy="8.12" r="0.45" fill="#fff"/><circle cx="6.50" cy="8.12" r="0.45" fill="#fff"/><circle cx="9.10" cy="8.12" r="0.45" fill="#fff"/><circle cx="11.70" cy="8.12" r="0.45" fill="#fff"/><circle cx="14.30" cy="8.12" r="0.45" fill="#fff"/><circle cx="2.60" cy="9.29" r="0.45" fill="#fff"/><circle cx="5.20" cy="9.29" r="0.45" fill="#fff"/><circle cx="7.80" cy="9.29" r="0.45" fill="#fff"/><circle cx="10.40" cy="9.29" r="0.45" fill="#fff"/><circle cx="13.00" cy="9.29" r="0.45" fill="#fff"/><circle cx="1.30" cy="10.46" r="0.45" fill="#fff"/><circle cx="3.90" cy="10.46" r="0.45" fill="#fff"/><circle cx="6.50" cy="10.46" r="0.45" fill="#fff"/><circle cx="9.10" cy="10.46" r="0.45" fill="#fff"/><circle cx="11.70" cy="10.46" r="0.45" fill="#fff"/><circle cx="14.30" cy="10.46" r="0.45" fill="#fff"/></symbol>
+  </defs>
+</svg>
+
+<header class="page">
+  <h1>3DS Recorder — UI, варіант B «Studio»</h1>
+  <p>Додаток-пульт (фази 4–5) для <b>Old і New 3DS</b>, один дизайн. Макети в масштабі <b>native × 2</b>: усі px ділити на 2 (верхній екран 400×240, нижній 320×240). Тач і кнопки працюють на кожному екрані.</p>
+  <p>Перенесено з полотна дизайну від 01.11.2026 і актуалізовано під <code>plan.md</code> станом на 03.11.2026.</p>
+  <ol class="changes">
+    <li><b>Модуль замість плагіна:</b> «Перший запуск» перевіряє, чи запущено рекордер (Luma sysmodule), а не plugin loader.</li>
+    <li><b>Автостарту немає (D14):</b> тайл «Автостарт» і стан «Автостарт запису» прибрано. Замість них перемикач <b>«Рекордер»</b>: користувач у додатку вирішує, чи працює хоткей. Після кожного ввімкнення консолі рекордер запускається з додатку.</li>
+    <li><b>Оверлею в грі немає:</b> REC-pill, тости, «попередження під час запису» й «аварійна зупинка» прибрано. Усе показує <b>LED</b> (окрема специфікація внизу).</li>
+    <li><b>Хоткей R + SELECT</b> (D6). Нові правила: без L + R разом (у HOME відкриває Камеру), не L + ↓ + SELECT (Rosalina), без START і HOME.</li>
+    <li><b>Профілі:</b> «Стандарт» (XR32, обидва екрани, повна роздільність, 30 fps) на <b>усіх</b> консолях; «HQ» лише на New 3DS (фаза 3, деталі ще не визначені). Старий «Lite / half-res / raw RGB565» прибрано.</li>
+    <li><b>Звук:</b> перемикач у налаштуваннях (зараз <code>audio=on|off</code> у config.ini). Частота 30 / 20 / 15 fps; LED: пульс / постійно / вимк.</li>
+    <li><b>Записи:</b> охоплюють усю консоль (HOME, кілька ігор), тому ім'я — дата й час (<code>20261103_172644</code>), а не Title ID. Розміри — з тестів v10 на O3DS: ≈ 2.1 MB/с, ≈ 128 MB за хвилину.</li>
+    <li><b>Передати на телефон</b> (рішення після дослідження 03.11): QR + сторінка з консолі по Wi-Fi; MP4 робить браузер телефона (швидко на iPhone, у реальному часі на Chrome / Firefox). Новий макет — сторінка на телефоні.</li>
+    <li><b>Новий діалог «Видалити рекордер»:</b> повне видалення модуля, налаштувань і самого додатку.</li>
+    <li><b>Дві мови:</b> англійська (за замовчуванням) і українська. Перемикач — прапор іншої мови внизу пульту (в English — український, в українській — прапор США) і рядок «Мова · Language» у налаштуваннях; приклад пульту англійською, правила в специфікації.</li>
+    <li><b>Передача на телефон:</b> підказка, що записи можна забрати й без Wi-Fi — SD-карта в комп'ютер.</li>
+    <li><b>Новий екран «Допомога»:</b> 6 розділів (як записувати, LED, після ввімкнення консолі, як забрати запис, хоткей, проблеми); вхід — «?» на пульті або SELECT.</li>
+  </ol>
+</header>
+
+<main>
+
+<h2 class="group">Основні екрани</h2>
+<p class="group">Пульт показано для обох моделей. Решта екранів однакові, різниця лише в доступності HQ.</p>
+<div class="boards">
+
+<!-- ===================== PANEL N3DS ===================== -->
+<figure>
+<figcaption>Пульт <span class="tag n3ds">New 3DS</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран">
+  <div class="row between">
+    <div class="col"><span class="eyebrow">3DS Recorder · New 3DS</span><span class="display">Готово до запису</span></div>
+    <span class="pill on"><span class="dot"></span>Рекордер працює</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="l">Профіль</span><span class="v">HQ</span><span class="s">ядра 2–3</span></div>
+    <div class="stat"><span class="l">Частота</span><span class="v">30 fps</span><span class="s">ціль</span></div>
+    <div class="stat"><span class="l">Екрани</span><span class="v">Обидва</span><span class="s">звук увімк.</span></div>
+    <div class="stat"><span class="l">SD вільно</span><span class="v">3.6 GB</span><span class="s">≈ 28 хв</span></div>
+  </div>
+  <div class="card row grow" style="gap:18px">
+    <div class="thumb" style="width:200px;height:120px">[превʼю]</div>
+    <div class="col grow" style="gap:6px">
+      <span class="cap">Останній запис</span>
+      <span class="body b">03.11.2026 · 17:26</span>
+      <span class="cap">02:02 · 256 MB · пропущено 4 кадри</span>
+    </div>
+    <span class="cap">Ⓨ відтворити</span>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран">
+  <div class="tiles">
+    <div class="tile focus">
+      <span class="row between"><span class="t">Рекордер</span><span class="toggle"></span></span>
+      <span class="s">Хоткей у грі й HOME працює</span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-grid"/></svg>
+      <span class="col"><span class="t">Галерея</span><span class="s">12 записів</span></span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-phone"/></svg>
+      <span class="col"><span class="t">На телефон</span><span class="s">по Wi-Fi</span></span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-sliders"/></svg>
+      <span class="col"><span class="t">Налаштування</span><span class="s">профіль, fps, звук</span></span>
+    </div>
+  </div>
+  <div class="hint">Старт / стоп: <span class="keys"><span class="key">R</span>+<span class="key">↓</span>+<span class="key">SELECT</span></span>
+    <span style="margin-left:auto" class="keys"><span class="lang-btn" title="Switch to English"><svg><use href="#f-us"/></svg></span><span class="help-btn">?</span> допомога</span></div>
+</section>
+</div>
+<div class="note"><b>Кнопки пульту:</b> хрестовина водить фокус по тайлах, Ⓐ натискає тайл у фокусі; Ⓨ або тап по картці «Останній запис» відкриває плеєр; Ⓧ — мова; SELECT — допомога. <b>Прапор унизу — зміна мови:</b> показує мову, на яку перемкне (зараз українська → прапор США, тап = English). Мова діє одразу, без перезапуску. Перемикач «Рекордер» запускає або зупиняє модуль: вимкнено — хоткей не діє і LED не горить. Стан, час запису, кадри й помилки додаток читає зі спільної пам'яті модуля.</div>
+</figure>
+
+<!-- ===================== PANEL N3DS · EN ===================== -->
+<figure>
+<figcaption>Control panel · English <span class="tag n3ds">New 3DS</span><span class="tag">мова за замовчуванням</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Top screen">
+  <div class="row between">
+    <div class="col"><span class="eyebrow">3DS Recorder · New 3DS</span><span class="display">Ready to record</span></div>
+    <span class="pill on"><span class="dot"></span>Recorder on</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="l">Profile</span><span class="v">HQ</span><span class="s">cores 2–3</span></div>
+    <div class="stat"><span class="l">Frame rate</span><span class="v">30 fps</span><span class="s">target</span></div>
+    <div class="stat"><span class="l">Screens</span><span class="v">Both</span><span class="s">sound on</span></div>
+    <div class="stat"><span class="l">SD free</span><span class="v">3.6 GB</span><span class="s">≈ 28 min</span></div>
+  </div>
+  <div class="card row grow" style="gap:18px">
+    <div class="thumb" style="width:200px;height:120px">[preview]</div>
+    <div class="col grow" style="gap:6px">
+      <span class="cap">Last recording</span>
+      <span class="body b">Nov 3, 2026 · 17:26</span>
+      <span class="cap">02:02 · 256 MB · 4 frames skipped</span>
+    </div>
+    <span class="cap">Ⓨ play</span>
+  </div>
+</section>
+<section class="bot" aria-label="Bottom screen">
+  <div class="tiles">
+    <div class="tile focus">
+      <span class="row between"><span class="t">Recorder</span><span class="toggle"></span></span>
+      <span class="s">Hotkey works in games and HOME</span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-grid"/></svg>
+      <span class="col"><span class="t">Gallery</span><span class="s">12 recordings</span></span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-phone"/></svg>
+      <span class="col"><span class="t">To phone</span><span class="s">over Wi-Fi</span></span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-sliders"/></svg>
+      <span class="col"><span class="t">Settings</span><span class="s">profile, fps, sound</span></span>
+    </div>
+  </div>
+  <div class="hint">Start / stop: <span class="keys"><span class="key">R</span>+<span class="key">↓</span>+<span class="key">SELECT</span></span>
+    <span style="margin-left:auto" class="keys"><span class="lang-btn" title="Перемкнути на українську"><svg><use href="#f-ua"/></svg></span><span class="help-btn">?</span> help</span></div>
+</section>
+</div>
+<div class="note">Додаток стартує англійською. Прапор України внизу — тап або Ⓧ перемикає на українську (і навпаки: в українській там прапор США). Решта макетів показані українською: це довша мова (≈ +15–25% тексту), тож якщо влазить українська, влізе й англійська. Правила локалізації — у специфікації.</div>
+</figure>
+
+<!-- ===================== PANEL O3DS (recording) ===================== -->
+<figure>
+<figcaption>Пульт під час запису <span class="tag o3ds">Old 3DS</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран">
+  <div class="row between">
+    <div class="col"><span class="eyebrow">3DS Recorder · Old 3DS</span><span class="display">Йде запис · 01:12</span></div>
+    <span class="pill rec"><span class="dot"></span>REC</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="l">Профіль</span><span class="v">Стандарт</span><span class="s">XR32</span></div>
+    <div class="stat"><span class="l">Кадри</span><span class="v">2 160</span><span class="s">пропущено 0</span></div>
+    <div class="stat"><span class="l">Файл</span><span class="v">152 MB</span><span class="s">≈ 2.1 MB/с</span></div>
+    <div class="stat"><span class="l">SD вільно</span><span class="v">3.4 GB</span><span class="s">≈ 26 хв</span></div>
+  </div>
+  <div class="callout info grow">
+    <svg width="28" height="28"><use href="#i-info"/></svg>
+    <div class="col" style="gap:6px">
+      <span class="body b" style="color:var(--text)">Записується вся консоль</span>
+      <span>Гра, HOME, аплети і перемикання між програмами — в одному файлі. Зупинити: хоткей або кнопка нижче. LED пульсує червоним, поки йде запис.</span>
+    </div>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран">
+  <div class="tiles">
+    <div class="tile focus" style="background:var(--err-bg)">
+      <span class="row between"><span class="t" style="color:var(--err)">Зупинити запис</span><span class="pill rec" style="padding:6px 12px"><span class="dot"></span></span></span>
+      <span class="s">Файл збережеться, LED мигне зеленим двічі</span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-grid"/></svg>
+      <span class="col"><span class="t">Галерея</span><span class="s">3 записи</span></span>
+    </div>
+    <div class="tile" style="opacity:.45">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-phone"/></svg>
+      <span class="col"><span class="t">На телефон</span><span class="s">після запису</span></span>
+    </div>
+    <div class="tile">
+      <svg width="40" height="40" style="color:var(--text)"><use href="#i-sliders"/></svg>
+      <span class="col"><span class="t">Налаштування</span><span class="s">HQ недоступний</span></span>
+    </div>
+  </div>
+  <div class="hint">Старт / стоп: <span class="keys"><span class="key">R</span>+<span class="key">↓</span>+<span class="key">SELECT</span></span>
+    <span style="margin-left:auto" class="keys"><span class="lang-btn" title="Switch to English"><svg><use href="#f-us"/></svg></span><span class="help-btn">?</span> допомога</span></div>
+</section>
+</div>
+<div class="note">Old 3DS пише так само: обидва екрани, повна роздільність, 30 fps, зі звуком (перевірено на SM3DL, NSMB2 і HOME, 03.11.2026). Різниця лише в тому, що немає профілю HQ.</div>
+</figure>
+
+<!-- ===================== GALLERY ===================== -->
+<figure>
+<figcaption>Галерея</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: обраний запис" style="flex-direction:row;gap:24px">
+  <div class="col" style="width:300px;gap:10px">
+    <div class="thumb" style="width:300px;height:180px">[верхній кадр]</div>
+    <div class="thumb" style="width:240px;height:180px;align-self:center">[нижній кадр]</div>
+  </div>
+  <div class="col grow" style="gap:16px">
+    <div class="col">
+      <span class="eyebrow">Запис 1 з 12</span>
+      <span class="h1">03.11.2026 · 17:26</span>
+      <span class="cap mono" style="font-size:16px">20261103_172644.r3d</span>
+    </div>
+    <div class="stats two">
+      <div class="stat"><span class="l">Тривалість</span><span class="v">02:02</span></div>
+      <div class="stat"><span class="l">Розмір</span><span class="v">256 MB</span></div>
+      <div class="stat"><span class="l">Профіль</span><span class="v">Стандарт · 30</span></div>
+      <div class="stat"><span class="l">Пропущено кадрів</span><span class="v">4</span></div>
+    </div>
+    <div class="row cap"><svg width="22" height="22"><use href="#i-sound"/></svg> зі звуком · обидва екрани</div>
+    <div class="hints mt-auto"><span>Ⓐ відтворити</span><span>Ⓨ експорт</span><span>Ⓧ видалити</span></div>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: список записів">
+  <div class="navbar">
+    <span class="back"><svg width="22" height="22"><use href="#i-back"/></svg></span>
+    <span class="title">Галерея</span>
+    <span class="cap" style="margin-left:auto">12 записів · 1.9 GB</span>
+  </div>
+  <div class="list">
+    <div class="item sel"><span class="thumb" style="width:100px;height:60px"></span>
+      <span class="col grow"><span class="b" style="font-size:18px">03.11 · 17:26</span><span class="cap">Стандарт · 256 MB</span></span><span class="b">02:02</span></div>
+    <div class="item"><span class="thumb" style="width:100px;height:60px"></span>
+      <span class="col grow"><span class="b" style="font-size:18px">03.11 · 17:18</span><span class="cap">Стандарт · 230 MB · <span style="color:var(--info)">AVI</span></span></span><span class="b">01:48</span></div>
+    <div class="item"><span class="thumb" style="width:100px;height:60px"></span>
+      <span class="col grow"><span class="b" style="font-size:18px">02.11 · 21:05</span><span class="cap">HQ · 1.1 GB</span></span><span class="b">08:40</span></div>
+    <div class="item"><span class="thumb" style="width:100px;height:60px"></span>
+      <span class="col grow"><span class="b" style="font-size:18px">01.11 · 19:48</span><span class="cap">Стандарт · <span style="color:var(--warn)">обірваний</span></span></span><span class="b">04:02</span></div>
+  </div>
+</section>
+</div>
+<div class="note">Превʼю — перший ключовий кадр файлу. «AVI» — для запису вже є експорт. Записи HQ з New 3DS теж показуються на Old 3DS (якщо вдасться декодувати, інакше «лише New 3DS»).</div>
+</figure>
+
+<!-- ===================== PLAYER ===================== -->
+<figure>
+<figcaption>Плеєр</figcaption>
+<div class="device">
+<section class="top thumb" aria-label="Верхній екран: відео" style="border-radius:0;align-items:center;justify-content:center;font-size:22px">
+  [запис: верхній екран]
+  <span class="pill" style="position:absolute;top:16px;right:16px;background:rgba(10,12,16,.78);color:var(--text);padding:8px 14px">00:42 / 02:02</span>
+</section>
+<section class="bot thumb" aria-label="Нижній екран: відео і керування" style="border-radius:0;padding:0;justify-content:flex-start;align-items:stretch">
+  <span style="text-align:center;margin-top:90px;font-size:22px">[запис: нижній екран]</span>
+  <div style="position:absolute;left:0;right:0;bottom:0;background:rgba(20,22,26,.94);padding:20px 24px 22px;display:flex;flex-direction:column;gap:16px">
+    <div class="col" style="gap:8px">
+      <div style="position:relative;height:8px;border-radius:999px;background:var(--track)">
+        <div style="position:absolute;inset:0 auto 0 0;width:34%;border-radius:999px;background:var(--accent)"></div>
+        <div style="position:absolute;left:34%;top:-8px;width:24px;height:24px;margin-left:-12px;border-radius:50%;background:#fff"></div>
+      </div>
+      <div class="row between cap b" style="font-weight:500"><span>00:42</span><span>02:02</span></div>
+    </div>
+    <div class="row between">
+      <span class="row" style="gap:6px;min-width:64px;height:48px;border-radius:12px;background:var(--surface);justify-content:center;padding:0 12px;color:var(--text)"><svg width="22" height="22"><use href="#i-sound"/></svg></span>
+      <div class="row" style="gap:20px">
+        <span class="back" style="width:56px;height:56px;border-radius:50%;color:var(--text)"><svg width="24" height="24"><use href="#i-rw"/></svg></span>
+        <span class="back" style="width:76px;height:76px;border-radius:50%;background:#fff;color:var(--bg)"><svg width="30" height="30"><use href="#i-pause"/></svg></span>
+        <span class="back" style="width:56px;height:56px;border-radius:50%;color:var(--text)"><svg width="24" height="24"><use href="#i-ff"/></svg></span>
+      </div>
+      <span class="back" style="min-width:64px;height:48px;color:var(--text)"><svg width="24" height="24"><use href="#i-export"/></svg></span>
+    </div>
+    <div class="hints" style="justify-content:center"><span>←/→ ±10 с</span><span>Ⓐ пауза</span><span>Ⓑ у галерею</span></div>
+  </div>
+</section>
+</div>
+<div class="note">Відтворення з кодека XR32 напряму. Звук іде через ту саму обробку, що й при експорті: заповнення втрачених кадрів і зрізання високих (як на динаміку консолі).</div>
+</figure>
+
+<!-- ===================== SETTINGS ===================== -->
+<figure>
+<figcaption>Налаштування <span class="tag o3ds">Old 3DS</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: що вийде у файлі" style="flex-direction:row;gap:28px">
+  <div class="col" style="width:220px;align-items:center;gap:10px">
+    <span class="eyebrow" style="align-self:flex-start">Кадр у файлі</span>
+    <div class="col" style="width:200px;align-items:center;border:2px dashed #5a616b;border-radius:10px;padding:8px;gap:6px">
+      <div class="thumb b" style="width:180px;height:108px;background:#2b3a4d">верхній 400×240</div>
+      <div class="thumb b" style="width:144px;height:108px;background:#2b3a4d">нижній 320×240</div>
+    </div>
+    <span class="b" style="font-size:18px">обидва · ліве око · звук</span>
+  </div>
+  <div class="col grow" style="gap:14px">
+    <span class="h1">Що вийде у файлі</span>
+    <div class="stats two">
+      <div class="stat"><span class="l">Кодек</span><span class="v">XR32 · без втрат</span></div>
+      <div class="stat"><span class="l">Потік на SD</span><span class="v">≈ 2.1 MB/с</span></div>
+      <div class="stat"><span class="l">Хвилина запису</span><span class="v">≈ 128 MB</span></div>
+      <div class="stat"><span class="l">Влізе на SD</span><span class="v">≈ 28 хв</span></div>
+    </div>
+    <div class="callout info mt-auto">Цифри для обох екранів при 30 fps; в іграх із нерухомою картинкою менше. Один файл — до 4 GB (≈ 31 хв), розбиття на кілька — фаза 6.</div>
+  </div>
+</section>
+<section class="bot dense" aria-label="Нижній екран: параметри" style="padding:18px 20px;gap:5px">
+  <div class="navbar" style="margin-bottom:2px">
+    <span class="back"><svg width="22" height="22"><use href="#i-back"/></svg></span>
+    <span class="title">Налаштування</span>
+  </div>
+  <div class="setrow focus"><span class="k">Профіль<small>HQ — лише New 3DS</small></span><div class="seg"><span class="sel">Стандарт</span><span class="dis">HQ</span></div></div>
+  <div class="setrow"><span class="k">Частота</span><div class="seg"><span>15</span><span>20</span><span class="sel">30 fps</span></div></div>
+  <div class="setrow"><span class="k">Екрани</span><div class="seg"><span class="sel">Обидва</span><span>Верхній</span></div></div>
+  <div class="setrow" style="padding-right:12px"><span class="k">Звук</span><span class="toggle"></span></div>
+  <div class="setrow"><span class="k">LED</span><div class="seg"><span class="sel">Пульс</span><span>Постійно</span><span>Вимк.</span></div></div>
+  <div class="setrow"><span class="k">Мова · Language</span><div class="seg"><span>English</span><span class="sel">Українська</span></div></div>
+  <div class="setrow" style="padding-right:12px"><span class="k">Хоткей</span><span class="keys"><span class="key">R</span>+<span class="key">↓</span>+<span class="key">SELECT</span><svg width="20" height="20" style="color:var(--muted)"><use href="#i-next"/></svg></span></div>
+  <div class="setrow" style="padding-right:12px;background:transparent"><span class="k" style="color:var(--err)">Видалити рекордер…</span><svg width="20" height="20" style="color:var(--muted)"><use href="#i-next"/></svg></div>
+</section>
+</div>
+<div class="note">Налаштування пишуться в <code>sdmc:/3ds/recorder/config.ini</code> (модуль читає його на старті запису), тож змінене діє з наступного запису. На New 3DS у «Профіль» обидва варіанти активні. Нижній екран — це список: ↑/↓ між рядками, ←/→ змінює значення. «Мова · Language» дублює прапор на пульті; назва рядка двомовна, щоб її знайшов той, хто не читає поточною мовою.</div>
+</figure>
+
+<!-- ===================== TRANSFER ===================== -->
+<figure>
+<figcaption>Передати на телефон <span class="tag">рішення 03.11 · Android — перевірити</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: QR-код" style="flex-direction:row;gap:28px;align-items:center">
+  <div style="width:300px;height:300px;border-radius:18px;background:#fff;padding:18px;flex-shrink:0">
+    <div style="width:100%;height:100%;background:
+      conic-gradient(from 90deg at 18% 18%, #14161a 25%, transparent 0) 0 0/22px 22px,
+      repeating-linear-gradient(90deg,#14161a 0 11px,transparent 11px 22px),
+      repeating-linear-gradient(0deg,#14161a 0 11px,transparent 11px 33px);opacity:.85;border-radius:6px;display:flex;align-items:center;justify-content:center">
+      <span style="background:#fff;color:#14161a;font-weight:700;padding:6px 10px;border-radius:8px;font-size:18px">[QR]</span></div>
+  </div>
+  <div class="col grow" style="gap:14px">
+    <span class="eyebrow">Телефон і консоль в одній Wi-Fi</span>
+    <span class="h1">Наведіть камеру телефону на код</span>
+    <div class="card col" style="gap:4px"><span class="cap">Або відкрийте в браузері</span><span class="title mono" style="font-size:24px">http://192.168.50.144</span></div>
+    <span class="cap" style="line-height:1.45">На телефоні відкриється сторінка зі списком записів. Телефон сам зробить із запису звичайне відео MP4 — програми ставити не треба.</span>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: стан передачі">
+  <div class="navbar"><span class="back"><svg width="22" height="22"><use href="#i-back"/></svg></span><span class="title">На телефон</span>
+    <span class="pill on" style="margin-left:auto;padding:6px 14px;font-size:16px"><span class="dot"></span>Телефон підключено</span></div>
+  <div class="card col" style="gap:10px">
+    <div class="row between"><span class="body b">03.11 · 17:26 · 02:02</span><span class="cap">передача</span></div>
+    <div class="bar"><i style="width:38%"></i></div>
+    <div class="row between cap"><span>97 / 256 MB</span><span>0.45 MB/с · ≈ 6 хв</span></div>
+  </div>
+  <div class="callout warn" style="padding:10px 14px;font-size:17px"><svg width="24" height="24"><use href="#i-warn"/></svg><span>Wi-Fi 3DS повільний: 1 хв запису ≈ 5 хв передачі. Не закривайте кришку.</span></div>
+  <div class="callout info" style="padding:10px 14px;font-size:17px"><svg width="24" height="24"><use href="#i-info"/></svg><span><b style="color:var(--text)">Можна й без Wi-Fi:</b> вимкніть консоль, вийміть SD-карту й підключіть до комп'ютера — записи в <span class="mono">/3ds/recorder/recordings</span>.</span></div>
+  <div class="btns mt-auto"><span class="btn danger">Зупинити</span></div>
+</section>
+</div>
+<div class="note">Консоль віддає по Wi-Fi лише сторінку і сам запис (<span class="mono">.r3d</span>, 2–3 шматки паралельно: +15–25%). Перекодування в MP4 (H.264 + AAC) робить браузер телефона — консоль H.264 не вміє. Підказка про SD-карту показується завжди, щоб не склалось враження, що забрати запис можна лише через консоль. Заміри 03.11.2026: Wi-Fi O3DS ≈ 0.4–0.5 MB/с.</div>
+</figure>
+
+<!-- ===================== PHONE PAGE ===================== -->
+<figure>
+<figcaption>Сторінка на телефоні <span class="tag">браузер, без програм</span></figcaption>
+<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+  <div class="phone">
+    <div class="phone-bar"><span class="mono">192.168.50.144</span></div>
+    <div class="phone-body">
+      <span class="eyebrow" style="font-size:14px">3DS Recorder</span>
+      <span class="title">Записи на консолі</span>
+      <div class="pitem sel"><span class="thumb" style="width:72px;height:44px;border-radius:6px"></span><span class="col grow"><b style="font-size:16px">03.11 · 17:26</b><span class="cap" style="font-size:14px">02:02 · 256 MB</span></span></div>
+      <div class="pitem"><span class="thumb" style="width:72px;height:44px;border-radius:6px"></span><span class="col grow"><b style="font-size:16px">03.11 · 17:18</b><span class="cap" style="font-size:14px">01:48 · 230 MB</span></span></div>
+      <div class="pitem"><span class="thumb" style="width:72px;height:44px;border-radius:6px"></span><span class="col grow"><b style="font-size:16px">02.11 · 21:05</b><span class="cap" style="font-size:14px">08:40 · 1.1 GB · <span style="color:var(--warn)">≈ 40 хв</span></span></span></div>
+      <div class="col" style="gap:8px;margin-top:6px">
+        <div class="row between" style="font-size:15px"><span>1. Передача з консолі</span><b>38%</b></div>
+        <div class="bar" style="height:8px"><i style="width:38%"></i></div>
+        <div class="row between" style="font-size:15px;color:var(--muted)"><span>2. Робимо MP4</span><span>чекає</span></div>
+        <div class="row between" style="font-size:15px;color:var(--muted)"><span>3. Зберегти</span><span>чекає</span></div>
+      </div>
+      <span class="btn primary" style="height:46px;font-size:17px">Зберегти MP4 ≈ 10 MB</span>
+      <span class="cap" style="font-size:13px;text-align:center">або <u>оригінал .r3d</u> — для ПК</span>
+    </div>
+  </div>
+  <div class="col" style="gap:12px;max-width:420px">
+    <div class="rule"><b>1. Передача.</b> Сторінка качає <span class="mono">.r3d</span> 2–3 шматками одночасно. Час — від розміру: ≈ 5 хв на хвилину запису; довгі записи позначені помаранчевим із прогнозом.</div>
+    <div class="rule"><b>2. Робимо MP4.</b> Розбір запису (XR32 + звук: заповнення втрат, зрізання високих) і кодування апаратним кодером телефона.<br><b style="color:var(--ok)">Швидко</b> (WebCodecs): Safari і будь-який браузер на iPhone — 13–17× реального часу, перевірено.<br><b style="color:var(--warn)">У реальному часі</b> (MediaRecorder): Chrome / Firefox на Android, ПК — 1 хв запису = 1 хв, сторінка має бути на екрані. Android ще не перевірено.</div>
+    <div class="rule"><b>3. Зберегти.</b> iPhone — «Поділитися → Зберегти відео» у Фото; Android — завантаження у «Завантаження» / Галерею. Обидва — ≈ 5 MB на хвилину (у ×27 менше за <span class="mono">.r3d</span>).</div>
+    <div class="rule"><b>Запасний варіант:</b> «оригінал .r3d» — для ПК (<span class="mono">r3d2mp4</span>) і на випадок, якщо браузер не вміє кодувати.</div>
+  </div>
+</div>
+<div class="note">Сторінка — HTML + JS, які консоль віддає разом із записом; працює без інтернету. Мова сторінки — як у додатку (EN / UK). Перевірено на iPhone (iOS 18.7: Safari, Chrome): кодер є і на звичайному http.</div>
+</figure>
+
+
+<!-- ===================== HELP: HOW TO ===================== -->
+<figure>
+<figcaption>Допомога · Як записувати</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: інструкція" style="gap:16px">
+  <div class="col"><span class="eyebrow">Допомога · 1 з 6</span><span class="h1">Як записувати</span></div>
+  <ol class="steps">
+    <li><span>Відкрийте цей додаток і переконайтесь, що <b>«Рекордер»</b> увімкнено — LED на мить засвітиться <b style="color:var(--led-blue)">синім</b>.</span></li>
+    <li><span>Вийдіть у HOME і запустіть гру. Додаток можна закрити — рекордер працює далі.</span></li>
+    <li><span>Натисніть <b>R + SELECT</b> — почнеться запис, LED <b style="color:var(--accent)">«дихає» червоним</b>.</span></li>
+    <li><span>Пишеться вся консоль: гра, HOME, інші програми — в один файл, зі звуком.</span></li>
+    <li><span>Ще раз <b>R + SELECT</b> — запис збережено, LED мигне <b style="color:var(--led-green)">зеленим двічі</b>.</span></li>
+  </ol>
+</section>
+<section class="bot" aria-label="Нижній екран: розділи допомоги">
+  <div class="navbar"><span class="back"><svg width="22" height="22"><use href="#i-back"/></svg></span><span class="title">Допомога</span></div>
+  <div class="topics">
+    <div class="topic sel"><span class="n">1</span>Як записувати</div>
+    <div class="topic"><span class="n">2</span>Що означає LED</div>
+    <div class="topic"><span class="n">3</span>Після ввімкнення консолі</div>
+    <div class="topic"><span class="n">4</span>Як забрати запис</div>
+    <div class="topic"><span class="n">5</span>Хоткей і обмеження</div>
+    <div class="topic"><span class="n">6</span>Якщо щось не так</div>
+  </div>
+</section>
+</div>
+<div class="note">Вхід: кнопка «?» на пульті або SELECT. Відкривається автоматично після першого запуску рекордера. ↑/↓ — розділ, текст на верхньому екрані; довгий текст на верхньому екрані гортається слайд-падом.</div>
+</figure>
+
+<!-- ===================== HELP: LED ===================== -->
+<figure>
+<figcaption>Допомога · Що означає LED</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: LED" style="gap:14px">
+  <div class="col"><span class="eyebrow">Допомога · 2 з 6</span><span class="h1">Що означає LED</span></div>
+  <span class="cap">Лампочка сповіщень на шарнірі консолі. Поверх гри нічого не показується — лише LED.</span>
+  <div class="leds">
+    <div class="led"><span class="lamp blue once"></span><div class="col"><b class="body">Синій, 1.5 с</b><span class="cap" style="font-size:16px">рекордер запущено, готовий</span></div></div>
+    <div class="led"><span class="lamp red breath"></span><div class="col"><b class="body">Червоний «дихає»</b><span class="cap" style="font-size:16px">іде запис</span></div></div>
+    <div class="led"><span class="lamp green twice"></span><div class="col"><b class="body">Зелений 2 рази</b><span class="cap" style="font-size:16px">запис збережено</span></div></div>
+    <div class="led"><span class="lamp red thrice"></span><div class="col"><b class="body">Червоний 3 рази</b><span class="cap" style="font-size:16px">помилка — відкрийте додаток</span></div></div>
+  </div>
+  <span class="cap mt-auto">LED не горить і хоткей не реагує → рекордер вимкнено або консоль щойно ввімкнули (розділ 3). У налаштуваннях: «Постійно» — червоний без дихання; «Вимк.» — без індикації запису, помилка видно завжди.</span>
+</section>
+<section class="bot" aria-label="Нижній екран: розділи допомоги">
+  <div class="navbar"><span class="back"><svg width="22" height="22"><use href="#i-back"/></svg></span><span class="title">Допомога</span></div>
+  <div class="topics">
+    <div class="topic"><span class="n">1</span>Як записувати</div>
+    <div class="topic sel"><span class="n">2</span>Що означає LED</div>
+    <div class="topic"><span class="n">3</span>Після ввімкнення консолі</div>
+    <div class="topic"><span class="n">4</span>Як забрати запис</div>
+    <div class="topic"><span class="n">5</span>Хоткей і обмеження</div>
+    <div class="topic"><span class="n">6</span>Якщо щось не так</div>
+  </div>
+</section>
+</div>
+<div class="note">Інші розділи: <b>3</b> — після кожного ввімкнення консолі рекордер треба запустити з додатку (автозапуску немає навмисно). <b>4</b> — галерея, експорт у AVI, передача на телефон / через SD. <b>5</b> — дозволені комбінації (не L + R, не L + ↓ + SELECT, без START / HOME). <b>6</b> — червоний 3 рази, мало місця на SD, пропущені кадри, де лежить <span class="mono">recorder.log</span>.</div>
+</figure>
+
+</div>
+
+<h2 class="group">Діалоги і стани</h2>
+<p class="group">Перший запуск, хоткей, експорт, видалення, відновлення.</p>
+<div class="boards">
+
+<!-- ===================== FIRST RUN ===================== -->
+<figure>
+<figcaption>Перший запуск / рекордер не запущено</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: перевірка" style="gap:16px">
+  <div class="col"><span class="eyebrow">Перевірка перед записом</span><span class="display">Майже готово</span></div>
+  <div class="col" style="gap:10px">
+    <div class="check"><svg width="28" height="28"><use href="#i-ok"/></svg><span class="body grow">Luma3DS</span><span class="cap">v13.5 · підтримується</span></div>
+    <div class="check"><svg width="28" height="28"><use href="#i-ok"/></svg><span class="body grow">Модуль рекордера</span><span class="cap">встановлено</span></div>
+    <div class="check bad"><svg width="28" height="28"><use href="#i-bad"/></svg><span class="body grow">Рекордер запущено</span><span class="cap" style="color:#ffb3b4">ні — після ввімкнення консолі</span></div>
+    <div class="check"><svg width="28" height="28"><use href="#i-ok"/></svg><span class="body grow">Запис на SD</span><span class="cap mono" style="font-size:16px">/3ds/recorder · 3.6 GB</span></div>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: що зробити">
+  <span class="title">Запустіть рекордер</span>
+  <span class="body soft" style="line-height:1.45">Автозапуску немає — ви завжди вирішуєте, чи можна записувати. Після кожного ввімкнення консолі відкрийте цей додаток і натисніть «Запустити». Потім можна виходити: рекордер працює до вимкнення консолі.</span>
+  <div class="row cap" style="gap:12px"><span class="lamp blue" style="width:18px;height:18px;border-radius:50%;display:block;box-shadow:0 0 10px var(--led-blue)"></span>LED засвітиться синім на 1.5 с — рекордер готовий</div>
+  <div class="btns mt-auto"><span class="btn">Пізніше</span><span class="btn primary" style="flex:2">Ⓐ Запустити</span></div>
+</section>
+</div>
+<div class="note">Якщо модуль не встановлено (перший запуск), третій рядок — «Модуль рекордера: не встановлено», а кнопка — «Встановити й запустити». Без Luma3DS 13.x далі не пускаємо.</div>
+</figure>
+
+<!-- ===================== HOTKEY ===================== -->
+<figure>
+<figcaption>Зміна хоткея</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: захоплення" style="align-items:center;justify-content:center;gap:28px">
+  <span class="h1">Затисніть нову комбінацію</span>
+  <div class="row" style="gap:16px;font-size:40px;font-weight:700">
+    <span style="min-width:88px;height:88px;padding:0 20px;border-radius:18px;background:var(--surface2);border:3px solid var(--accent);display:flex;align-items:center;justify-content:center">L</span>
+    <span class="cap" style="font-size:40px">+</span>
+    <span style="min-width:88px;height:88px;padding:0 20px;border-radius:18px;background:var(--surface2);border:3px solid var(--accent);display:flex;align-items:center;justify-content:center">R</span>
+    <span class="cap" style="font-size:40px">+</span>
+    <span style="min-width:88px;height:88px;padding:0 20px;border-radius:18px;background:var(--surface);border:3px dashed #5a616b;color:var(--muted);display:flex;align-items:center;justify-content:center">?</span>
+  </div>
+  <div class="col" style="width:420px;gap:8px;align-items:center">
+    <div class="bar" style="width:100%;height:10px"><i style="width:40%"></i></div>
+    <span class="cap">Тримайте 1 с, щоб зафіксувати · 2–3 кнопки</span>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: перевірка">
+  <span class="title">Хоткей запису</span>
+  <div class="card row between" style="font-size:18px"><span class="soft">Зараз</span><span class="b">R + SELECT</span></div>
+  <div class="callout err"><svg width="26" height="26"><use href="#i-warn"/></svg><span><b>L + R разом не можна:</b> у меню HOME ця пара відкриває Камеру.</span></div>
+  <span class="cap" style="line-height:1.45">Також не можна: L + ↓ + SELECT (меню Rosalina), START і HOME (їх забирає гра чи система).</span>
+  <div class="btns mt-auto"><span class="btn">Скинути</span><span class="btn">Скасувати</span><span class="btn dis">Зберегти</span></div>
+</section>
+</div>
+<div class="note">«Скинути» повертає R + SELECT. Хоткей працює і в грі, і в HOME. Спрацьовує на натискання всієї комбінації, повтор — не раніше ніж через 1 с.</div>
+</figure>
+
+<!-- ===================== EXPORT ===================== -->
+<figure>
+<figcaption>Експорт у AVI <span class="tag phase">фаза 5</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: прогрес" style="gap:22px">
+  <div class="col"><span class="eyebrow">Експорт у MJPEG AVI · зі звуком</span><span class="h1">03.11.2026 · 17:26 · 02:02</span></div>
+  <div class="col" style="gap:10px">
+    <div class="row between" style="align-items:baseline"><span style="font-size:48px;font-weight:700">62%</span><span class="body" style="color:var(--muted)">залишилось ≈ [N] хв</span></div>
+    <div class="bar" style="height:16px"><i style="width:62%"></i></div>
+  </div>
+  <div class="stats three">
+    <div class="stat"><span class="l">Відео</span><span class="v">XR32 → JPEG</span></div>
+    <div class="stat"><span class="l">Кадри</span><span class="v">2 270 / 3 660</span></div>
+    <div class="stat"><span class="l">Файл</span><span class="v">[N] MB</span></div>
+  </div>
+  <div class="callout info mt-auto">Кадри перекодовуються в JPEG на консолі; на Old 3DS це повільніше, ніж на New 3DS (швидкість — після реалізації). Звук: заповнення втрачених кадрів і зрізання високих, як у плеєрі.</div>
+</section>
+<section class="bot" aria-label="Нижній екран: параметри">
+  <span class="title">Експорт</span>
+  <div class="setrow"><span class="k">Розкладка</span><div class="seg"><span class="sel">Обидва</span><span>Верхній</span></div></div>
+  <div class="setrow" style="padding-right:12px"><span class="k">Звук</span><span class="toggle"></span></div>
+  <div class="card col"><span class="cap">Куди</span><span class="b mono" style="font-size:17px">/3ds/recorder/export/20261103_172644.avi</span></div>
+  <div class="btns mt-auto"><span class="btn">Скасувати</span><span class="btn dis">Іде експорт…</span></div>
+  <span class="cap" style="text-align:center">Не закривайте кришку — сон зупинить експорт</span>
+</section>
+</div>
+<div class="note">AVI грає на ПК і телефоні; H.264 на 3DS неможливий. Після експорту його можна одразу передати на телефон.</div>
+</figure>
+
+<!-- ===================== DELETE / RECOVERY ===================== -->
+<figure>
+<figcaption>Видалення запису / відновлення обірваного <span class="tag phase">відновлення — фаза 6</span></figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: відновлення" style="gap:20px">
+  <div class="row" style="gap:14px"><span class="chip warn" style="font-size:18px;padding:8px 14px">Обірваний запис</span><span class="cap">01.11 · 19:48</span></div>
+  <span class="h1" style="line-height:1.25">Консоль вимкнулась або сіла батарея під час запису.</span>
+  <div class="col" style="gap:10px">
+    <div class="row between body"><span>Відновлюю запис із тимчасового файлу</span><span class="b">74%</span></div>
+    <div class="bar"><i style="width:74%;background:var(--led-blue)"></i></div>
+  </div>
+  <div class="stats three mt-auto">
+    <div class="stat"><span class="l">Знайдено</span><span class="v">04:02</span></div>
+    <div class="stat"><span class="l">Втрачено</span><span class="v">≤ 1 с у кінці</span></div>
+    <div class="stat"><span class="l">Після</span><span class="v">звичайний запис</span></div>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: підтвердження" style="background:#0b0c0e;align-items:center;justify-content:center">
+  <div role="dialog" aria-label="Видалити запис?" class="card col" style="width:100%;border-radius:20px;padding:24px;gap:14px">
+    <span class="title" style="font-size:24px">Видалити запис?</span>
+    <span class="soft" style="font-size:18px;line-height:1.45">03.11.2026 · 17:26 · 02:02 · 256 MB. Файл буде стерто з SD назавжди.</span>
+    <label class="row" style="font-size:18px;min-height:44px"><input type="checkbox" checked style="width:24px;height:24px;accent-color:#ff4d4f;margin:0"> Також видалити експортований AVI</label>
+    <div class="btns" style="margin-top:6px"><span class="btn" style="background:var(--surface2)">Ⓑ Скасувати</span><span class="btn danger">Видалити</span></div>
+  </div>
+</section>
+</div>
+<div class="note">Під час запису модуль пише в заготовлений файл <code>.next.tmp</code>. Якщо консоль вимкнулась, дані там лишаються — відновлення на фазі 6.</div>
+</figure>
+
+<!-- ===================== UNINSTALL ===================== -->
+<figure>
+<figcaption>Видалити рекордер</figcaption>
+<div class="device">
+<section class="top" aria-label="Верхній екран: що буде видалено" style="gap:16px">
+  <div class="col"><span class="eyebrow">Налаштування · Видалити рекордер</span><span class="display">Повне видалення</span></div>
+  <div class="col" style="gap:10px">
+    <div class="check"><svg width="28" height="28"><use href="#i-bad"/></svg><span class="body grow">Модуль рекордера</span><span class="cap">зупиниться й зникне з Luma</span></div>
+    <div class="check"><svg width="28" height="28"><use href="#i-bad"/></svg><span class="body grow">Налаштування і лог</span><span class="cap mono" style="font-size:16px">config.ini, recorder.log</span></div>
+    <div class="check"><svg width="28" height="28"><use href="#i-bad"/></svg><span class="body grow">Цей додаток</span><span class="cap mono" style="font-size:16px">3ds-recorder.3dsx</span></div>
+    <div class="check"><svg width="28" height="28"><use href="#i-ok"/></svg><span class="body grow">Записи й експорт</span><span class="cap">лишаються, якщо не обрано</span></div>
+  </div>
+</section>
+<section class="bot" aria-label="Нижній екран: підтвердження" style="background:#0b0c0e;align-items:center;justify-content:center">
+  <div role="dialog" aria-label="Видалити рекордер?" class="card col" style="width:100%;border-radius:20px;padding:24px;gap:14px">
+    <span class="title" style="font-size:24px">Видалити рекордер?</span>
+    <span class="soft" style="font-size:18px;line-height:1.45">Консоль повернеться до стану без рекордера. Повернути можна лише новим встановленням.</span>
+    <label class="row" style="font-size:18px;min-height:44px"><input type="checkbox" style="width:24px;height:24px;accent-color:#ff4d4f;margin:0"> Також видалити 12 записів (1.9 GB)</label>
+    <div class="btns" style="margin-top:6px"><span class="btn" style="background:var(--surface2)">Ⓑ Скасувати</span><span class="btn danger">Видалити</span></div>
+  </div>
+</section>
+</div>
+<div class="note">Після видалення — екран «Видалено», і додаток закривається (як зараз у фазі 1).</div>
+</figure>
+
+</div>
+
+<h2 class="group">Специфікація</h2>
+<p class="group">Токени, компоненти, навігація і LED. Оверлею в грі немає: про стан запису в грі повідомляє лише LED.</p>
+<div class="boards">
+
+<!-- ===================== TOKENS ===================== -->
+<figure>
+<figcaption>Токени</figcaption>
+<div class="spec">
+  <div class="stack">
+    <h3>Кольори</h3>
+    <span class="sub">citro2d: <span class="mono">C2D_Color32(r, g, b, a)</span></span>
+    <div class="swatches">
+      <div class="sw"><i style="background:#14161a"></i><b>bg</b><code>#14161A</code></div>
+      <div class="sw"><i style="background:#1f232a"></i><b>surface</b><code>#1F232A</code></div>
+      <div class="sw"><i style="background:#2a2f37"></i><b>surface-2 · chip</b><code>#2A2F37</code></div>
+      <div class="sw"><i style="background:#3a3f47"></i><b>track · toggle off</b><code>#3A3F47</code></div>
+      <div class="sw"><i style="background:#e8eaed"></i><b>text</b><code>#E8EAED</code></div>
+      <div class="sw"><i style="background:#9aa3ad"></i><b>muted</b><code>#9AA3AD</code></div>
+      <div class="sw"><i style="background:#ff4d4f"></i><b>accent · rec · focus</b><code>#FF4D4F</code></div>
+      <div class="sw"><i style="background:#c62f31"></i><b>danger button</b><code>#C62F31</code></div>
+      <div class="sw"><i style="background:rgba(10,12,16,.78)"></i><b>scrim (плеєр)</b><code>0A0C10 · a199</code></div>
+    </div>
+    <div class="stats" style="gap:12px">
+      <div class="card col" style="background:var(--err-bg)"><b style="color:var(--err)">error</b><span class="mono" style="color:#ffb3b4;font-size:14px">FF8A8C / 3A1D1F</span></div>
+      <div class="card col" style="background:var(--warn-bg)"><b style="color:var(--warn)">warn</b><span class="mono" style="color:#ffd8a8;font-size:14px">FFB15C / 3A2A14</span></div>
+      <div class="card col" style="background:var(--info-bg)"><b style="color:var(--info)">info</b><span class="mono" style="color:#b5d6ff;font-size:14px">7AB8FF / 1B2A3D</span></div>
+      <div class="card col" style="background:var(--ok-bg)"><b style="color:var(--ok)">ok</b><span class="mono" style="color:#b0ecc9;font-size:14px">5FD896 / 24372C</span></div>
+    </div>
+    <h3 style="margin-top:12px">Геометрія</h3>
+    <div class="stats two" style="font-size:16px;line-height:1.5">
+      <div class="card"><b>Верхній екран 400×240</b><br><span class="soft">поля 14 px · ліве око · 3D-слайдер ігнорується</span></div>
+      <div class="card"><b>Нижній екран 320×240</b><br><span class="soft">поля 12 px · тач + кнопки</span></div>
+      <div class="card"><b>Тач-ціль ≥ 24×24 px</b><br><span class="soft">рядок списку 40 px, кнопка 28 px</span></div>
+      <div class="card"><b>Макети = native × 2</b><br><span class="soft">усі px на полотні ділити на 2</span></div>
+    </div>
+  </div>
+  <div class="stack">
+    <h3>Типографіка (native px)</h3>
+    <span class="sub">Inter (OFL) → .bcfnt через mkbcfnt: латиниця, кирилиця, ×→↓←·≈. Значки кнопок Ⓐ Ⓑ Ⓧ Ⓨ — із системного шрифту (PUA U+E000…), не з Inter.</span>
+    <div class="table t-type">
+      <div class="h"><span>Роль</span><span>Зразок</span><span>native</span><span>вага</span></div>
+      <div><span class="soft">display</span><span style="font-size:34px;font-weight:700">Готово</span><span>17</span><span>700</span></div>
+      <div><span class="soft">h1</span><span style="font-size:30px;font-weight:700">Галерея</span><span>15</span><span>700</span></div>
+      <div><span class="soft">stat</span><span style="font-size:26px;font-weight:700">30 fps</span><span>13</span><span>700</span></div>
+      <div><span class="soft">title</span><span style="font-size:22px;font-weight:600">Налаштування</span><span>11</span><span>600</span></div>
+      <div><span class="soft">body</span><span style="font-size:20px">Збережено · 02:02</span><span>10</span><span>400–600</span></div>
+      <div><span class="soft">caption</span><span style="font-size:18px;color:var(--muted)">03.11 · 17:26 · Стандарт</span><span>9 мін.</span><span>400–500</span></div>
+    </div>
+    <h3 style="margin-top:12px">Відступи і радіуси (native)</h3>
+    <div class="stats two" style="font-size:16px;line-height:1.6">
+      <div class="card"><b>Відступи</b><br><span class="mono soft">2 4 6 8 10 12 14</span><br><span class="cap" style="font-size:16px">між картками 7–8 · всередині 7–10</span></div>
+      <div class="card"><b>Радіуси</b><br><span class="mono soft">chip 4 · card 7 · tile 8 · btn 10 · pill</span><br><span class="cap" style="font-size:16px">кути — 9-slice текстури</span></div>
+    </div>
+  </div>
+</div>
+</figure>
+
+<!-- ===================== COMPONENTS ===================== -->
+<figure>
+<figcaption>Компоненти</figcaption>
+<div class="spec" style="grid-template-columns:1fr">
+  <div class="stack">
+    <h3>Компоненти</h3>
+    <span class="sub">Зразки в масштабі макета (×2), розміри підписано в native px.</span>
+  </div>
+  <div class="compgrid">
+    <div class="comp"><span class="name">Tile button</span>
+      <div class="tile" style="height:190px"><svg width="40" height="40" style="color:var(--text)"><use href="#i-grid"/></svg><span class="col"><span class="t">Галерея</span><span class="s">12 записів</span></span></div>
+      <span class="dim">144×≈95 · r10 · pad 10 · icon 20<br>pressed: surface-2 · focus: 1.5 accent</span></div>
+    <div class="comp"><span class="name">Toggle tile · «Рекордер»</span>
+      <div class="tile" style="height:190px"><span class="row between"><span class="t">Рекордер</span><span class="toggle"></span></span><span class="s">Хоткей працює</span></div>
+      <span class="dim">toggle 32×18 · knob 14<br>Ⓐ / тап · вимк. = модуль зупинено</span></div>
+    <div class="comp"><span class="name">Segmented · Toggle</span>
+      <div class="seg" style="align-self:flex-start"><span class="sel">Стандарт</span><span class="dis">HQ</span></div>
+      <div class="row"><span class="toggle"></span><span class="toggle off"></span></div>
+      <span class="dim">segment h 26 · r5/r4 · ←/→<br>недоступно: закреслено + підпис</span></div>
+    <div class="comp"><span class="name">Кнопки дій</span>
+      <div class="btns"><span class="btn primary">Основна</span><span class="btn">Другорядна</span></div>
+      <div class="btns"><span class="btn danger">Видалити</span><span class="btn dis">Неактивна</span></div>
+      <span class="dim">h 28 · r7 · text 10/600</span></div>
+    <div class="comp"><span class="name">List row</span>
+      <div class="item sel"><span class="thumb" style="width:100px;height:60px"></span><span class="col grow"><span class="b" style="font-size:18px">03.11 · 17:26</span><span class="cap">Стандарт · 256 MB</span></span><span class="b">02:02</span></div>
+      <span class="dim">h 40 · thumb 50×30 (перший ключовий кадр)<br>selected: surface + 1.5 accent</span></div>
+    <div class="comp"><span class="name">Status pill · Key chip</span>
+      <div class="row" style="flex-wrap:wrap"><span class="pill on"><span class="dot"></span>Працює</span><span class="pill rec"><span class="dot"></span>REC</span><span class="pill off"><span class="dot"></span>Вимкнено</span></div>
+      <span class="keys"><span class="key">R</span>+<span class="key">↓</span>+<span class="key">SELECT</span></span>
+      <span class="dim">pill h 19 · dot 6 · лише в додатку<br>chip r4 · pad 3×5</span></div>
+    <div class="comp"><span class="name">Stat card</span>
+      <div class="stat"><span class="l">SD вільно</span><span class="v">3.6 GB</span><span class="s">≈ 28 хв</span></div>
+      <span class="dim">card r8 · pad 8 · label 9 · value 13/700</span></div>
+    <div class="comp"><span class="name">Callout</span>
+      <div class="callout warn"><svg width="26" height="26"><use href="#i-warn"/></svg><span>Мало місця на SD: ≈ 4 хв запису.</span></div>
+      <span class="dim">r7 · pad 7×8 · info / warn / err<br>лише в додатку (у грі — LED)</span></div>
+    <div class="comp"><span class="name">Progress · Scrubber</span>
+      <div class="bar"><i style="width:62%"></i></div>
+      <div style="position:relative;height:8px;border-radius:999px;background:var(--track);margin:8px 0">
+        <div style="position:absolute;inset:0 auto 0 0;width:40%;border-radius:999px;background:var(--accent)"></div>
+        <div style="position:absolute;left:40%;top:-8px;width:24px;height:24px;margin-left:-12px;border-radius:50%;background:#fff"></div></div>
+      <span class="dim">progress h 7 · scrubber h 4 · knob 12</span></div>
+  </div>
+</div>
+</figure>
+
+<!-- ===================== NAVIGATION + LED ===================== -->
+<figure>
+<figcaption>Навігація і LED-індикація</figcaption>
+<div class="spec">
+  <div class="stack">
+    <h3>Навігація додатку-пульта</h3>
+    <div class="table t-nav">
+      <div class="h"><span>Звідки</span><span>Дія (тап / кнопка)</span><span>Куди</span></div>
+      <div><span>Старт</span><span class="soft">рекордер не запущено / не встановлено</span><span>Перший запуск</span></div>
+      <div><span>Перший запуск</span><span class="soft">Ⓐ «Запустити» / «Пізніше»</span><span>Пульт</span></div>
+      <div><span>Пульт</span><span class="soft">тайл «Рекордер» (фокус + Ⓐ або тап)</span><span>запуск / зупинка модуля</span></div>
+      <div><span>Пульт</span><span class="soft">під час запису: «Зупинити запис»</span><span>Пульт (збережено)</span></div>
+      <div><span>Пульт</span><span class="soft">«Галерея» · Ⓨ або тап по картці «Останній запис»</span><span>Галерея · Плеєр</span></div>
+      <div><span>Пульт</span><span class="soft">«На телефон» · «Налаштування»</span><span>Передача · Налаштування</span></div>
+      <div><span>Галерея</span><span class="soft">↑/↓ або тап — вибір · Ⓐ / 2-й тап</span><span>Плеєр</span></div>
+      <div><span>Галерея</span><span class="soft">Ⓨ · Ⓧ</span><span>Експорт · Видалити?</span></div>
+      <div><span>Галерея</span><span class="soft">вибрано обірваний запис</span><span>Відновлення (фаза 6)</span></div>
+      <div><span>Плеєр</span><span class="soft">кнопка експорту</span><span>Експорт</span></div>
+      <div><span>Пульт</span><span class="soft">«?» / SELECT</span><span>Допомога</span></div>
+      <div><span>Пульт</span><span class="soft">прапор / Ⓧ</span><span>інша мова (той самий екран)</span></div>
+      <div><span>Перший запуск</span><span class="soft">після першого «Запустити»</span><span>Допомога · Як записувати</span></div>
+      <div><span>Налаштування</span><span class="soft">«Хоткей» · «Видалити рекордер…»</span><span>Хоткей · Видалити рекордер</span></div>
+      <div><span>Будь-який</span><span class="soft">Ⓑ / «назад» · START</span><span>попередній · вихід</span></div>
+    </div>
+    <span class="sub">Кожен екран працює і з тачем, і з кнопками: фокус (обведення accent) завжди на одному елементі нижнього екрана. Вихід з додатку не зупиняє рекордер.</span>
+  </div>
+  <div class="stack">
+    <h3>LED замість оверлею</h3>
+    <span class="sub">Модуль нічого не малює поверх гри. Стан показує LED сповіщень (MCU). Значення виміряно на Old 3DS, 03.11.2026.</span>
+    <div class="leds">
+      <div class="led"><span class="lamp blue once"></span><div class="col"><b>Готовий</b><span class="cap" style="font-size:16px">синій 1.5 с — рекордер запущено</span></div></div>
+      <div class="led"><span class="lamp red breath"></span><div class="col"><b>Запис</b><span class="cap" style="font-size:16px">червоний «дихає», поки йде запис</span></div></div>
+      <div class="led"><span class="lamp green twice"></span><div class="col"><b>Збережено</b><span class="cap" style="font-size:16px">зелений 2 рази</span></div></div>
+      <div class="led"><span class="lamp red thrice"></span><div class="col"><b>Помилка</b><span class="cap" style="font-size:16px">червоний 3 рази — запис не почався / зупинився</span></div></div>
+    </div>
+    <div class="table t-led">
+      <div class="h"><span>Сигнал</span><span>Візерунок</span><span>Параметри MCU</span></div>
+      <div><span>Готовий</span><span><div class="timeline"><i style="width:60%;background:var(--led-blue)"></i></div></span><span class="mono soft" style="font-size:14px">постійний 1500 мс, модуль гасить</span></div>
+      <div><span>Запис</span><span><div class="timeline" style="background:linear-gradient(90deg,#3a1d1f,var(--accent),#3a1d1f,var(--accent),#3a1d1f)"></div></span><span class="mono soft" style="font-size:14px">delay 8 · smoothing 0x40 · трикутник 8→255</span></div>
+      <div><span>Збережено</span><span><div class="timeline"><i style="width:40%;background:var(--led-green)"></i><i style="width:20%"></i><i style="width:40%;background:var(--led-green)"></i></div></span><span class="mono soft" style="font-size:14px">600 · пауза 300 · 600 мс</span></div>
+      <div><span>Помилка</span><span><div class="timeline"><i style="width:23%;background:var(--accent)"></i><i style="width:15%"></i><i style="width:23%;background:var(--accent)"></i><i style="width:15%"></i><i style="width:23%;background:var(--accent)"></i></div></span><span class="mono soft" style="font-size:14px">3 × 300 мс, паузи 200 мс</span></div>
+    </div>
+    <div class="rule"><b>Без одноразових візерунків MCU</b> (loopDelay 0xFF): на O3DS вони невидимі. Короткі сигнали — постійний колір, який модуль сам вимикає за часом.</div>
+    <div class="rule"><b>Налаштування LED:</b> «Пульс» (як вище), «Постійно» (червоний без дихання), «Вимк.» (запис без індикації). Помилка показується завжди.</div>
+    <h3 style="margin-top:12px">Мови</h3>
+    <div class="rule"><b>English (за замовчуванням) і українська.</b> Перемикач — прапор у нижньому рядку пульту: показує <i>іншу</i> мову (в English — 🇺🇦, в українській — 🇺🇸), тап або Ⓧ перемикає одразу. Той самий вибір — рядок «Мова · Language» у налаштуваннях. Зберігається в <span class="mono">config.ini</span> (<span class="mono">lang=en|uk</span>); діє одразу.</div>
+    <div class="rule"><b>Рядки</b> — у файлах <span class="mono">romfs:/lang/en.txt</span> і <span class="mono">uk.txt</span> (ключ = текст), без тексту в коді. Відсутній ключ у uk → англійський рядок.</div>
+    <div class="rule"><b>Макети розраховано на українську</b> (довша). Шрифт .bcfnt містить латиницю й кирилицю. Дати: en — «Nov 3, 2026», uk — «03.11.2026». Модуль (LED, лог) мови не має: <span class="mono">recorder.log</span> англійською.</div>
+    <div class="rule"><b>Пороги</b> (мало місця на SD, SD не встигає) у грі не показуються — модуль знижує частоту кадрів або зупиняє запис із сигналом «Помилка», а подробиці видно в додатку і в <span class="mono">recorder.log</span>.</div>
+  </div>
+</div>
+</figure>
+
+</div>
+</main>
+</body>
+</html>

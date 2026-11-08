@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3DS Recorder Icons</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&display=swap" rel="stylesheet">
+<!-- HOME Menu icon (48x48) and banner (256x128) variants for the control app, 2026-11-03.
+     Each icon is an inline SVG with id icon-X, each banner banner-X; tools/make-art.sh renders
+     the chosen pair. -->
+<style>
+:root { --page: #0f1114; --card: #1b1f25; --text: #e8eaed; --muted: #9aa3ad; --line: #2c333c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.5 Inter, system-ui, sans-serif;
+  padding: 32px max(16px, env(safe-area-inset-left, 0px)) 48px max(16px, env(safe-area-inset-right, 0px)); }
+h1 { margin: 0 0 6px; font-size: 28px; }
+p.lead { margin: 0 0 28px; color: var(--muted); max-width: 820px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 24px; max-width: 1840px; }
+.v { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.v h2 { margin: 0; font-size: 20px; }
+.v h2 span { color: var(--muted); font-weight: 500; font-size: 15px; margin-left: 8px; }
+.row { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; }
+.cap { font-size: 13px; color: var(--muted); text-align: center; margin-top: 6px; }
+.home { background: linear-gradient(#5a6472, #3d4550); border-radius: 12px; padding: 14px; display: flex; gap: 10px; align-items: center; }
+.home .slot { width: 56px; height: 56px; border-radius: 10px; background: rgba(255,255,255,.12); display: flex; align-items: center; justify-content: center; }
+.home .slot.sel { outline: 3px solid #39c5ff; background: rgba(255,255,255,.25); }
+.x1 svg { width: 48px; height: 48px; display: block; image-rendering: pixelated; }
+.x4 svg { width: 192px; height: 192px; display: block; }
+.banner svg { width: 256px; height: 128px; display: block; }
+.banner.x2 svg { width: 384px; height: 192px; }
+.note { font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>Іконка і банер: 4 варіанти</h1>
+<p class="lead">Іконка в HOME — 48×48 (поруч — збільшено ×4 і як вона стоїть серед інших іконок). Банер — 256×128: його показує верхній екран, коли іконку вибрано. Звук банера лишається той самий короткий дзвіночок.</p>
+
+<div class="grid">
+
+<!-- ============ A: record button ============ -->
+<section class="v">
+  <h2>A · Кнопка запису <span>мінімалізм</span></h2>
+  <div class="row">
+    <div class="x4"><svg id="icon-a" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="1" width="46" height="46" rx="11" fill="#17191d"/>
+      <circle cx="24" cy="24" r="15" fill="none" stroke="#e8eaed" stroke-width="3"/>
+      <circle cx="24" cy="24" r="9.5" fill="#ff4d4f"/>
+    </svg></div>
+    <div><div class="home"><div class="slot"></div><div class="slot sel x1"><svg viewBox="0 0 48 48"><use href="#icon-a"/></svg></div><div class="slot"></div></div><div class="cap">48×48 у HOME</div></div>
+  </div>
+  <div class="banner x2"><svg id="banner-a" viewBox="0 0 256 128" xmlns="http://www.w3.org/2000/svg">
+    <rect x="6" y="8" width="244" height="112" rx="18" fill="#17191d"/>
+    <circle cx="64" cy="64" r="30" fill="none" stroke="#e8eaed" stroke-width="5"/>
+    <circle cx="64" cy="64" r="19" fill="#ff4d4f"/>
+    <text x="110" y="58" font-family="Inter" font-weight="800" font-size="24" fill="#e8eaed">3DS</text>
+    <text x="110" y="86" font-family="Inter" font-weight="800" font-size="24" fill="#e8eaed">Recorder</text>
+  </svg></div>
+  <p class="note">Як кнопка REC на камері: впізнається з першого погляду, добре читається навіть 48×48.</p>
+</section>
+
+<!-- ============ B: the console ============ -->
+<section class="v">
+  <h2>B · Консоль із REC <span>про що додаток</span></h2>
+  <div class="row">
+    <div class="x4"><svg id="icon-b" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="1" width="46" height="46" rx="11" fill="#1f232a"/>
+      <rect x="9" y="6" width="30" height="18" rx="3" fill="#2f3640" stroke="#e8eaed" stroke-width="2"/>
+      <rect x="11" y="26" width="26" height="16" rx="3" fill="#2f3640" stroke="#9aa3ad" stroke-width="2"/>
+      <circle cx="24" cy="15" r="5" fill="#ff4d4f"/>
+      <rect x="18.5" y="31" width="11" height="6" rx="1.5" fill="#9aa3ad" opacity=".55"/>
+    </svg></div>
+    <div><div class="home"><div class="slot"></div><div class="slot sel x1"><svg viewBox="0 0 48 48"><use href="#icon-b"/></svg></div><div class="slot"></div></div><div class="cap">48×48 у HOME</div></div>
+  </div>
+  <div class="banner x2"><svg id="banner-b" viewBox="0 0 256 128" xmlns="http://www.w3.org/2000/svg">
+    <rect x="6" y="8" width="244" height="112" rx="18" fill="#1f232a"/>
+    <rect x="26" y="22" width="62" height="38" rx="5" fill="#2f3640" stroke="#e8eaed" stroke-width="3"/>
+    <rect x="31" y="64" width="52" height="34" rx="5" fill="#2f3640" stroke="#9aa3ad" stroke-width="3"/>
+    <circle cx="57" cy="41" r="9" fill="#ff4d4f"/>
+    <text x="108" y="58" font-family="Inter" font-weight="800" font-size="24" fill="#e8eaed">3DS</text>
+    <text x="108" y="86" font-family="Inter" font-weight="800" font-size="24" fill="#e8eaed">Recorder</text>
+    <g transform="translate(108 96)"><rect width="46" height="16" rx="8" fill="#3a1d1f"/><circle cx="10" cy="8" r="3.5" fill="#ff4d4f"/><text x="18" y="12" font-family="Inter" font-weight="700" font-size="10" fill="#ff8a8c">REC</text></g>
+  </svg></div>
+  <p class="note">Два екрани 3DS, на верхньому — точка запису: одразу видно, що пишеться саме консоль.</p>
+</section>
+
+<!-- ============ C: red tile ============ -->
+<section class="v">
+  <h2>C · Червона плитка <span>помітна в HOME</span></h2>
+  <div class="row">
+    <div class="x4"><svg id="icon-c" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="gc" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff5d5f"/><stop offset="1" stop-color="#d6303a"/></linearGradient></defs>
+      <rect x="1" y="1" width="46" height="46" rx="11" fill="url(#gc)"/>
+      <rect x="8" y="14" width="23" height="20" rx="4.5" fill="#fff"/>
+      <path d="M31.5 21.5 L40 16.5 V31.5 L31.5 26.5 Z" fill="#fff"/>
+      <circle cx="19.5" cy="24" r="4.5" fill="#d6303a"/>
+    </svg></div>
+    <div><div class="home"><div class="slot"></div><div class="slot sel x1"><svg viewBox="0 0 48 48"><use href="#icon-c"/></svg></div><div class="slot"></div></div><div class="cap">48×48 у HOME</div></div>
+  </div>
+  <div class="banner x2"><svg id="banner-c" viewBox="0 0 256 128" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="gcb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5d5f"/><stop offset="1" stop-color="#c62f31"/></linearGradient></defs>
+    <rect x="6" y="8" width="244" height="112" rx="18" fill="url(#gcb)"/>
+    <rect x="24" y="40" width="46" height="40" rx="8" fill="#fff"/>
+    <path d="M71 54 L88 44 V76 L71 66 Z" fill="#fff"/>
+    <circle cx="47" cy="60" r="9" fill="#c62f31"/>
+    <text x="104" y="58" font-family="Inter" font-weight="800" font-size="24" fill="#fff">3DS</text>
+    <text x="104" y="86" font-family="Inter" font-weight="800" font-size="24" fill="#fff">Recorder</text>
+  </svg></div>
+  <p class="note">Біла відеокамера на червоному: найкраще видно серед інших іконок, схоже на іконки запису екрана в телефонах.</p>
+</section>
+
+<!-- ============ D: REC frame ============ -->
+<section class="v">
+  <h2>D · Видошукач <span>кадр камери</span></h2>
+  <div class="row">
+    <div class="x4"><svg id="icon-d" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="1" width="46" height="46" rx="11" fill="#14161a"/>
+      <g fill="none" stroke="#e8eaed" stroke-width="3" stroke-linecap="round">
+        <path d="M8 16 V8 H16"/><path d="M32 8 H40 V16"/><path d="M40 32 V40 H32"/><path d="M16 40 H8 V32"/>
+      </g>
+      <circle cx="18" cy="24" r="4.5" fill="#ff4d4f"/>
+      <text x="24.5" y="28" font-family="Inter" font-weight="800" font-size="10.5" fill="#e8eaed">REC</text>
+    </svg></div>
+    <div><div class="home"><div class="slot"></div><div class="slot sel x1"><svg viewBox="0 0 48 48"><use href="#icon-d"/></svg></div><div class="slot"></div></div><div class="cap">48×48 у HOME</div></div>
+  </div>
+  <div class="banner x2"><svg id="banner-d" viewBox="0 0 256 128" xmlns="http://www.w3.org/2000/svg">
+    <rect x="6" y="8" width="244" height="112" rx="18" fill="#14161a"/>
+    <g fill="none" stroke="#e8eaed" stroke-width="4" stroke-linecap="round">
+      <path d="M22 36 V22 H36"/><path d="M220 22 H234 V36"/><path d="M234 92 V106 H220"/><path d="M36 106 H22 V92"/>
+    </g>
+    <circle cx="48" cy="44" r="7" fill="#ff4d4f"/>
+    <text x="61" y="50" font-family="Inter" font-weight="800" font-size="16" fill="#ff8a8c">REC</text>
+    <text x="44" y="84" font-family="Inter" font-weight="800" font-size="28" fill="#e8eaed">3DS Recorder</text>
+  </svg></div>
+  <p class="note">Рамка видошукача з «● REC», як на екрані відеокамери під час запису.</p>
+</section>
+
+</div>
+</body>
+</html>

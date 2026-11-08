@@ -1,0 +1,116 @@
+# recprobe: phase S spike sysmodule. TID 0004013000F1D302, loaded by Luma from
+# /luma/sysmodules/0004013000F1D302.cxi ("Enable loading external FIRMs and modules").
+BasicInfo:
+  Title                   : recprobe
+  CompanyCode             : "00"
+  ProductCode             : recprobe
+  ContentType             : Application
+  Logo                    : None
+
+TitleInfo:
+  UniqueId                : 0xF1D3
+  Category                : Base
+  Version                 : 2
+
+Option:
+  UseOnSD                 : false
+  FreeProductCode         : true
+  MediaFootPadding        : false
+  EnableCrypt             : false
+  EnableCompress          : false
+
+AccessControlInfo:
+  IdealProcessor                : 1
+  AffinityMask                  : 2
+  Priority                      : 8   # makerom adds 32 -> main thread 0x28 (v0.1-0.3 had 40 -> 72: invalid, main thread never ran)
+
+  DisableDebug                  : false
+  EnableForceDebug              : false
+  CanWriteSharedPage            : false
+  CanUsePrivilegedPriority      : false
+  CanUseNonAlphabetAndNumber    : false
+  PermitMainFunctionArgument    : false
+  CanShareDeviceMemory          : false
+  RunnableOnSleep               : true
+  SpecialMemoryArrange          : false
+  ResourceLimitCategory         : Other
+
+  CoreVersion                   : 2
+  DescVersion                   : 2
+
+  MemoryType                    : System
+  HandleTableSize               : 0x200
+
+  MemoryMapping:
+    - 0x1F000000-0x1F5FFFFF       # VRAM (HOME Menu / applet / some game framebuffers)
+  IORegisterMapping:
+    - 0x1EC00000-0x1ECFFFFF       # IO: PAD (0x10146000) for the stop combo
+    - 0x1EF00000-0x1EF00FFF       # GPU IO: LCD controller (PDC) framebuffer registers
+
+  SystemCallAccess:
+    ControlMemory: 0x01
+    QueryMemory: 0x02
+    ExitProcess: 0x03
+    CreateThread: 0x08
+    ExitThread: 0x09
+    SleepThread: 0x0A
+    GetThreadPriority: 0x0B
+    SetThreadPriority: 0x0C
+    GetCurrentProcessorNumber: 0x11
+    CreateMutex: 0x13
+    ReleaseMutex: 0x14
+    CreateSemaphore: 0x15
+    ReleaseSemaphore: 0x16
+    CreateEvent: 0x17
+    SignalEvent: 0x18
+    ClearEvent: 0x19
+    CreateTimer: 0x1A
+    SetTimer: 0x1B
+    CancelTimer: 0x1C
+    ClearTimer: 0x1D
+    CreateMemoryBlock: 0x1E
+    MapMemoryBlock: 0x1F
+    UnmapMemoryBlock: 0x20
+    CreateAddressArbiter: 0x21
+    ArbitrateAddress: 0x22
+    CloseHandle: 0x23
+    WaitSynchronization1: 0x24
+    WaitSynchronizationN: 0x25
+    DuplicateHandle: 0x27
+    GetSystemTick: 0x28
+    GetHandleInfo: 0x29
+    GetSystemInfo: 0x2A
+    GetProcessInfo: 0x2B
+    GetThreadInfo: 0x2C
+    ConnectToPort: 0x2D
+    SendSyncRequest: 0x32
+    OpenProcess: 0x33
+    GetProcessId: 0x35
+    GetThreadId: 0x37
+    GetResourceLimit: 0x38
+    GetResourceLimitLimitValues: 0x39
+    GetResourceLimitCurrentValues: 0x3A
+    Break: 0x3C
+    OutputDebugString: 0x3D
+    InvalidateProcessDataCache: 0x52
+    StoreProcessDataCache: 0x53
+    FlushProcessDataCache: 0x54
+    StartInterProcessDma: 0x55
+    StopDma: 0x56
+    GetDmaState: 0x57
+    GetProcessList: 0x65
+    KernelSetState: 0x7C
+    # Luma custom SVCs (0x90 ConvertVAToPA, 0xA3 ControlMemoryUnsafe, 0xB3 ControlProcess):
+    # k11ext skips SVC permission checks for them.
+  InterruptNumbers:
+  ServiceAccessControl:
+    - fs:USER
+    - mcu::HWC
+  FileSystemAccess:
+    - DirectSdmc
+    - DirectSdmcWrite
+
+SystemControlInfo:
+  SaveDataSize: 0KB
+  RemasterVersion: 0
+  StackSize: 0x4000

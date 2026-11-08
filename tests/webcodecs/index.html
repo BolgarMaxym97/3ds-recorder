@@ -1,0 +1,318 @@
+<title>Phone Encoder Check</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!--
+  3DS Recorder, phase 4 research (2026-11-03): can the phone's browser turn a recording into MP4 H.264?
+  Checks WebCodecs (video + audio encoders), H.264 / AAC configs at the recorder's size (400x480, 30 fps),
+  MediaRecorder as a fallback, then encodes 10 s of synthetic video + tone and plays the MP4 back.
+  Open it twice: over HTTPS (artifact) and over plain http:// on the LAN, as a page served by the console would be.
+-->
+<style>
+/* layout: one narrow column of check rows, a result panel, a copyable report */
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --ink: #172028; --muted: #5d6b78; --line: #d9e0e6;
+  --accent: #d7263d; --ok: #1f8a52; --bad: #c0392b; --warn: #a86a00;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161a; --panel: #1b2127; --ink: #e6eaee; --muted: #93a0ac; --line: #2c343c;
+  --accent: #ff5468; --ok: #4cc98a; --bad: #ff7a6b; --warn: #f0b44c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161a; --panel: #1b2127; --ink: #e6eaee; --muted: #93a0ac; --line: #2c343c;
+  --accent: #ff5468; --ok: #4cc98a; --bad: #ff7a6b; --warn: #f0b44c; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+main { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1 { margin: 0; font-size: 26px; line-height: 1.2; text-wrap: balance; }
+h2 { margin: 0 0 8px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+p { margin: 0; color: var(--muted); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.rows { display: flex; flex-direction: column; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.row:first-child { border-top: 0; }
+.row .k { min-width: 0; }
+.row .k small { display: block; color: var(--muted); font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.v { font-family: var(--mono); font-size: 14px; font-weight: 500; text-align: right; }
+.v.yes { color: var(--ok); } .v.no { color: var(--bad); } .v.maybe { color: var(--warn); }
+.where { display: inline-flex; gap: 8px; align-items: center; font-family: var(--mono); font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); }
+.where b { color: var(--accent); }
+button { font: 600 16px var(--sans); color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 12px 18px; cursor: pointer; }
+button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+#status { font-family: var(--mono); font-size: 14px; color: var(--muted); }
+video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; display: block; }
+textarea { width: 100%; min-height: 220px; font: 12px/1.45 var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; resize: vertical; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.stat { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.stat span { display: block; font-size: 12px; color: var(--muted); }
+.stat b { font: 600 20px var(--mono); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Can this phone make an MP4 from a 3DS recording?</h1>
+    <p>3DS Recorder writes 400×480 at 30 fps. This page checks whether the browser can encode that to H.264 + AAC itself, then tries 10 seconds of test video.</p>
+    <span class="where">opened over <b id="proto">…</b> · secure context <b id="secure">…</b></span>
+  </header>
+
+  <section class="panel">
+    <h2>Browser features</h2>
+    <div class="rows" id="caps"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Formats at 400×480, 30 fps</h2>
+    <div class="rows" id="formats"><div class="row"><span class="k">checking…</span><span class="v"></span></div></div>
+  </section>
+
+  <section class="panel" style="display:flex;flex-direction:column;gap:14px">
+    <h2 style="margin:0">Encode test: 10 s video + tone</h2>
+    <div class="actions">
+      <button id="run" type="button">Run encode test</button>
+      <span id="status">not run yet</span>
+    </div>
+    <div class="stats" id="stats" hidden>
+      <div class="stat"><span>Encode time</span><b id="s-time">–</b></div>
+      <div class="stat"><span>Speed</span><b id="s-speed">–</b></div>
+      <div class="stat"><span>MP4 size</span><b id="s-size">–</b></div>
+      <div class="stat"><span>Audio</span><b id="s-audio">–</b></div>
+    </div>
+    <video id="out" controls playsinline hidden></video>
+    <p id="playnote" hidden>Press play: you should see moving colour bars and hear a 440 Hz tone. Tell me if it plays.</p>
+  </section>
+
+  <section class="panel" style="display:flex;flex-direction:column;gap:10px">
+    <h2 style="margin:0">Report for Claude</h2>
+    <p>Copy this and paste it into the chat.</p>
+    <textarea id="report" readonly aria-label="Report text"></textarea>
+    <div class="actions"><button id="copy" type="button" class="ghost">Copy report</button><span id="copied" class="v"></span></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
+<script>
+(() => {
+  const W = 400, H = 480, FPS = 30, SECONDS = 10, AR = 48000;
+  const report = { url: location.protocol + "//" + location.host, ua: navigator.userAgent, secure: window.isSecureContext,
+                   cores: navigator.hardwareConcurrency || null, caps: {}, formats: {}, encode: null };
+  const $ = (id) => document.getElementById(id);
+  $("proto").textContent = location.protocol.replace(":", "");
+  $("secure").textContent = window.isSecureContext ? "yes" : "no";
+
+  function row(parent, label, detail, value, cls) {
+    const r = document.createElement("div");
+    r.className = "row";
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = label;
+    if (detail) { const s = document.createElement("small"); s.textContent = detail; k.appendChild(s); }
+    const v = document.createElement("span");
+    v.className = "v " + (cls || "");
+    v.textContent = value;
+    r.append(k, v);
+    parent.appendChild(r);
+  }
+  const yn = (b) => [b ? "yes" : "no", b ? "yes" : "no"];
+
+  const caps = {
+    VideoEncoder: typeof VideoEncoder !== "undefined", VideoDecoder: typeof VideoDecoder !== "undefined",
+    VideoFrame: typeof VideoFrame !== "undefined", AudioEncoder: typeof AudioEncoder !== "undefined",
+    AudioData: typeof AudioData !== "undefined", MediaRecorder: typeof MediaRecorder !== "undefined",
+    "canvas.captureStream": typeof HTMLCanvasElement !== "undefined" && "captureStream" in HTMLCanvasElement.prototype,
+    "MP4 muxer library": typeof Mp4Muxer !== "undefined",
+  };
+  report.caps = caps;
+  for (const [k, b] of Object.entries(caps)) { const [t, c] = yn(b); row($("caps"), k, null, t, c); }
+
+  function writeReport() { $("report").value = JSON.stringify(report, null, 2); }
+  writeReport();
+
+  async function checkFormats() {
+    const f = $("formats");
+    f.textContent = "";
+    const video = [["H.264 Baseline 3.1", "avc1.42001f"], ["H.264 Main 3.1", "avc1.4d401f"], ["H.264 High 3.1", "avc1.64001f"]];
+    for (const [name, codec] of video) {
+      let res = "no API", cls = "no";
+      if (caps.VideoEncoder) {
+        try {
+          const s = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, framerate: FPS, bitrate: 1_000_000 });
+          res = s.supported ? "yes" : "no"; cls = s.supported ? "yes" : "no";
+        } catch (e) { res = "error"; cls = "no"; }
+      }
+      report.formats[codec] = res;
+      row(f, name, "VideoEncoder " + codec, res, cls);
+    }
+    const audio = [["AAC-LC 48 kHz stereo", "mp4a.40.2", 48000], ["AAC-LC 32 kHz stereo", "mp4a.40.2", 32000], ["Opus 48 kHz stereo", "opus", 48000]];
+    for (const [name, codec, sr] of audio) {
+      let res = "no API", cls = "no";
+      if (caps.AudioEncoder) {
+        try {
+          const s = await AudioEncoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: 2, bitrate: 128000 });
+          res = s.supported ? "yes" : "no"; cls = s.supported ? "yes" : "no";
+        } catch (e) { res = "error"; cls = "no"; }
+      }
+      report.formats[codec + "@" + sr] = res;
+      row(f, name, "AudioEncoder " + codec, res, cls);
+    }
+    const mr = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp8,opus"];
+    for (const t of mr) {
+      const b = caps.MediaRecorder && MediaRecorder.isTypeSupported(t);
+      report.formats["MediaRecorder " + t] = b ? "yes" : "no";
+      row(f, "MediaRecorder fallback", t, b ? "yes" : "no", b ? "yes" : "maybe");
+    }
+    writeReport();
+  }
+  checkFormats();
+
+  // test picture: two "screens" with moving bars, like a recording's layout
+  function draw(ctx, i) {
+    ctx.fillStyle = "#101418"; ctx.fillRect(0, 0, W, H);
+    const hues = [0, 40, 60, 120, 190, 230, 280];
+    for (let b = 0; b < 7; b++) {
+      ctx.fillStyle = "hsl(" + hues[b] + " 80% 55%)";
+      ctx.fillRect(((b * 60 + i * 4) % 460) - 60, 0, 52, 240);
+    }
+    ctx.fillStyle = "#2b3a4d"; ctx.fillRect(40, 240, 320, 240);
+    ctx.fillStyle = "#ffffff"; ctx.font = "bold 40px system-ui, sans-serif";
+    ctx.fillText("frame " + i, 70, 380);
+    ctx.fillStyle = "#ff4d4f"; ctx.beginPath(); ctx.arc(60 + (i * 9) % 280, 300, 14, 0, Math.PI * 2); ctx.fill();
+  }
+
+  async function run() {
+    const btn = $("run");
+    btn.disabled = true;
+    const status = (t) => { $("status").textContent = t; };
+    const enc = { ok: false };
+    report.encode = enc;
+    try {
+      if (!caps.VideoEncoder || !caps.VideoFrame) throw new Error("VideoEncoder is not available here" + (window.isSecureContext ? "" : " (page is not a secure context)"));
+      if (!caps["MP4 muxer library"]) throw new Error("MP4 muxer library did not load (needs internet for the CDN)");
+      const vCodec = report.formats["avc1.42001f"] === "yes" ? "avc1.42001f" : report.formats["avc1.4d401f"] === "yes" ? "avc1.4d401f" : "avc1.64001f";
+      const aac = report.formats["mp4a.40.2@48000"] === "yes";
+      enc.videoCodec = vCodec; enc.audio = aac ? "aac 48k" : "none";
+      const muxer = new Mp4Muxer.Muxer({
+        target: new Mp4Muxer.ArrayBufferTarget(),
+        video: { codec: "avc", width: W, height: H },
+        audio: aac ? { codec: "aac", numberOfChannels: 2, sampleRate: AR } : undefined,
+        fastStart: "in-memory",
+      });
+      let error = null;
+      const ad = { chunks: 0, bytes: 0, firstTs: null, lastTs: null, configDescBytes: null, configRate: null, configCh: null };
+      enc.audioDiag = ad;
+      // Safari (iOS 18) gives the AAC decoderConfig.description as a whole ES_Descriptor (tag 0x03)
+      // instead of the 2-byte AudioSpecificConfig; the muxer then writes a broken esds (no audio
+      // track, ffprobe: "Audio object type 0"). Take the DecoderSpecificInfo (tag 0x05) out of it.
+      const asc = (desc) => {
+        const b = desc instanceof ArrayBuffer ? new Uint8Array(desc) : new Uint8Array(desc.buffer, desc.byteOffset, desc.byteLength);
+        if (b[0] !== 0x03) return b;
+        const len = (i) => { let n = 0, k = 0; do { n = (n << 7) | (b[i + k] & 0x7f); } while (b[i + k++] & 0x80 && k < 4); return [n, k]; };
+        const find = (i, end, tag) => {
+          while (i < end) {
+            const t = b[i], [n, k] = len(i + 1), body = i + 1 + k;
+            if (t === tag) return b.slice(body, body + n);
+            if (t === 0x03) { const flags = b[body + 2]; let j = body + 3; if (flags & 0x80) j += 2; if (flags & 0x40) j += 1 + b[j]; if (flags & 0x20) j += 2; const r = find(j, body + n, tag); if (r) return r; }
+            if (t === 0x04) { const r = find(body + 13, body + n, tag); if (r) return r; }
+            i = body + n;
+          }
+          return null;
+        };
+        return find(0, b.length, 0x05) || b;
+      };
+      const onAudio = (c, m) => {
+        ad.chunks++; ad.bytes += c.byteLength;
+        if (ad.firstTs === null) ad.firstTs = c.timestamp;
+        ad.lastTs = c.timestamp;
+        if (m && m.decoderConfig && m.decoderConfig.description) {
+          const raw = m.decoderConfig.description, fixed = asc(raw);
+          if (ad.configDescBytes === null) {
+            ad.configDescBytes = raw.byteLength; ad.ascHex = Array.from(fixed, (x) => x.toString(16).padStart(2, "0")).join(" ");
+            ad.configRate = m.decoderConfig.sampleRate; ad.configCh = m.decoderConfig.numberOfChannels;
+          }
+          m = { ...m, decoderConfig: { ...m.decoderConfig, description: fixed } };
+        }
+        muxer.addAudioChunk(c, m);
+      };
+      const ve = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { error = e; } });
+      ve.configure({ codec: vCodec, width: W, height: H, bitrate: 1_000_000, framerate: FPS, avc: { format: "avc" } });
+      let ae = null;
+      if (aac) {
+        ae = new AudioEncoder({ output: onAudio, error: (e) => { error = e; } });
+        ae.configure({ codec: "mp4a.40.2", sampleRate: AR, numberOfChannels: 2, bitrate: 128000 });
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext("2d");
+      const frames = FPS * SECONDS;
+      const t0 = performance.now();
+      for (let i = 0; i < frames; i++) {
+        if (error) throw error;
+        draw(ctx, i);
+        const vf = new VideoFrame(canvas, { timestamp: Math.round(i * 1e6 / FPS), duration: Math.round(1e6 / FPS) });
+        ve.encode(vf, { keyFrame: i % 60 === 0 });
+        vf.close();
+        while (ve.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 1));
+        if (i % 30 === 0) status("video frame " + i + " / " + frames);
+      }
+      if (ae) {
+        const block = 1024, total = AR * SECONDS;
+        for (let s = 0; s < total; s += block) {
+          const n = Math.min(block, total - s), data = new Float32Array(n * 2);
+          for (let k = 0; k < n; k++) { const v = 0.25 * Math.sin(2 * Math.PI * 440 * (s + k) / AR); data[k] = v; data[n + k] = v; }
+          const ad = new AudioData({ format: "f32-planar", sampleRate: AR, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(s * 1e6 / AR), data });
+          ae.encode(ad);
+          ad.close();
+        }
+      }
+      status("finishing…");
+      await ve.flush();
+      if (ae) await ae.flush();
+      if (error) throw error;
+      muxer.finalize();
+      const secs = (performance.now() - t0) / 1000;
+      const buf = muxer.target.buffer;
+      Object.assign(enc, { ok: true, seconds: +secs.toFixed(2), realtime: +(SECONDS / secs).toFixed(1), bytes: buf.byteLength });
+      $("stats").hidden = false;
+      $("s-time").textContent = secs.toFixed(1) + " s";
+      $("s-speed").textContent = (SECONDS / secs).toFixed(1) + "× real time";
+      $("s-size").textContent = (buf.byteLength / 1048576).toFixed(2) + " MB";
+      $("s-audio").textContent = aac ? "AAC" : "none";
+      const v = $("out");
+      v.src = URL.createObjectURL(new Blob([buf], { type: "video/mp4" }));
+      v.hidden = false;
+      $("playnote").hidden = false;
+      v.addEventListener("loadedmetadata", () => {
+        enc.player = { duration: +v.duration.toFixed(2), audioTracks: v.audioTracks ? v.audioTracks.length : null };
+        writeReport();
+      }, { once: true });
+      status("done");
+      // plain-http test page served by tests/webcodecs/serve.py: send the MP4 back for ffprobe
+      if (location.protocol === "http:") {
+        fetch("/upload?name=encode-test.mp4", { method: "POST", body: buf })
+          .then((r) => { enc.uploaded = r.ok; status(r.ok ? "done · MP4 sent to the Mac" : "done · upload failed"); writeReport(); })
+          .catch(() => { enc.uploaded = false; writeReport(); });
+      }
+    } catch (e) {
+      enc.error = String(e && e.message || e);
+      status("failed: " + enc.error);
+    }
+    writeReport();
+    btn.disabled = false;
+  }
+  $("run").addEventListener("click", run);
+
+  $("copy").addEventListener("click", () => {
+    const t = $("report");
+    const done = (m) => { $("copied").textContent = m; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t.value).then(() => done("copied"), () => { t.select(); done("selected: copy it"); });
+    } else { t.focus(); t.select(); done("selected: copy it"); }
+  });
+})();
+</script>
