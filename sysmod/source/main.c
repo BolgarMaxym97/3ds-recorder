@@ -35,6 +35,8 @@
 /* Luma custom SVCs (csvc.s) */
 Result svcControlMemoryUnsafe(u32 *out, u32 addr0, u32 size, MemOp op, MemPerm perm);
 Result svcControlService(u32 op, ...);
+Result svcMapProcessMemoryEx(Handle dstProcess, u32 vaDst, Handle srcProcess, u32 vaSrc, u32 size, u32 flags);   /* Luma 0xA0 */
+Result svcUnmapProcessMemoryEx(Handle process, u32 va, u32 size);                                              /* Luma 0xA1 */
 
 /* ------------------------------------------------------------------ config */
 
@@ -76,6 +78,7 @@ Result svcControlService(u32 op, ...);
 #define BOOST_APP_IDLE_US    300000u
 #define THROTTLE_PCT   70u
 #define BLOCK          (256u * KB)
+static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LITE in the light profile) */
 #define FIRST_ALLOC    (128ull * MB)  /* file made at record start when none is prepared */
 #define PREP_ALLOC     (1024ull * MB) /* prepared in idle time: growing a file on a nearly full card
                                          stalled writes ~1-1.5 s per 32 MB (test 2026-11-03) */
@@ -86,6 +89,13 @@ Result svcControlService(u32 op, ...);
 #define MAX_FILE       ((u64)g_cfg.maxFileMb * MB)   /* then the recording goes on in a new file */
 #define MIN_SD_FREE_MB 64u
 #define KEEP_FREE      (4u * MB)      /* never leave less SYSTEM memory than this */
+#define KEEP_FREE_LITE (1u * MB)      /* the same in an extended-memory game (Old 3DS): no applets open there */
+#define LITE_BELOW     (12u * MB)     /* SYSTEM free under this at start: the light profile (normally ~23 MB) */
+/* Light profile ring: HOME Menu takes ~6 MB of the ~7.4 MB an extended-memory game leaves, as soon as
+   0.15 s after the button (O3DS 2026-11-08). The capture buffers go back at once on HOME; the ring
+   only after the writer's current block, so it must be small enough for HOME without it. */
+#define LITE_RING_MAX  (1u * MB)
+#define BLOCK_LITE     (128u * KB)    /* the writer's block there: the ring goes back sooner */
 #define MAX_SLOTS      6u
 #define BIG_VA         0x0C000000u
 #define REG32(a)       (*(volatile u32 *)(a))
@@ -104,6 +114,7 @@ Result svcControlService(u32 op, ...);
 #define AUDIO_FRAME     160u          /* stereo samples per DSP frame (~4.9 ms) */
 #define AUDIO_BYTES     (AUDIO_FRAME * 4u)
 #define AUDIO_QUEUE     512u          /* frames between the audio thread and the converter (~2.5 s; raw mode ~0.3 s) */
+#define AUDIO_QUEUE_LITE 256u
 #define AUDIO_POLL_US   1000u         /* a region holds a frame ~9.8 ms; two equal reads needed */
 #define AUDIO_TRAILER   16u           /* R3DA payload after the samples, see r3d_format.h */
 #define AUDIO_RESERVE   (256u * KB)   /* ring space video frames leave for audio (~1.6 s) */
@@ -480,11 +491,33 @@ static void LoadConfig(void)
 
 /* Bump allocator over SYSTEM memory, freed as a whole when a recording ends. */
 static u32 g_bigTop = BIG_VA;
+static u32 g_keepFree = KEEP_FREE;
+static bool g_lite;   /* this recording runs with the light memory profile */
+
+/* The launcher plugin's memory (extended-memory games, Old 3DS): Rosalina takes it from the game's
+   own region (sysmod WriteGameOrder: mode3 strategy), the recorder maps it here and keeps every
+   recording buffer in it. SYSTEM memory then stays as the game left it: HOME Menu takes ~6 MB of
+   the ~7.4 MB there, and with recording buffers in SYSTEM it crashed now and then even when they
+   had all been given back before it asked (ErrDisp 0xD8C3FBF3, O3DS 2026-11-08). */
+#define PLG_HDR_VA     0x0D000000u
+#define PLG_MEM_VA     0x0E000000u
+#define PLG_MAGIC      0x24584733u    /* Rosalina PluginHeader.magic, "3GX$" */
+static u32 g_plgSize;                 /* bytes mapped at PLG_MEM_VA, 0: none */
+static u32 g_plgTop;                  /* bump offset in it */
+static bool g_inPlg;                  /* this recording's buffers live there */
 
 static void *BigAlloc(u32 size)
 {
     size = (size + 0xFFFu) & ~0xFFFu;
-    if (osGetMemRegionFree(MEMREGION_SYSTEM) < size + KEEP_FREE)
+    if (g_inPlg)
+    {
+        if (g_plgTop + size > g_plgSize)
+            return NULL;
+        void *p = (void *)(PLG_MEM_VA + g_plgTop);
+        g_plgTop += size;
+        return p;
+    }
+    if (osGetMemRegionFree(MEMREGION_SYSTEM) < size + g_keepFree)
         return NULL;
     u32 out = 0;
     if (R_FAILED(svcControlMemoryUnsafe(&out, g_bigTop, size, (MemOp)(MEMOP_ALLOC | MEMOP_REGION_SYSTEM),
@@ -494,12 +527,15 @@ static void *BigAlloc(u32 size)
     return (void *)out;
 }
 
+static u32 g_bigLow = BIG_VA;   /* below it already given back (ReleaseEncoderMemory) */
+
 static void BigFreeAll(void)
 {
+    g_plgTop = 0;   /* the plugin's memory stays mapped until the game closes */
     u32 out = 0;
-    if (g_bigTop > BIG_VA)
-        svcControlMemoryUnsafe(&out, BIG_VA, g_bigTop - BIG_VA, MEMOP_FREE, (MemPerm)0);
-    g_bigTop = BIG_VA;
+    if (g_bigTop > g_bigLow)
+        svcControlMemoryUnsafe(&out, g_bigLow, g_bigTop - g_bigLow, MEMOP_FREE, (MemPerm)0);
+    g_bigTop = g_bigLow = BIG_VA;
 }
 
 /* ------------------------------------------------------------------ recording state */
@@ -517,6 +553,18 @@ typedef struct {
 /* 6 frames per screen in BGR8 (3 bytes/pixel, what SM3DL and NSMB2 use): rides out converter
    stalls up to ~200 ms (v9: 0.13 s in HOME; with 768 / 480 KB only 2 BGR8 frames fitted) */
 static const u32 ARENA_CAP[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
+/* Light profile: an extended-memory game on an Old 3DS leaves ~5.3 MB of SYSTEM memory (the
+   launcher plugin's 2 MB included, O3DS 2026-11-08). Two frames per screen even at 4 bytes a pixel,
+   a 2 MB ring, half the audio queue: ~3.7 MB. */
+static const u32 ARENA_CAP_LITE[2] = { 2u * 400u * 240u * 4u, 2u * 320u * 240u * 4u };
+static u32 g_arenaCap[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
+/* In the launcher plugin's 2 MB (an extended-memory game, Old 3DS): two frames per screen at 2 bytes
+   a pixel (one at 3 or 4), a 256-frame audio queue, the ring gets the rest (~768 KB). The plugin
+   cannot be bigger: Pokemon Ultra Moon did not start with 5 MB taken from it (75 MB left; 78 MB
+   worked; Smash ran on 75), O3DS 2026-11-08. */
+static const u32 ARENA_CAP_PLG[2] = { 2u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
+#define AUDIO_QUEUE_PLG 256u   /* 128 overflowed in Smash (queue full 617 of 13792, O3DS 2026-11-08) */
+static u32 g_aqCap = AUDIO_QUEUE;
 
 static Slot   g_slots[2 * MAX_SLOTS];
 static u8    *g_arena[2];
@@ -526,6 +574,7 @@ static u32    g_codecFrames[2];
 static volatile u32 g_codecWords[2];
 
 static u8    *g_ring;
+static u32 g_audioReserveBytes = AUDIO_RESERVE;   /* half in the plugin's small ring (~1 s of audio) */
 static volatile bool g_audioReserve;   /* audio on: video leaves AUDIO_RESERVE of ring free */
 static u32    g_ringSize;
 static volatile u64 g_w, g_r;
@@ -686,7 +735,7 @@ static void WriterMain(void *arg)
         }
         const u64 w = __atomic_load_n(&g_w, __ATOMIC_ACQUIRE);
         const u64 avail = w - g_r;
-        if (avail < BLOCK)
+        if (avail < g_block)
         {
             g_writerBusy = false;
             svcSleepThread(4 * 1000 * 1000);
@@ -694,7 +743,7 @@ static void WriterMain(void *arg)
         }
         if (R_SUCCEEDED(g_writeRc))
         {
-            if (g_written + BLOCK > g_allocated)
+            if (g_written + g_block > g_allocated)
             {
                 const u64 t0 = osGetTime();
                 g_allocated += CHUNK_ALLOC;
@@ -706,7 +755,7 @@ static void WriterMain(void *arg)
             }
             u32 done = 0;
             const u64 w0 = Ticks();
-            g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), BLOCK, FS_WRITE_FLUSH);
+            g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), g_block, FS_WRITE_FLUSH);
             g_written += done;
             const u64 now = Ticks();
             g_writeTicks += now - w0;
@@ -718,7 +767,7 @@ static void WriterMain(void *arg)
                 WriteInfo();
             }
         }
-        __atomic_store_n(&g_r, g_r + BLOCK, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_r, g_r + g_block, __ATOMIC_RELEASE);
         g_writerBusy = false;
     }
 }
@@ -750,7 +799,7 @@ static void EncodeSlot(Slot *s)
     u32 pos = (u32)(g_w % g_ringSize);
     const u32 tail = g_ringSize - pos;
     const u32 padBytes = tail < need ? tail : 0;
-    if (g_ringSize - RingFill() < padBytes + need + (g_audioReserve ? AUDIO_RESERVE : 0u))
+    if (g_ringSize - RingFill() < padBytes + need + (g_audioReserve ? g_audioReserveBytes : 0u))
     {
         /* SD behind: video gives way, audio keeps AUDIO_RESERVE. No keyframe needed after
            a skipped frame: the encoder's reference (g_prev) is the last frame it stored. */
@@ -960,12 +1009,12 @@ static void PollAudio(void)
         g_audioActive[r] = false;
         memcpy(g_audioLast[r], g_audioCur[r], AUDIO_BYTES);
         const u32 head = g_aqHead;
-        if (head - __atomic_load_n(&g_aqTail, __ATOMIC_ACQUIRE) >= AUDIO_QUEUE)
+        if (head - __atomic_load_n(&g_aqTail, __ATOMIC_ACQUIRE) >= g_aqCap)
         {
             g_audioQueueFull++;
             continue;
         }
-        AudioItem *it = &g_aq[head % AUDIO_QUEUE];
+        AudioItem *it = &g_aq[head % g_aqCap];
         it->timeUs = TicksToUs(g_audioStartTick[r] - g_recStartTick);
         it->region = r;
         it->counter[0] = cnt[0];
@@ -999,7 +1048,7 @@ static void PollAudioRaw(void)
     u16 cnt[2];
     DspReadCounters(cnt);
     const u32 head = g_aqHead;
-    if (head + 2 - __atomic_load_n(&g_aqTail, __ATOMIC_ACQUIRE) > AUDIO_QUEUE)
+    if (head + 2 - __atomic_load_n(&g_aqTail, __ATOMIC_ACQUIRE) > g_aqCap)
     {
         g_audioQueueFull++;
         return;   /* g_audioPrev not updated: the change is seen again */
@@ -1007,7 +1056,7 @@ static void PollAudioRaw(void)
     for (u32 r = 0; r < 2; r++)
     {
         memcpy(g_audioPrev[r], g_audioCur[r], AUDIO_BYTES);
-        AudioItem *it = &g_aq[(head + r) % AUDIO_QUEUE];
+        AudioItem *it = &g_aq[(head + r) % g_aqCap];
         it->timeUs = TicksToUs(tick - g_recStartTick);
         it->region = r;
         it->counter[0] = cnt[0];
@@ -1061,7 +1110,7 @@ static void DrainAudioImpl(void)
 {
     while (g_aqTail != __atomic_load_n(&g_aqHead, __ATOMIC_ACQUIRE))
     {
-        const AudioItem *it = &g_aq[g_aqTail % AUDIO_QUEUE];
+        const AudioItem *it = &g_aq[g_aqTail % g_aqCap];
         u32 adv = 0;
         R3dRecHeader *h = RingReserve(AUDIO_BYTES + AUDIO_TRAILER, &adv);
         if (h)
@@ -1186,7 +1235,7 @@ static bool EnsureSlots(int sc, u32 size)
         if (g_slots[sc * MAX_SLOTS + i].state)
             return false;
     const u32 slotSize = (size + 63u) & ~63u;
-    u32 n = slotSize ? ARENA_CAP[sc] / slotSize : 0;
+    u32 n = slotSize ? g_arenaCap[sc] / slotSize : 0;
     if (n > MAX_SLOTS)
         n = MAX_SLOTS;
     if (!n)
@@ -1366,7 +1415,7 @@ static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStat
     if (stride < 240 * Bpp(fmt) || stride > 240u * 4u * 2u)
         return;
     const u32 size = (sc == 0 ? 400u : 320u) * stride;
-    if (size > ARENA_CAP[sc])
+    if (size > g_arenaCap[sc])
         return;
     if (!EnsureSlots(sc, size))
     {
@@ -1480,8 +1529,9 @@ static void FormatName(char *out, u32 size, u64 msSince1900)
    an app that needs another mode (the Homebrew Launcher, New 3DS titles) waits for SYSTEM memory. */
 static void LogMemory(const char *when)
 {
-    Log("memory (%s): app mode %u, APPLICATION free %lu KB, SYSTEM free %lu KB, BASE free %lu KB%s", when,
-        *(const volatile u8 *)0x1FF80030, osGetMemRegionFree(MEMREGION_APPLICATION) / KB,
+    /* signed: with the launcher plugin's 2 MB taken from it, the game's region can show "below 0" */
+    Log("memory (%s): app mode %u, APPLICATION free %ld KB, SYSTEM free %lu KB, BASE free %lu KB%s", when,
+        *(const volatile u8 *)0x1FF80030, (s32)osGetMemRegionFree(MEMREGION_APPLICATION) / (s32)KB,
         osGetMemRegionFree(MEMREGION_SYSTEM) / KB, osGetMemRegionFree(MEMREGION_BASE) / KB,
         "");
 }
@@ -1566,6 +1616,258 @@ static void UpdateBoost(void)
     }
     if (p && appDrawing && now - since >= (u64)PRIO_BOOST_AFTER_US * (SYSCLOCK_ARM11 / 1000000u)) /* 64-bit: apps run for hours */
         SetBoost(true, "an application has been running 8 s and draws");
+}
+
+/* ------------------------------------------------------------------ extended-memory games (Old 3DS) */
+
+/* A game that wants 80 / 96 MB on an Old 3DS (Smash, Pokemon Sun / Moon, Monster Hunter...) makes
+   NS reboot the console into that memory mode first: pm ends every process (0x100), the recorder
+   too (O3DS 2026-11-08). Right before that reboot the recorder leaves Rosalina's plugin loader a
+   one-time order, /luma/plugins/user_param.bin: load our launcher plugin (plugin/, 2 MB, no
+   screen flash) into that game. Rosalina reads the order when it starts after the reboot; the
+   plugin starts the recorder again from the game's first instruction, and the recorder deletes
+   the order. Nothing happens unless the recorder runs when the game starts, and nothing changes for
+   other games. The plugin loader must be on; if it is off the recorder turns it on for that one
+   game (Rosalina saves its settings itself) and turns it off again afterwards.
+   New 3DS: pm only changes the game's memory limit there, no reboot, nothing to do. */
+#define LAUNCH_3GX_FS   DIR_FS "/rec3ds-launch.3gx"
+#define USER_PARAM_FS   "/luma/plugins/user_param.bin"
+#define PLG_BY_US_FS    DIR_FS "/.plugin_loader_on"   /* the recorder turned the plugin loader on */
+#define USER_PARAM_MAGIC 0x53524550u                    /* "PERS", Rosalina plgloader.c */
+#define ORDER_RESUME     0x52455331u                    /* config[0]: a recording was running ("RES1") */
+
+/* Rosalina's PluginLoadParameters (sysmodules/rosalina/include/plugin/plgldr.h) */
+typedef struct {
+    u8 noFlash;
+    u8 memoryStrategy;   /* 0 swap (to SD while HOME is open), 1 mode3, 2 none */
+    u8 persistent;
+    u8 pad;
+    u32 lowTitleId;      /* 0: any title */
+    char path[256];
+    u32 config[32];
+} PluginLoadParams;
+_Static_assert(sizeof(PluginLoadParams) == 392, "PluginLoadParameters layout");
+
+static bool g_powerOffSeen;        /* 0x108 came: a power-off, not a game's reboot */
+
+static const char *MemModeName(u32 mode)
+{
+    switch (mode)
+    {
+    case 0: return "64 MB";
+    case 2: return "96 MB";
+    case 3: return "80 MB";
+    case 4: return "72 MB";
+    case 5: return "32 MB";
+    case 6: return "New 3DS 124 MB";
+    case 7: return "New 3DS 178 MB";
+    default: return "?";
+    }
+}
+
+static Handle StealSession(const char *name)
+{
+    Handle h = 0;
+    return R_SUCCEEDED(svcControlService(0 /* steal client session */, &h, name)) ? h : 0;
+}
+
+/* Rosalina's plg:ldr: one session, which loader holds only while it loads a plugin; a stolen copy
+   as the fallback (that failed on O3DS 2026-11-08: no named session). -1 unknown, 0 off, 1 on */
+static int PluginLoader(int set)
+{
+    Handle h = 0;
+    srvSetBlockingPolicy(true);   /* the port is full while loader holds its session: no waiting */
+    const Result rc = srvGetServiceHandle(&h, "plg:ldr");
+    srvSetBlockingPolicy(false);
+    if (R_FAILED(rc))
+        h = StealSession("plg:ldr");
+    if (!h)
+        Log("plg:ldr: no session (srv rc %08lX)", rc);
+    if (!h)
+        return -1;
+    u32 *cmd = getThreadCommandBuffer();
+    int state = -1;
+    if (set < 0)
+    {
+        cmd[0] = IPC_MakeHeader(2, 0, 0);   /* IsEnabled */
+        if (R_SUCCEEDED(svcSendSyncRequest(h)) && R_SUCCEEDED((Result)cmd[1]))
+            state = cmd[2] ? 1 : 0;
+    }
+    else
+    {
+        cmd[0] = IPC_MakeHeader(3, 1, 0);   /* SetState: Rosalina also saves its settings */
+        cmd[1] = (u32)set;
+        if (R_SUCCEEDED(svcSendSyncRequest(h)) && R_SUCCEEDED((Result)cmd[1]))
+            state = set;
+    }
+    svcCloseHandle(h);
+    return state;
+}
+
+static bool SdFileExists(const char *path)
+{
+    Handle f = 0;
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, path), FS_OPEN_READ, 0)))
+        return false;
+    FSFILE_Close(f);
+    return true;
+}
+
+/* user_param.bin: 1 ours (*tidLow, *resume set), 0 none, -1 someone else's */
+static int ReadUserParam(u32 *tidLow, bool *resume)
+{
+    Handle f = 0;
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS), FS_OPEN_READ, 0)))
+        return 0;
+    struct { u32 magic; PluginLoadParams p; } buf;
+    u32 got = 0;
+    const bool ok = R_SUCCEEDED(FSFILE_Read(f, &got, 0, &buf, sizeof(buf))) && got == sizeof(buf) &&
+                    buf.magic == USER_PARAM_MAGIC && strcmp(buf.p.path, LAUNCH_3GX_FS) == 0;
+    FSFILE_Close(f);
+    if (ok && tidLow)
+        *tidLow = buf.p.lowTitleId;
+    if (ok && resume)
+        *resume = buf.p.config[0] == ORDER_RESUME;
+    return ok ? 1 : -1;
+}
+
+/* At start: in which memory mode, whether the launcher plugin started us; removes our order.
+   True: a recording ran when the game rebooted the console, so it goes on. */
+static bool AfterReboot(void)
+{
+    const u32 mode = OS_KernelConfig->app_memtype;
+    u32 tidLow = 0;
+    bool resume = false;
+    const int order = ReadUserParam(&tidLow, &resume);
+    if (order > 0)
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
+    const bool weTurnedOn = SdFileExists(PLG_BY_US_FS);
+    if (weTurnedOn)
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
+        PluginLoader(0);
+    }
+    Log("memory mode %lu (%s): APPLICATION %lu KB, SYSTEM free %lu KB of %lu KB, BASE free %lu KB; launcher order %s%s",
+        mode, MemModeName(mode), OS_KernelConfig->memregion_sz[0] / KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
+        OS_KernelConfig->memregion_sz[1] / KB, osGetMemRegionFree(MEMREGION_BASE) / KB,
+        order > 0 ? "found (started by the plugin?), removed" : order < 0 ? "of another program, left" : "none",
+        weTurnedOn ? "; plugin loader turned off again" : "");
+    if (order > 0)
+        Log("launcher order was for title %08lX%s", tidLow, resume ? ": the recording goes on in 2 s" : "");
+    /* only right after that game's reboot (an old order must not start a recording in another one) */
+    resume = resume && order > 0 && mode != 0;
+    if (resume)   /* the recording that game's start stopped goes on: nothing to explain in the app */
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, STOPPED_FS));
+    return resume;
+}
+
+/* At 0x100 (not a power-off), before anything else: if a game that reboots the console into its
+   memory mode is about to start, leave Rosalina the order to load the launcher plugin into it.
+   Quick and without log lines: pm kills the recorder ~1.5 s after 0x100, and once a recording had
+   been saved first the order was never written (O3DS 2026-11-08). No exheader read either: an Old
+   3DS reboots before an application only when its memory mode differs from the current one, so an
+   application title in the reboot parameters is such a game. LogGameOrder() tells afterwards. */
+static struct {
+    const char *skip;   /* why no order, NULL: written */
+    Result rc;
+    u64 tid;
+    u32 done;
+} g_order;
+
+static void WriteGameOrder(bool wasRecording)
+{
+    memset(&g_order, 0, sizeof(g_order));
+    s64 n3ds = 0;
+    svcGetSystemInfo(&n3ds, 0x10000, 0x201);
+    if (n3ds)
+    {
+        g_order.skip = "New 3DS: no reboot for such games";
+        return;
+    }
+    Handle pm = StealSession("pm:app");
+    if (!pm)
+    {
+        g_order.skip = "no pm:app session";
+        return;
+    }
+    static u8 params[0x1000];
+    *pmAppGetSessionHandle() = pm;
+    g_order.rc = PMAPP_GetFIRMLaunchParams(params, sizeof(params));
+    *pmAppGetSessionHandle() = 0;
+    svcCloseHandle(pm);
+    /* the title NS starts after the reboot: +0x508 on O3DS 2026-11-08; the first application id */
+    for (u32 o = 0x500; R_SUCCEEDED(g_order.rc) && o < 0x540 && !g_order.tid; o += 8)
+    {
+        u64 v;
+        memcpy(&v, params + o, 8);
+        if ((u32)(v >> 32) == 0x00040000u && (u32)v != 0)
+            g_order.tid = v;
+    }
+    if (!g_order.tid)
+    {
+        g_order.skip = "not into a game";
+        return;
+    }
+    if (!SdFileExists(LAUNCH_3GX_FS))
+    {
+        g_order.skip = "no launcher plugin " LAUNCH_3GX_FS;
+        return;
+    }
+    if (ReadUserParam(NULL, NULL) < 0)
+    {
+        g_order.skip = USER_PARAM_FS " belongs to another program";
+        return;
+    }
+    struct { u32 magic; PluginLoadParams p; } buf;
+    memset(&buf, 0, sizeof(buf));
+    buf.magic = USER_PARAM_MAGIC;
+    buf.p.noFlash = 1;
+    /* PLG_STRATEGY_MODE3: the plugin's 2 MB come from the game's own region, not from SYSTEM.
+       With the default (swap: SYSTEM, written to SD while HOME is open) Rosalina could not take them
+       back when the game was closed from HOME and asked for a reboot (0xD86007F3, O3DS 2026-11-08). */
+    buf.p.memoryStrategy = 1;
+    buf.p.persistent = 0;
+    buf.p.lowTitleId = (u32)g_order.tid;
+    buf.p.config[0] = wasRecording ? ORDER_RESUME : 0;
+    snprintf(buf.p.path, sizeof(buf.p.path), "%s", LAUNCH_3GX_FS);
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma/plugins"), 0);
+    const FS_Path p = fsMakePath(PATH_ASCII, USER_PARAM_FS);
+    FSUSER_DeleteFile(g_sd, p);
+    Handle f = 0;
+    g_order.rc = FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0);
+    if (R_SUCCEEDED(g_order.rc))
+    {
+        g_order.rc = FSFILE_Write(f, &g_order.done, 0, &buf, sizeof(buf), FS_WRITE_FLUSH);
+        FSFILE_Close(f);
+    }
+    if (R_FAILED(g_order.rc) || g_order.done != sizeof(buf))
+        g_order.skip = "writing failed";
+}
+
+/* After the recording is saved: the log line, and the plugin loader on if it is off. */
+static void LogGameOrder(bool wasRecording)
+{
+    if (g_order.skip)
+    {
+        Log("reboot: no launcher order (%s; title %016llX, rc %08lX)", g_order.skip, g_order.tid, g_order.rc);
+        return;
+    }
+    Log("reboot into game %016llX: launcher order written%s", g_order.tid,
+        wasRecording ? ", the recording goes on there" : "");
+    const int loader = PluginLoader(-1);
+    if (loader == 0)
+    {
+        const int now = PluginLoader(1);
+        if (now == 1)
+        {
+            Handle f = 0;
+            if (R_SUCCEEDED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS), FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+                FSFILE_Close(f);
+        }
+        Log("reboot: plugin loader was off, turned on: %s", now == 1 ? "ok" : "failed");
+    }
+    else
+        Log("reboot: plugin loader %s", loader == 1 ? "on" : "state unknown");
 }
 
 /* ------------------------------------------------------------------ cut-off recordings */
@@ -1712,6 +2014,71 @@ static void RecoverCutOff(void)
     }
 }
 
+/* Maps the launcher plugin's heap (from its header at 0x07000000 in the game) once per game. */
+static bool MapPluginMemory(void)
+{
+    if (g_plgSize)
+        return true;
+    const u32 mode = OS_KernelConfig->app_memtype;
+    if (mode == 0 || mode >= 6 || (*(const volatile u32 *)0x1FF800F0 & 0xFFFFu) == 0)
+        return false;   /* not an extended-memory game on an Old 3DS, or no plugin in it */
+    const u32 pid = ApplicationPid();
+    Handle game = 0;
+    if (!pid || R_FAILED(svcOpenProcess(&game, pid)))
+        return false;
+    u32 magic = 0, heapVa = 0, heapSize = 0;
+    Result rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_HDR_VA, game, 0x07000000u, 0x1000u, 0);
+    if (R_SUCCEEDED(rc))
+    {
+        const volatile u32 *h = (const volatile u32 *)PLG_HDR_VA;
+        magic = h[0];
+        heapVa = h[2];
+        heapSize = h[3];
+        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_HDR_VA, 0x1000u);
+        if (magic != PLG_MAGIC || heapSize < MB || heapSize > 16u * MB || (heapVa & 0xFFFu))
+            rc = -1;
+        else
+            /* MAPEXFLAGS_PRIVATE: mapped like our own heap (0xBB05), so FS writes and DMA accept it */
+            rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA, game, heapVa, heapSize & ~0xFFFu, 1);
+    }
+    svcCloseHandle(game);
+    if (R_SUCCEEDED(rc))
+    {
+        /* the SD must take writes straight from it (the writer does that), else SYSTEM as before */
+        const FS_Path p = fsMakePath(PATH_ASCII, DIR_FS "/.plugin_memory_test");
+        Handle f = 0;
+        u32 done = 0;
+        rc = FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0);
+        if (R_SUCCEEDED(rc))
+        {
+            rc = FSFILE_Write(f, &done, 0, (const void *)PLG_MEM_VA, 0x1000u, FS_WRITE_FLUSH);
+            FSFILE_Close(f);
+        }
+        FSUSER_DeleteFile(g_sd, p);
+        if (R_SUCCEEDED(rc) && done == 0x1000u)
+            g_plgSize = heapSize & ~0xFFFu;
+        else
+        {
+            svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA, heapSize & ~0xFFFu);
+            if (R_SUCCEEDED(rc))
+                rc = -2;
+        }
+    }
+    Log("launcher plugin memory: %s (rc %08lX, magic %08lX, heap %08lX, %lu KB)", R_SUCCEEDED(rc) ? "mapped" : "not used",
+        rc, magic, heapVa, heapSize / KB);
+    return R_SUCCEEDED(rc);
+}
+
+static void UnmapPluginMemory(void)
+{
+    if (!g_plgSize)
+        return;
+    svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA, g_plgSize);
+    g_plgSize = 0;
+    g_inPlg = false;
+    Log("launcher plugin memory unmapped (the game closes)");
+}
+
 static bool StartRecording(void)
 {
     if (g_shutdownSeen)   /* powering off / rebooting: nothing new */
@@ -1724,9 +2091,22 @@ static bool StartRecording(void)
         Log("start refused: SD free %lu MB", sdFree);
         return false;
     }
+    g_inPlg = MapPluginMemory();
+    g_plgTop = 0;
+    const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW;
+    g_lite = lite;
+    const u32 ringMax = lite ? LITE_RING_MAX : 8u * MB;
+    g_keepFree = lite ? KEEP_FREE_LITE : KEEP_FREE;
+    g_aqCap = g_inPlg ? AUDIO_QUEUE_PLG : lite ? AUDIO_QUEUE_LITE : AUDIO_QUEUE;
+    g_block = lite ? BLOCK_LITE : BLOCK;   /* set while the writer is idle (not recording) */
+    /* Half in the plugin's small ring: with the full 256 KB Smash lost as much sound (queue full 376
+       vs 364: the converter's stalls, not the ring) and 2.4x more video frames (ring full 851 vs 361),
+       O3DS 2026-11-08. */
+    g_audioReserveBytes = g_inPlg ? AUDIO_RESERVE / 2u : AUDIO_RESERVE;
     for (int sc = 0; sc < 2; sc++)
     {
-        g_arena[sc] = BigAlloc(ARENA_CAP[sc]);
+        g_arenaCap[sc] = g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
+        g_arena[sc] = BigAlloc(g_arenaCap[sc]);
         g_prev[sc] = BigAlloc((sc == 0 ? 400u : 320u) * 240u * 2u);
         g_slotCount[sc] = g_slotSize[sc] = 0;
         g_codecFrames[sc] = 0;
@@ -1735,8 +2115,17 @@ static bool StartRecording(void)
     /* 8 MB rides out ~3 s of SD stall at 2.5 MB/s */
     static const u32 ringSizes[] = { 8u * MB, 6u * MB, 4u * MB, 3u * MB, 2u * MB, 1u * MB };
     g_ring = NULL;
+    if (g_inPlg && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1])
+    {
+        /* what is left after the audio queue, in whole write blocks */
+        const u32 aqBytes = g_cfg.audio ? ((g_aqCap * sizeof(AudioItem) + 0xFFFu) & ~0xFFFu) : 0u;
+        const u32 left = g_plgSize - g_plgTop;
+        const u32 size = left > aqBytes ? ((left - aqBytes) / g_block) * g_block : 0u;
+        if (size >= 4u * g_block && (g_ring = BigAlloc(size)) != NULL)
+            g_ringSize = size;
+    }
     for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1]; i++)
-        if ((g_ring = BigAlloc(ringSizes[i])) != NULL)
+        if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i])) != NULL)
             g_ringSize = ringSizes[i];
     if (!g_ring)
     {
@@ -1747,7 +2136,7 @@ static bool StartRecording(void)
     }
     memset(g_slots, 0, sizeof(g_slots));
     memset(g_track, 0, sizeof(g_track));
-    g_aq = g_cfg.audio ? BigAlloc(AUDIO_QUEUE * sizeof(AudioItem)) : NULL;
+    g_aq = g_cfg.audio ? BigAlloc(g_aqCap * sizeof(AudioItem)) : NULL;
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
     g_audioFrames = g_audioDropped = g_dspSnaps = g_dspOffPolls = 0;
@@ -1814,11 +2203,13 @@ static bool StartRecording(void)
     g_shared.sysFreeKb = osGetMemRegionFree(MEMREGION_SYSTEM) / KB;
     g_shared.state = REC_STATE_RECORDING;
     LedRecording();
-    Log("recording started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, "
+    Log("recording started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, %s memory profile%s, "
         "SYSTEM free %lu KB, SD free %lu MB, %s)",
         g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
         *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, g_cfg.bottom ? "both screens" : "top screen",
-        g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, g_shared.sysFreeKb, sdFree,
+        g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, lite ? "light" : "normal",
+        g_inPlg ? " in the launcher plugin's memory" : "",
+        g_shared.sysFreeKb, sdFree,
         CpuState());
     LogMemory("recording started");
     return true;
@@ -1874,7 +2265,32 @@ static void WriteEnd(void)
     g_written += done;
 }
 
-static void StopRecording(const char *why)
+/* HOME in a game that needs extra memory (Old 3DS): HOME Menu wants SYSTEM memory a moment after
+   the button, sooner than the ring reaches the SD (0.5-2.6 s). The capture buffers, the previous
+   frames and the audio queue go back at once (~1.9 MB, light profile); the ring follows when it is
+   written. Allocation order: arenas and previous frames, then the ring, then the audio queue. */
+static void ReleaseEncoderMemory(void *aq)
+{
+    u32 out = 0;
+    const u32 ringVa = (u32)g_ring;
+    if (ringVa > g_bigLow)
+        svcControlMemoryUnsafe(&out, g_bigLow, ringVa - g_bigLow, MEMOP_FREE, (MemPerm)0);
+    if (aq && (u32)aq < g_bigTop)
+    {
+        svcControlMemoryUnsafe(&out, (u32)aq, g_bigTop - (u32)aq, MEMOP_FREE, (MemPerm)0);
+        g_bigTop = (u32)aq;
+    }
+    g_bigLow = ringVa;
+    for (int sc = 0; sc < 2; sc++)
+    {
+        g_arena[sc] = NULL;
+        g_prev[sc] = NULL;
+        g_slotCount[sc] = g_slotSize[sc] = 0;
+    }
+    memset(g_slots, 0, sizeof(g_slots));
+}
+
+static void StopRecording(const char *why, bool releaseFirst)
 {
     g_shared.state = REC_STATE_SAVING;
     g_recording = false;
@@ -1888,18 +2304,54 @@ static void StopRecording(const char *why)
         LightEvent_Signal(&g_convEvent);
         svcSleepThread(5 * 1000 * 1000);
     }
+    void *const aq = g_aq;
     g_aq = NULL;   /* the converter stops touching the ring for audio ... */
     g_audioReserve = false;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     while (g_convInAudio)   /* ... once it leaves DrainAudio */
         svcSleepThread(1 * 1000 * 1000);
+    bool ringDropped = false;
+    u64 dropFrom = 0;
+    if (releaseFirst && SlotsIdle())
+    {
+        ReleaseEncoderMemory(aq);
+        /* The ring too, without waiting for the SD: HOME Menu took the memory within 0.4 s while
+           the ring was still being written, and crashed (O3DS 2026-11-08, 2nd HOME). The writer
+           ends its current block (~50 ms); the file is cut at the last frame start written; the
+           unwritten tail (under a second) is lost. */
+        g_writerActive = false;
+        while (g_writerBusy)
+            svcSleepThread(2 * 1000 * 1000);
+        const u64 r = g_r;
+        u64 cut = 0;
+        const u32 n = __atomic_load_n(&g_boundN, __ATOMIC_ACQUIRE);
+        for (u32 i = n > BOUNDS ? n - BOUNDS : 0; i < n; i++)
+            if (g_bound[i % BOUNDS] <= r && g_bound[i % BOUNDS] > cut)
+                cut = g_bound[i % BOUNDS];
+        if (r == g_w)
+            cut = r;
+        if (cut >= sizeof(R3dFileHeader) && cut <= g_written)
+        {
+            dropFrom = cut;
+            g_written = cut;
+            g_r = g_w;
+            u32 out = 0;
+            svcControlMemoryUnsafe(&out, g_bigLow, g_bigTop - g_bigLow, MEMOP_FREE, (MemPerm)0);
+            g_bigLow = g_bigTop = BIG_VA;
+            g_ring = NULL;
+            ringDropped = true;
+        }
+        Log("HOME: recording memory given back at once (ring %s), SYSTEM free %lu KB",
+            ringDropped ? "dropped" : "still being written", osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
+    }
     /* writer: whole blocks first, then the tail from here */
-    for (u32 i = 0; i < 2000 && g_w - g_r >= BLOCK; i++)
+    for (u32 i = 0; i < 2000 && !ringDropped && g_w - g_r >= g_block; i++)
         svcSleepThread(5 * 1000 * 1000);
     g_writerActive = false;
     while (g_writerBusy)   /* a block write may take ~0.3 s */
         svcSleepThread(5 * 1000 * 1000);
-    WriterFlushTail();
+    if (!ringDropped)
+        WriterFlushTail();
     WriteEnd();
 
     char name[32];
@@ -1925,6 +2377,8 @@ static void StopRecording(const char *why)
             g_written / KB, us ? (u32)(g_written * 1000000ull / us / KB) : 0, g_writeMaxMs,
             seconds ? (u32)(g_written / KB / seconds) : 0);
     }
+    if (ringDropped)
+        Log("  file cut at %llu KB: the part not yet on the SD was dropped for HOME", dropFrom / KB);
     LogDrops();
     LogMemory("recording stopped");
     SetBoost(false, "recording stopped");
@@ -1942,6 +2396,22 @@ static void StopRecording(const char *why)
     else
         LED_SIGNAL(LED_SAVED);
     PrepareNext();
+}
+
+/* The app says why a recording stopped when it is opened next (recorder_take_system_stop). */
+static void WriteSystemStop(bool gameClosed)
+{
+    Handle f = 0;
+    const FS_Path p = fsMakePath(PATH_ASCII, STOPPED_FS);
+    FSUSER_DeleteFile(g_sd, p);
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+        return;
+    u32 done = 0;
+    char what[64];
+    /* "game": an extended-memory game closed and rebooted the Old 3DS back to HOME */
+    snprintf(what, sizeof(what), "%s%s", (const char *)g_shared.lastFile, gameClosed ? "\ngame" : "");
+    FSFILE_Write(f, &done, 0, what, strlen(what), FS_WRITE_FLUSH);
+    FSFILE_Close(f);
 }
 
 /* ------------------------------------------------------------------ main loop */
@@ -1991,6 +2461,7 @@ int main(void)
         GET_VERSION_MAJOR(kv), GET_VERSION_MINOR(kv), GET_VERSION_REVISION(kv), g_cfg.hotkey, g_cfg.fps,
         g_cfg.bottom ? "both" : "top", g_cfg.audio ? "on" : "off", g_cfg.maxFileMb, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
         SdFreeMb());
+    const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
     g_shared.state = REC_STATE_IDLE;
     LED_SIGNAL(LED_READY);
@@ -2006,6 +2477,7 @@ int main(void)
         srvSubscribe(0x100);
         srvSubscribe(0x213);   /* lid opened (NS) */
         srvSubscribe(0x214);   /* lid closed: the console goes to sleep */
+        srvSubscribe(0x204);   /* HOME pressed (Rosalina publishes it too) */
     }
     else
         notif = 0;
@@ -2016,8 +2488,15 @@ int main(void)
     const bool ptmu = R_SUCCEEDED(ptmuInit());
     bool lidClosed = false, lidResume = false;
     u64 resumeAt = 0, lastLidPoll = 0;
+    if (resumeInGame)   /* the game draws its first frames by then; same path as after the lid */
+    {
+        lidResume = true;
+        resumeAt = Ticks() + SYSCLOCK_ARM11 * 2;
+    }
 
     bool comboHeld = true;   /* a combo still held from the launch must not start a recording */
+    bool homeResume = false, homeSeen = false;   /* a recording saved for HOME goes on after it */
+    u32 lastPlg = 0;
     bool reloadPending = false;
     u64 lastSdCheck = 0;
     for (;;)
@@ -2041,7 +2520,7 @@ int main(void)
             Log("lid closed%s", g_recording ? ": recording saved, it goes on when the lid opens" : "");
             if (g_recording)
             {
-                StopRecording("lid closed (sleep)");
+                StopRecording("lid closed (sleep)", false);
                 lidResume = true;
             }
         }
@@ -2051,6 +2530,51 @@ int main(void)
             if (lidResume)   /* the screens wake up a moment after the lid */
                 resumeAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
             Log("lid opened%s", lidResume ? ": recording goes on in 1.5 s" : "");
+        }
+        /* HOME in a game that needs extra memory (Old 3DS): HOME Menu wants SYSTEM memory back when it
+           opens, and with a light-profile recording in it HOME Menu crashed (ErrDisp 0xD8C3FBF3,
+           O3DS 2026-11-08). The recording is saved as soon as HOME is pressed and goes on in a new
+           file when the game is back: Rosalina's plugin status word in the config page says that
+           (2 while our launcher plugin is swapped out for HOME, 1 again in the game). */
+        if (nid == 0x204)
+        {
+            Log("HOME pressed: SYSTEM free %lu KB%s", osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
+                g_recording && g_lite && !g_inPlg ? ", the recording is saved to give HOME Menu its memory" : "");
+            if (g_recording && g_lite && !g_inPlg)
+            {
+                StopRecording("HOME in a game that needs extra memory", true);
+                homeResume = true;
+                homeSeen = false;
+            }
+        }
+        {
+            const u32 plg = *(const volatile u32 *)0x1FF800F0 & 0xFFFFu;   /* PLG_CFG_*: 1 running, 2 in HOME */
+            if (plg != lastPlg)
+            {
+                if (OS_KernelConfig->app_memtype != 0)
+                    Log("launcher plugin status %lu (%s): SYSTEM free %lu KB", plg,
+                        plg == 1 ? "game" : plg == 2 ? "HOME, plugin swapped out" : plg == 3 ? "game closing" : "none",
+                        osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
+                lastPlg = plg;
+                if (homeResume && plg == 2)
+                    homeSeen = true;
+                if (homeResume && homeSeen && plg == 1)   /* back in the game: new file in 1 s */
+                {
+                    homeResume = false;
+                    lidResume = true;
+                    resumeAt = Ticks() + SYSCLOCK_ARM11;
+                }
+                if (plg == 3 || plg == 0)   /* the game closes: Rosalina frees the plugin's memory after it */
+                {
+                    homeResume = false;
+                    if (g_recording && g_inPlg)
+                    {
+                        StopRecording("the game closes", false);
+                        WriteSystemStop(true);   /* the console restarts right after: the app explains */
+                    }
+                    UnmapPluginMemory();
+                }
+            }
         }
         if (lidResume && resumeAt && !lidClosed && Ticks() >= resumeAt)
         {
@@ -2063,23 +2587,22 @@ int main(void)
         {
             Log("system notification %03lX: %s", nid, nid == 0x100 ? "the recorder must end" : "power-off or reboot");
             g_shutdownSeen = true;   /* no new recording and no file prepared from now on */
+            const bool wasRecording = g_recording;
+            const bool gameReboot = nid == 0x100 && !g_powerOffSeen;   /* a game's memory mode, System Settings... */
+            if (gameReboot)
+                WriteGameOrder(wasRecording);
             if (g_recording)
             {
-                StopRecording(nid == 0x100 ? "the system ends the recorder" : "power-off or reboot");
-                /* the app says why it stopped when it is opened next */
-                Handle f = 0;
-                const FS_Path p = fsMakePath(PATH_ASCII, STOPPED_FS);
-                FSUSER_DeleteFile(g_sd, p);
-                if (R_SUCCEEDED(FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
-                {
-                    u32 done = 0;
-                    FSFILE_Write(f, &done, 0, (const void *)g_shared.lastFile, strlen((const char *)g_shared.lastFile),
-                                 FS_WRITE_FLUSH);
-                    FSFILE_Close(f);
-                }
+                StopRecording(nid == 0x100 ? "the system ends the recorder" : "power-off or reboot", false);
+                WriteSystemStop(nid == 0x100 && !g_powerOffSeen && OS_KernelConfig->app_memtype != 0 &&
+                                OS_KernelConfig->app_memtype < 6);
             }
+            if (nid == PTMNOTIFID_SHUTDOWN)
+                g_powerOffSeen = true;
             if (nid == 0x100)
             {
+                if (gameReboot)
+                    LogGameOrder(wasRecording);
                 systemEnd = true;
                 cmd = REC_CMD_EXIT;
             }
@@ -2142,7 +2665,7 @@ int main(void)
                     why = "SD card full";
             }
             if (why)
-                StopRecording(why);
+                StopRecording(why, false);
             if (goOn && !StartRecording()) /* ~1-2 s between the two files */
                 LED_SIGNAL(LED_ERROR);
             if (cmd == REC_CMD_EXIT)

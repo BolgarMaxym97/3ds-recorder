@@ -30,7 +30,7 @@ You do not need a PC or a capture card. The console turns each recording into a 
 send it to your phone over Wi-Fi by scanning a QR code.
 
 > [!WARNING]
-> **This is a beta (0.9.0).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
+> **This is a beta (0.9.13).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
 > console, game and SD card, so bugs are possible. If something goes wrong, please
 > [open an issue](../../issues/new) and attach the log (see [Problems and feedback](#problems-and-feedback)) —
 > every report helps make the release better.
@@ -84,6 +84,14 @@ send it to your phone over Wi-Fi by scanning a QR code.
 - **Long recordings** continue in a new file every 4 GB (a 1–2 second gap): the SD card's FAT32 limit.
 - **Fast 3D scenes on a slow SD card** may be recorded at a lower frame rate for a moment: the card cannot keep up.
 - **DS and GBA games can't be recorded:** they run in a separate mode of the console.
+- **Games that need extra memory on an Old 3DS** (Smash Bros, Pokémon Sun / Moon and Ultra Sun / Ultra Moon,
+  Super Mario Maker, Monster Hunter) restart the console when they start and when they close. If the recorder runs,
+  it comes back inside the game by itself and the recording goes on in a new file: right before the restart it
+  leaves Luma's plugin loader a one-time order to load a tiny launcher plugin (about 1 KB) into that game, which
+  starts the recorder again and does nothing else. If the plugin loader is off, it is turned on for that one game
+  and off again afterwards. The game gets 2 MB less memory, the recorder keeps its buffers in those 2 MB, and the
+  video is less smooth there. When such a game closes, the recording is saved; open 3DS Recorder to record again.
+  A New 3DS does not restart for these games.
 - On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: only the left half.
 
 ### Remove
@@ -99,11 +107,12 @@ This is a beta: every report helps. Please open an [issue](../../issues/new), sa
 
 ### Building from source
 
-The recorder is a Luma3DS sysmodule (`sysmod/`) plus the control app (`app/`), which carries the sysmodule inside.
-A Docker image with devkitARM and libctru builds both:
+The recorder is a Luma3DS sysmodule (`sysmod/`) plus the control app (`app/`), which carries the sysmodule and the launcher plugin (`plugin/`) inside.
+A Docker image with devkitARM, libctru and 3gxtool builds all three:
 
 ```sh
 docker build -t 3dsrec-dev tools/
+tools/dkp.sh plugin make          # plugin/rec3ds-launch.3gx
 tools/dkp.sh sysmod make          # sysmod/rec3ds.cxi
 tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 ```
@@ -112,6 +121,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 |---|---|
 | `sysmod/` | the recorder: reads the screens and the sound, compresses them (XR32, lossless) and writes `.r3d` |
 | `app/` | the app: install, settings, gallery, player, the Wi-Fi server for the phone |
+| `plugin/` | the launcher plugin for extended-memory games on an Old 3DS (starts the recorder again inside the game) |
 | `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console |
 | `web/` | the page the phone opens |
 | `codec/` | the screen codecs and the `.r3d` format |
@@ -151,7 +161,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
 
 > [!WARNING]
-> **Це бета-версія (0.9.0).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
+> **Це бета-версія (0.9.13).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
 > й SD-картці, тож можливі баги. Якщо щось пішло не так, будь ласка, [створіть issue](../../issues/new) і додайте
 > журнал (див. [Проблеми і відгуки](#проблеми-і-відгуки)) — кожен звіт допомагає зробити реліз кращим.
 
@@ -203,6 +213,14 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 - **Довгі записи** продовжуються в новому файлі кожні 4 GB (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.
 - **Швидкі 3D-сцени на повільній SD-картці** можуть на мить записатися з меншою частотою кадрів: картка не встигає.
 - **DS- і GBA-ігри записати не можна:** вони працюють в окремому режимі консолі.
+- **Ігри, яким на Old 3DS треба більше пам'яті** (Smash Bros, Pokémon Sun / Moon і Ultra Sun / Ultra Moon,
+  Super Mario Maker, Monster Hunter), перезапускають консоль, коли стартують і коли закриваються. Якщо рекордер
+  працює, він сам повертається в гру, а запис продовжується новим файлом: перед перезапуском він залишає
+  завантажувачу плагінів Luma одноразову інструкцію завантажити в цю гру крихітний плагін-запускач (близько 1 КБ),
+  який лише знову запускає рекордер. Якщо завантажувач плагінів вимкнено, він вмикається лише на цю гру і потім
+  вимикається. Грі лишається на 2 МБ менше пам'яті, рекордер тримає свої буфери в цих 2 МБ, і відео там менш
+  плавне. Коли така гра закривається, запис зберігається; щоб писати далі, відкрийте 3DS Recorder. New 3DS для цих
+  ігор не перезапускається.
 - На New 3DS кілька ігор із **широким верхнім екраном 800 пікселів** записуються у 400 пікселях: лише ліва половина.
 
 ### Видалення

@@ -1,5 +1,5 @@
 # 3DS Recorder control app: .3dsx and .cia from the same ELF and RomFS.
-# Embeds sysmod/rec3ds.cxi as romfs:/rec3ds.cxi; build the sysmodule first.
+# Embeds sysmod/rec3ds.cxi as romfs:/rec3ds.cxi and plugin/rec3ds-launch.3gx; build both first.
 #   tools/dkp.sh app make        -> 3ds-recorder.3dsx
 #   tools/dkp.sh app make cia    -> 3ds-recorder.cia (needs assets/banner.bnr: tools/make-art.sh on the Mac)
 # Fonts (romfs/font/*.bcfnt) and art (assets/icon.png, banner.*) are made by tools/make-art.sh.
@@ -13,7 +13,7 @@ include $(DEVKITARM)/3ds_rules
 TARGET          := 3ds-recorder
 # The CIA's title version: raise it with each build that goes to a console, or the HOME Menu
 # keeps showing the banner it cached for the installed version.
-APP_VERSION     := 0.9.0
+APP_VERSION := 0.9.13
 # "beta" for the open beta, empty for a release: shown next to the version on the panel
 APP_CHANNEL     := beta
 APP_TITLE       := 3DS Recorder
@@ -51,6 +51,7 @@ export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh --romfs=$(CURDIR)/romfs
 .PHONY: all clean cia
 all: $(BUILD)
 	@cp -p ../sysmod/rec3ds.cxi romfs/rec3ds.cxi
+	@cp -p ../plugin/rec3ds-launch.3gx romfs/rec3ds-launch.3gx
 	@python3 ../tools/build-web.py ../web romfs/web/index.html.gz
 	@# the 3dsx embeds romfs but its rule only follows the ELF: rebuild it when romfs changed
 	@if [ -f $(TARGET).3dsx ] && [ -n "$$(find romfs -newer $(TARGET).3dsx -type f)" ]; then rm -f $(TARGET).3dsx; fi
@@ -77,7 +78,7 @@ cia-stock: all
 		-icon $(TARGET).smdh -banner assets/banner.bnr
 
 clean:
-	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).smdh $(TARGET).elf $(TARGET).cia romfs/rec3ds.cxi romfs/web
+	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).smdh $(TARGET).elf $(TARGET).cia romfs/rec3ds.cxi romfs/rec3ds-launch.3gx romfs/web
 else
 DEPENDS := $(OFILES:.o=.d)
 qrcodegen.o: CFLAGS += -Wno-type-limits   # third-party (third_party/qrcodegen)

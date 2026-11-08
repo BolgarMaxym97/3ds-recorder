@@ -137,18 +137,22 @@ static volatile RecShared *MapShared(Handle module)
 
 static void UnmapShared(void) { svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000); }
 
-bool recorder_take_system_stop(char *name, size_t cap)
+bool recorder_take_system_stop(char *name, size_t cap, bool *game)
 {
     const FS_Path p = fsMakePath(PATH_ASCII, REC_DIR_FS "/.system_stop");
     Handle f = 0;
     if (R_FAILED(FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_READ, 0)))
         return false;
-    char buf[48] = {0};
+    char buf[64] = {0};
     u32 got = 0;
     FSFILE_Read(f, &got, 0, buf, sizeof(buf) - 1);
     FSFILE_Close(f);
     FSUSER_DeleteFile(g_sd, p);
     buf[got < sizeof(buf) ? got : sizeof(buf) - 1] = 0;
+    char *nl = strchr(buf, '\n'); /* the module adds "game": an extended-memory game rebooted the console */
+    *game = nl && strcmp(nl + 1, "game") == 0;
+    if (nl)
+        *nl = 0;
     snprintf(name, cap, "%s", buf);
     return got > 0;
 }
@@ -264,10 +268,13 @@ static bool FileExists(const char *path)
     return true;
 }
 
-ModuleFile recorder_module_file(void)
+/* romfs copy vs SD copy of a file the app installs */
+static ModuleFile CompareFile(const char *romfsPath, const char *sdPath)
 {
-    FILE *a = fopen("romfs:/rec3ds.cxi", "rb");
-    FILE *b = fopen("sdmc:" REC_CXI_FS, "rb");
+    FILE *a = fopen(romfsPath, "rb");
+    char full[160];
+    snprintf(full, sizeof(full), "sdmc:%s", sdPath);
+    FILE *b = fopen(full, "rb");
     ModuleFile st = b ? MODULE_DIFFERENT : MODULE_MISSING;
     /* heap buffers: the info thread and the action worker can both compare */
     u8 *ba = a && b ? malloc(16384) : NULL, *bb = ba ? malloc(16384) : NULL;
@@ -292,12 +299,12 @@ ModuleFile recorder_module_file(void)
     return st;
 }
 
-static bool InstallModule(void)
+static bool CopyFile(const char *romfsPath, const char *sdPath)
 {
-    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma"), 0);
-    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma/sysmodules"), 0);
-    FILE *in = fopen("romfs:/rec3ds.cxi", "rb");
-    FILE *out = fopen("sdmc:" REC_CXI_FS, "wb");
+    char full[160];
+    snprintf(full, sizeof(full), "sdmc:%s", sdPath);
+    FILE *in = fopen(romfsPath, "rb");
+    FILE *out = fopen(full, "wb");
     bool ok = in && out;
     static u8 buf[16384];
     while (ok) {
@@ -311,8 +318,32 @@ static bool InstallModule(void)
     if (out)
         fclose(out);
     if (!ok)
-        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_CXI_FS));
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, sdPath));
     return ok;
+}
+
+ModuleFile recorder_module_file(void)
+{
+    return CompareFile("romfs:/rec3ds.cxi", REC_CXI_FS);
+}
+
+static bool InstallModule(void)
+{
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma"), 0);
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma/sysmodules"), 0);
+    return CopyFile("romfs:/rec3ds.cxi", REC_CXI_FS);
+}
+
+/* The launcher plugin the module hands to Rosalina when an extended-memory game reboots an Old
+   3DS (sysmod: WriteGameOrder). It lies in the app's own folder, never in /luma/plugins. */
+static void InstallLauncher(void)
+{
+    if (CompareFile("romfs:/rec3ds-launch.3gx", REC_LAUNCH_FS) == MODULE_SAME)
+        return;
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/3ds"), 0);
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, REC_DIR_FS), 0);
+    app_log("start: installing the launcher plugin: %s",
+            CopyFile("romfs:/rec3ds-launch.3gx", REC_LAUNCH_FS) ? "ok" : "failed");
 }
 
 bool recorder_luma_modules_on(void)
@@ -335,6 +366,7 @@ Result recorder_install_and_start(const char **step)
 {
     *step = "";
     app_log("start: checking the module file");
+    InstallLauncher();
     if (recorder_module_file() != MODULE_SAME) {
         app_log("start: installing the module");
         if (ModuleRunning() && !recorder_stop()) {
@@ -395,13 +427,29 @@ u32 recorder_sd_free_mb(void)
     return (u32)((u64)r.freeClusters * r.clusterSize / (1024 * 1024));
 }
 
+/* The module's one-time order to Rosalina (sysmod: WriteGameOrder), if one was left behind */
+static void RemoveLauncherOrder(void)
+{
+    static const char *const order = "/luma/plugins/user_param.bin";
+    FILE *f = fopen("sdmc:/luma/plugins/user_param.bin", "rb");
+    if (!f)
+        return;
+    char buf[400] = {0};
+    const size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    if (n > 8 + strlen(REC_LAUNCH_FS) && strcmp(buf + 12, REC_LAUNCH_FS) == 0) /* magic, 4 flag bytes, title id, path */
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, order));
+}
+
 bool recorder_uninstall(bool recordings, const char *selfPath)
 {
     recorder_stop();
+    RemoveLauncherOrder();
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_CXI_FS));
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_DIR_FS "/config.ini"));
     static const char *const files[] = {REC_DIR_FS "/recorder.log", REC_DIR_FS "/recorder.old.log", REC_DIR_FS "/.system_stop",
                                         REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log",
+                                        REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on",
                                         REC_FILES_FS "/.next.tmp", REC_FILES_FS "/.next.info"};
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, files[i]));

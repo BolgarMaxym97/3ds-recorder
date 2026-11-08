@@ -1,0 +1,24 @@
+Author: 3DS Recorder
+
+Version:
+    Major: 1
+    Minor: 0
+    Revision: 0
+
+Targets: # 0 = any title (the recorder names the game in user_param.bin)
+
+Title: 3DS Recorder launcher
+
+Summary: Starts the 3DS Recorder module again after an extended-memory game rebooted an Old 3DS
+
+Description: |
+  Loaded once, only when the recorder asked Rosalina for it right before the reboot.
+  It starts the recorder module and returns; no menu, no threads.
+
+Compatibility: Console
+
+MemorySize: 2MiB
+
+EventsSelfManaged: true
+
+UsePrivateMemory: false

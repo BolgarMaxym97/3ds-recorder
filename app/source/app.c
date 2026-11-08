@@ -49,8 +49,8 @@ static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200,
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 /* Help topics */
-#define HELP_TOPICS 6
-static Rect help_row(int i) { return (Rect){12, 42 + i * 31.0f, 296, 27}; }
+#define HELP_TOPICS 7
+static Rect help_row(int i) { return (Rect){12, 40 + i * 28.0f, 296, 25}; }   /* 7 topics: down to y 233 */
 
 #define MB_PER_MIN_BOTH_30 128u /* measured on O3DS (v10, 2026-11-03): 2.1 MB/s, both screens, 30 fps */
 
@@ -225,10 +225,12 @@ static void go(App *a, Screen s, int focus)
 static void tell_system_stop(App *a)
 {
     char stopped[48];
-    if (recorder_take_system_stop(stopped, sizeof(stopped))) {
+    bool game = false;
+    if (recorder_take_system_stop(stopped, sizeof(stopped), &game)) {
         char when[48], msg[512];
         format_name(when, sizeof(when), stopped);
-        snprintf(msg, sizeof(msg), T(S_MSG_SYSTEM_STOP), when);
+        snprintf(msg, sizeof(msg), T(game ? S_MSG_GAME_STOP : S_MSG_SYSTEM_STOP), when);
+        app_log("system stop: %s%s", stopped, game ? " (an extended-memory game closed)" : "");
         say_important(a, msg);
     }
 }
@@ -1402,8 +1404,8 @@ static void draw_firstrun_top(App *a)
     check_row(182, a->sdFreeMb > 256, a->sdFreeMb <= 256, T(S_FR_SD), val);
 }
 
-static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6};
-static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY};
+static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7};
+static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY};
 
 /* The author's Telegram channel (news, questions), opposite "Y How to use". */
 static void help_channel(void)
@@ -1913,9 +1915,9 @@ static void draw_help_bottom(App *a)
         snprintf(n, sizeof(n), "%d", i + 1);
         if (i == a->helpTopic)
             ui_rrect(r.x, r.y, r.w, r.h, 7, COL_SURFACE);
-        ui_rrect(r.x + 7, r.y + 5, 17, 17, 4, COL_SURFACE2);
-        ui_text_center(r.x + 15.5f, r.y + 7, 8, FONT_BOLD, COL_SOFT, n);
-        ui_text(r.x + 32, r.y + 6, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
+        ui_rrect(r.x + 7, r.y + 4, 17, 17, 4, COL_SURFACE2);
+        ui_text_center(r.x + 15.5f, r.y + 6, 8, FONT_BOLD, COL_SOFT, n);
+        ui_text(r.x + 32, r.y + 5, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
         if (i == a->helpTopic)
             focus_ring(r, 7);
     }

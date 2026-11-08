@@ -13,6 +13,7 @@ build/
 
 # Generated into the app's romfs at build time (sysmod/rec3ds.cxi, web/ via tools/build-web.py)
 app/romfs/rec3ds.cxi
+app/romfs/rec3ds-launch.3gx
 app/romfs/web/
 
 # Host test and tool binaries
@@ -31,6 +32,9 @@ plan.md
 # Raw measurements from the consoles (gigabytes) and testers' logs / videos (private)
 bench-results/
 new_3ds_testing/
+
+# Source videos for docs/demo.gif (kept locally)
+docs/*.mp4
 
 # Editors, OS, Python
 .idea/
