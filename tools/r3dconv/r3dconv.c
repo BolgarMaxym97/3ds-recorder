@@ -345,7 +345,13 @@ int main(int argc, char **argv)
             audioConcealed += ap.conceal;
         }
         if (wav) {
-            wav_silence(wav, eq, (uint64_t)silence);
+            uint32_t t = 0;   /* soft edges around silence (audio_place.h) */
+            if (silence > 0 && lastWritten >= 0) {
+                int16_t tail[320];
+                t = audio_tail(aPcm + (size_t)lastWritten * 320, 160, (uint64_t)silence, tail);
+                wav_write(wav, eq, tail, t);
+            }
+            wav_silence(wav, eq, (uint64_t)silence - t);
             if (ap.conceal) {
                 const int16_t *next = aPcm + (size_t)order[i] * 320;
                 audio_conceal(lastWritten >= 0 ? aPcm + (size_t)lastWritten * 320 : next, next, 160, ap.conceal, fill);
@@ -353,6 +359,8 @@ int main(int argc, char **argv)
             }
             int16_t frame[320];   /* a copy: aPcm stays unfiltered for the next join and fill */
             memcpy(frame, aPcm + (size_t)order[i] * 320, sizeof(frame));
+            if (silence > 0)
+                audio_fade_in(frame, 160);
             wav_write(wav, eq, frame, 160);
         }
         lastWritten = order[i];

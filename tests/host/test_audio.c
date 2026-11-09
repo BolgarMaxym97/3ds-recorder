@@ -247,6 +247,30 @@ static void test_order_skips_duplicates_keeps_silence(void)
     free(f);
 }
 
+static void test_soft_edges_around_silence(void)
+{
+    int16_t *f = make_frames(2);
+    int16_t tail[320];
+    /* the tail starts where the previous frame ended (no step) and fades to zero */
+    CHECK(audio_tail(f, 160, 5000, tail) == 160);
+    for (int ch = 0; ch < 2; ch++)
+    {
+        CHECK(abs(tail[ch] - f[318 + ch]) <= 1);
+        CHECK(abs(tail[318 + ch]) <= 1 + abs(f[ch]) / 1000);
+    }
+    /* a short silence: the tail fills only it */
+    CHECK(audio_tail(f, 160, 37, tail) == 37);
+    CHECK(audio_tail(f, 160, 0, tail) == 0);
+    /* the next frame starts from zero and is untouched after AUDIO_EDGE_FADE samples */
+    int16_t g[320];
+    memcpy(g, f + 320, sizeof(g));
+    audio_fade_in(g, 160);
+    for (int ch = 0; ch < 2; ch++)
+        CHECK(abs(g[ch]) <= 1 + abs(f[320 + ch]) / 1000);
+    CHECK(memcmp(g + 2 * AUDIO_EDGE_FADE, f + 320 + 2 * AUDIO_EDGE_FADE, (160 - AUDIO_EDGE_FADE) * 4) == 0);
+    free(f);
+}
+
 int main(void)
 {
     test_contiguous_with_jitter();
@@ -256,6 +280,7 @@ int main(void)
     test_run_is_contiguous();
     test_lost_frame_filled_at_click();
     test_conceal_joins_smoothly();
+    test_soft_edges_around_silence();
     test_eq_cuts_treble_only();
     test_pad_to_end();
     test_order_restores_local_swaps();

@@ -157,4 +157,46 @@ static inline void audio_conceal(const int16_t *prev, const int16_t *next, uint3
     }
 }
 
+/*
+ * Soft edges around silence (a pause, or sound the recorder lost while a game kept the system
+ * core for up to 0.2 s: Mario Kart 7's race start, O3DS 2026-11-08). The sound used to stop on a
+ * sample and start on one, which sounds like a stutter. Before the silence, the previous frame is
+ * played backwards from its end (no step at the join) and fades out over up to one frame
+ * (audio_tail fills the start of the silence with it); the frame after the silence fades in over
+ * its first AUDIO_EDGE_FADE samples (audio_fade_in). The timeline does not change.
+ */
+#define AUDIO_EDGE_FADE 80u   /* ~2.4 ms */
+
+/* Writes min(silence, n) samples of `prev` fading out into `out`; returns how many. */
+static inline uint32_t audio_tail(const int16_t *prev, uint32_t n, uint64_t silence, int16_t *out)
+{
+    const uint32_t len = silence < n ? (uint32_t)silence : n;
+    for (uint32_t j = 0; j < len; j++)
+    {
+        const double w = 0.5 + 0.5 * __builtin_cos(3.14159265358979323846 * (j + 0.5) / len);
+        const uint32_t a = audio_pingpong(j, n);
+        for (uint32_t ch = 0; ch < 2; ch++)
+        {
+            const double v = w * prev[2 * a + ch];
+            out[2 * j + ch] = (int16_t)(v < 0 ? v - 0.5 : v + 0.5);
+        }
+    }
+    return len;
+}
+
+/* Fades `frame` (n stereo samples) in over its first AUDIO_EDGE_FADE samples, in place. */
+static inline void audio_fade_in(int16_t *frame, uint32_t n)
+{
+    const uint32_t len = n < AUDIO_EDGE_FADE ? n : AUDIO_EDGE_FADE;
+    for (uint32_t j = 0; j < len; j++)
+    {
+        const double w = 0.5 - 0.5 * __builtin_cos(3.14159265358979323846 * (j + 0.5) / len);
+        for (uint32_t ch = 0; ch < 2; ch++)
+        {
+            const double v = w * frame[2 * j + ch];
+            frame[2 * j + ch] = (int16_t)(v < 0 ? v - 0.5 : v + 0.5);
+        }
+    }
+}
+
 #endif

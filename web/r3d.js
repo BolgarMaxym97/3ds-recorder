@@ -179,6 +179,34 @@
     return out;
   }
 
+  // audio_place.h: soft edges around silence (audio_tail, audio_fade_in)
+  const AUDIO_EDGE_FADE = 80;
+
+  function tail(prev, n, silence) {
+    const len = silence < n ? silence : n;
+    const out = new Int16Array(len * 2);
+    for (let j = 0; j < len; j++) {
+      const w = 0.5 + 0.5 * Math.cos(3.14159265358979323846 * (j + 0.5) / len);
+      const a = pingpong(j, n);
+      for (let ch = 0; ch < 2; ch++) {
+        const v = w * prev[2 * a + ch];
+        out[2 * j + ch] = Math.trunc(v < 0 ? v - 0.5 : v + 0.5);
+      }
+    }
+    return out;
+  }
+
+  function fadeIn(frame, n) {
+    const len = n < AUDIO_EDGE_FADE ? n : AUDIO_EDGE_FADE;
+    for (let j = 0; j < len; j++) {
+      const w = 0.5 - 0.5 * Math.cos(3.14159265358979323846 * (j + 0.5) / len);
+      for (let ch = 0; ch < 2; ch++) {
+        const v = w * frame[2 * j + ch];
+        frame[2 * j + ch] = Math.trunc(v < 0 ? v - 0.5 : v + 0.5);
+      }
+    }
+  }
+
   /* ------------------------------------------------------------ converter */
 
   class Converter {
@@ -318,12 +346,20 @@
       const harsh = this.lastWritten !== null && joinHarsh(this.lastWritten, pcm, 160);
       const silence = this.placer.place(h.timeUs, 160, harsh);
       if (silence < 0) return;
-      this.silence(silence);
+      let t = 0;
+      if (silence > 0 && this.lastWritten !== null) {
+        const fade = tail(this.lastWritten, 160, silence);
+        t = fade.length / 2;
+        this.out(fade);
+      }
+      this.silence(silence - t);
       if (this.placer.conceal) {
         const fill = conceal(this.lastWritten !== null ? this.lastWritten : pcm, pcm, 160, this.placer.conceal);
         this.out(fill);
       }
-      this.out(pcm.slice()); // pcm stays unfiltered for the next join and fill
+      const frame = pcm.slice(); // pcm stays unfiltered for the next join and fill
+      if (silence > 0) fadeIn(frame, 160);
+      this.out(frame);
       this.lastWritten = pcm;
     }
 

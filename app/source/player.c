@@ -241,13 +241,25 @@ static void audio_frame(const R3dRecHeader *h, const s16 *pcm)
     const s64 silence = audio_place(&g_place, h->timeUs, 160, harsh);
     if (silence < 0)
         return;
-    audio_put(NULL, (u64)silence);
+    if (silence > 0 && g_haveLast) { /* soft edges around silence (audio_place.h) */
+        static s16 tail[320];
+        const u32 t = audio_tail(g_lastFrame, 160, (u64)silence, tail);
+        audio_put(tail, t);
+        audio_put(NULL, (u64)silence - t);
+    } else
+        audio_put(NULL, (u64)silence);
     if (g_place.conceal) {
         static s16 fillPcm[AUDIO_CONCEAL_MAX * 320];
         audio_conceal(g_haveLast ? g_lastFrame : pcm, pcm, 160, g_place.conceal, fillPcm);
         audio_put(fillPcm, (u64)g_place.conceal * 160);
     }
-    audio_put(pcm, 160);
+    if (silence > 0) {
+        static s16 faded[320];
+        memcpy(faded, pcm, sizeof(faded));
+        audio_fade_in(faded, 160);
+        audio_put(faded, 160);
+    } else
+        audio_put(pcm, 160);
     memcpy(g_lastFrame, pcm, sizeof(g_lastFrame));
     g_haveLast = true;
 }

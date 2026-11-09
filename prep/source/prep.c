@@ -493,15 +493,30 @@ static int audio_frame(PrepJob *j, uint32_t timeUs, const int16_t *frame)
     const int64_t silence = audio_place(&s->ap, timeUs, 160, harsh);
     if (silence < 0)
         return 0;
-    if (silence > 0 && audio_push(j, NULL, (uint32_t)silence))
-        return PREP_ERROR;
+    if (silence > 0) { /* soft edges around silence (audio_place.h) */
+        uint32_t t = 0;
+        if (s->haveLast) {
+            int16_t tail[320];
+            t = audio_tail(s->lastPcm, 160, (uint64_t)silence, tail);
+            if (audio_push(j, tail, t))
+                return PREP_ERROR;
+        }
+        if ((uint64_t)silence > t && audio_push(j, NULL, (uint32_t)silence - t))
+            return PREP_ERROR;
+    }
     if (s->ap.conceal) {
         int16_t fill[AUDIO_CONCEAL_MAX * 320];
         audio_conceal(s->haveLast ? s->lastPcm : frame, frame, 160, s->ap.conceal, fill);
         if (audio_push(j, fill, s->ap.conceal * 160))
             return PREP_ERROR;
     }
-    if (audio_push(j, frame, 160))
+    if (silence > 0) {
+        int16_t faded[320];
+        memcpy(faded, frame, sizeof(faded));
+        audio_fade_in(faded, 160);
+        if (audio_push(j, faded, 160))
+            return PREP_ERROR;
+    } else if (audio_push(j, frame, 160))
         return PREP_ERROR;
     memcpy(s->lastPcm, frame, sizeof(s->lastPcm));
     s->haveLast = 1;
