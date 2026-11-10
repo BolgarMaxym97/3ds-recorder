@@ -28,6 +28,7 @@
 #include <strings.h>
 
 #include "codec.h"
+#include "huff.h"
 #include "convert.h"
 #include "r3d_format.h"
 #include "shared.h"
@@ -60,7 +61,7 @@ Result svcUnmapProcessMemoryEx(Handle process, u32 va, u32 size);               
 #define POLL_IDLE_US   50000u
 #define STATIC_GAP_US  100000u        /* screen not swapping: still 10 fps */
 #define DMA_TIMEOUT_US 100000u
-#define KEYFRAME_EVERY 30u
+#define KEYFRAME_EVERY 60u   /* ~2 s: keyframes were 4-18% of the bytes at 1 s (O3DS recordings, 2026-11-09) */
 /* Converter / writer priority (core 1). Low by default: at 0x30 the converter, busy in HOME,
    starved the system modules that launch apps, and HOME waited for the recording to stop
    before it could start the Homebrew Launcher or this recorder's app (O3DS, 2026-11-03/05; at
@@ -77,7 +78,7 @@ Result svcUnmapProcessMemoryEx(Handle process, u32 va, u32 size);               
    front (HOME, an applet) or stopped drawing; the boost ends at once. */
 #define BOOST_APP_IDLE_US    300000u
 #define THROTTLE_PCT   70u
-#define BLOCK          (256u * KB)
+#define BLOCK          (512u * KB)   /* 256 KB wrote 7% slower (MK7, O3DS 2026-11-09: 4968 vs 5338 KB/s) */
 static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LITE in the light profile) */
 #define FIRST_ALLOC    (128ull * MB)  /* file made at record start when none is prepared */
 #define PREP_ALLOC     (1024ull * MB) /* prepared in idle time: growing a file on a nearly full card
@@ -130,14 +131,32 @@ static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LIT
 typedef struct {
     u32 hotkey;      /* KEY_* mask */
     u32 fps;         /* 30 / 20 / 15 */
-    bool bottom;     /* record the bottom screen too */
+    bool top;        /* record the top screen */
+    bool bottom;     /* record the bottom screen (screens=top: off; screens=bottom: the only one) */
     u32 led;         /* 0 off, 1 solid, 2 pulse */
     bool audio;      /* record the DSP output */
     bool audioDebug; /* diagnostics: no video, raw DSP output polls every 250 us */
     u32 maxFileMb;   /* a recording goes on in a new file past this (tests set less: max_file_mb) */
+    /* Huffman stage (huffman=on, not in the app). Off: on an Old 3DS neither core had the time for
+       it in Mario Kart 7 (game's core: 1 frame in 3 coded; packer on the system core: 64-76 ms a
+       frame, the converter waited and ~1060 frames were lost, O3DS 2026-11-09). Left for New 3DS
+       tests; every reader decodes R3DH. */
+    bool huff;
+    /* Q565 frames (intra=on, not in the app). Off: in C the converter took ~54 ms a frame for them
+       on an Old 3DS (XR32 ~11 ms) and lost ~550 frames in 30 s of Mario Kart 7, though they took a
+       third of the bytes (O3DS 2026-11-09). On again once the encoder is fast enough. */
+    bool intra;
+    bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
+    bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
 } Config;
 
-static Config g_cfg = { KEY_R | KEY_SELECT, 30, true, 2, true, false, REC_MAX_FILE_MB };
+static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
+                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .bench = false, .abTest = false };
+
+static const char *ScreensName(void)
+{
+    return g_cfg.top && g_cfg.bottom ? "both" : g_cfg.top ? "top" : "bottom";
+}
 
 /* ------------------------------------------------------------------ shared page */
 
@@ -259,8 +278,17 @@ static void Log(const char *fmt, ...)
 
 static FS_Archive g_sd;
 
+/* The recorder's FS session at a low priority: the ring's constant writes must not get ahead of
+   the game's own SD reads (streamed music, levels). Luma3DS-Flashback measured no cost to the
+   writes at its lowest priority (8, which it uses); the values before and after are logged. */
+#define FS_PRIORITY 8u
+static u32 g_fsPrioOld = 0xFFFFFFFFu, g_fsPrioNew = 0xFFFFFFFFu;
+
 static void InitFs(void)
 {
+    FSUSER_GetPriority(&g_fsPrioOld);
+    if (R_SUCCEEDED(FSUSER_SetPriority(FS_PRIORITY)))
+        FSUSER_GetPriority(&g_fsPrioNew);
     if (R_FAILED(FSUSER_OpenArchive(&g_sd, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""))))
         g_sd = 0;
     if (!g_sd)
@@ -431,7 +459,7 @@ static void LoadConfig(void)
                        "hotkey=R+SELECT\n"
                        "; fps: 30, 20 or 15\n"
                        "fps=30\n"
-                       "; screens: both or top\n"
+                       "; screens: both, top or bottom\n"
                        "screens=both\n"
                        "; led: pulse, solid or off\n"
                        "led=pulse\n"
@@ -470,11 +498,22 @@ static void LoadConfig(void)
                 g_cfg.fps = fps;
         }
         else if (strcasecmp(p, "screens") == 0)
+        {
+            g_cfg.top = strcasecmp(v, "bottom") != 0;
             g_cfg.bottom = strcasecmp(v, "top") != 0;
+        }
         else if (strcasecmp(p, "led") == 0)
             g_cfg.led = strcasecmp(v, "off") == 0 ? 0 : strcasecmp(v, "solid") == 0 ? 1 : 2;
         else if (strcasecmp(p, "audio") == 0)
             g_cfg.audio = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(p, "huffman") == 0)
+            g_cfg.huff = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "intra") == 0)
+            g_cfg.intra = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "codec_bench") == 0)
+            g_cfg.bench = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "ab_test") == 0)
+            g_cfg.abTest = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "audio_debug") == 0)
             g_cfg.audioDebug = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "max_file_mb") == 0)   /* not in the app: a test of the 4 GB split */
@@ -503,6 +542,7 @@ static bool g_lite;   /* this recording runs with the light memory profile */
 #define PLG_MEM_VA     0x0E000000u
 #define PLG_MAGIC      0x24584733u    /* Rosalina PluginHeader.magic, "3GX$" */
 static u32 g_plgSize;                 /* bytes mapped at PLG_MEM_VA, 0: none */
+static u32 g_plgHeapVa;               /* the plugin heap's address in the game */
 static u32 g_plgTop;                  /* bump offset in it */
 static bool g_inPlg;                  /* this recording's buffers live there */
 
@@ -527,6 +567,33 @@ static void *BigAlloc(u32 size)
     return (void *)out;
 }
 
+/* A big buffer in 4 MB pieces at consecutive addresses: a New 3DS's kernel turned down single
+   requests of ~14 MB and more even with that much free (Luma3DS-Flashback's notes). Leaves at
+   least `margin` of SYSTEM memory free. Not for the plugin's memory. */
+static void *BigAllocChunked(u32 size, u32 margin)
+{
+    const u32 piece = 4u * MB;
+    if (g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < size + margin)
+        return NULL;
+    const u32 start = g_bigTop;
+    for (u32 done = 0; done < size; done += piece)
+    {
+        const u32 n = size - done < piece ? size - done : piece;
+        u32 out = 0;
+        if (R_FAILED(svcControlMemoryUnsafe(&out, g_bigTop, (n + 0xFFFu) & ~0xFFFu,
+                                            (MemOp)(MEMOP_ALLOC | MEMOP_REGION_SYSTEM),
+                                            (MemPerm)(MEMPERM_READ | MEMPERM_WRITE))))
+        {
+            if (g_bigTop > start)
+                svcControlMemoryUnsafe(&out, start, g_bigTop - start, MEMOP_FREE, (MemPerm)0);
+            g_bigTop = start;
+            return NULL;
+        }
+        g_bigTop += (n + 0xFFFu) & ~0xFFFu;
+    }
+    return (void *)start;
+}
+
 static u32 g_bigLow = BIG_VA;   /* below it already given back (ReleaseEncoderMemory) */
 
 static void BigFreeAll(void)
@@ -543,9 +610,9 @@ static void BigFreeAll(void)
 typedef struct {
     u8 *buf;
     u32 cap;
-    volatile u32 state;   /* 0 free, 1 DMA pending */
+    volatile u32 state;   /* 0 free, 1 DMA running (its handle open), 2 DMA done (handle closed), to encode */
     Handle dma;
-    u8 screen, isStatic;
+    u8 screen, isStatic, wide;   /* wide: the top screen's 800 px mode, 800 columns DMA'd */
     u32 fmt, stride, size, timeUs;
     u64 startTick;
 } Slot;
@@ -574,6 +641,34 @@ static u32    g_codecFrames[2];
 static volatile u32 g_codecWords[2];
 
 static u8    *g_ring;
+/* Room past the ring's end for one whole record (normal profile, New 3DS): a record that does not
+   fit before the end runs on into it and that part is copied to the ring's start (RingCommit).
+   Without it the rest of the ring was padding written to the SD: 1-2% of the bytes with the 8 MB
+   ring, 9-14% with a 768 KB-2 MB one (O3DS recordings, 2026-11-09). 0: pad records. */
+static u32    g_ringOver;
+/* the plugin's ring (extended-memory games, Old 3DS): its first g_ringOver bytes are mapped a second
+   time right after its end, so a record past the end is already at the start (no copy, no extra
+   memory; the 768 KB ring there wasted ~9% of the bytes on pad records, Smash O3DS 2026-11-08) */
+static bool   g_ringMirror;
+/* Huffman stage (codec/include/huff.h): see the packer (Stage, PackStage) */
+#define HUFF_MIN_BYTES 4096u
+static bool   g_intraOn;                 /* Q565 frames in this recording (EncodeFrame) */
+static u32    g_intraFrames[2], g_intraMiss, g_intraBusy;
+static bool   g_q565ArmBad;              /* the start-up check found the ARM encoder wrong: C is used */
+static u64    g_intraBytes;   /* smaller frames: the code tables cost more than they save */
+static u32    g_huffFrames, g_huffKept, g_huffBusy;   /* coded / not smaller / skipped (converter behind) */
+static u64    g_huffIn, g_huffOut;
+/* A/B test (config ab_test=on): each new recording takes the next variant (logged), so one
+   series of recordings in one place compares them */
+enum { AB_DEFAULT, AB_BOTTOM_1_2, AB_VARIANTS };
+static const char *const AB_NAMES[AB_VARIANTS] = { "default (bottom 2/3)", "bottom 1/2" };
+static u32    g_abNext, g_abVariant;
+/* throttled bottom screen: 2 captures in every 3 (both screens; 1: 1 in 2). In Mario Kart 7 (O3DS
+   2026-11-09) keeping 1 in 3 left the bottom at 7-8 fps; 1 in 2 ~10 fps; 2 in 3 ~11 fps for ~1 fps
+   of the top (~22 instead of ~23.5), the one that looked best. */
+static u32 g_bottomKeep = 2u;
+static u32    g_writeFlags = FS_WRITE_FLUSH;
+static u32    g_torn[2];   /* frames whose screen swapped again while their DMA ran (may be torn) */
 static u32 g_audioReserveBytes = AUDIO_RESERVE;   /* half in the plugin's small ring (~1 s of audio) */
 static volatile bool g_audioReserve;   /* audio on: video leaves AUDIO_RESERVE of ring free */
 static u32    g_ringSize;
@@ -597,9 +692,10 @@ static u32    g_dropped, g_throttled, g_ringMax;
 /* Lost video frames by reason (diagnostics, 2026-11-03: v7 dropped 170 frames
    in HOME with the ring nearly empty). DROP_RING .. DROP_DMA_ERROR are the ones
    counted in g_dropped; the last two were not counted before. */
-enum { DROP_RING, DROP_NO_SLOT, DROP_DMA_TIMEOUT, DROP_DMA_ERROR, DROP_DMA_START, DROP_SLOTS_BUSY, DROP_KINDS };
+enum { DROP_RING, DROP_NO_SLOT, DROP_DMA_TIMEOUT, DROP_DMA_ERROR, DROP_DMA_START, DROP_SLOTS_BUSY, DROP_DMA_LIMIT,
+       DROP_KINDS };
 static const char *const DROP_NAMES[DROP_KINDS] = { "ring full", "no free slot", "DMA timeout", "DMA error",
-                                                    "DMA start failed", "slots busy (resize)" };
+                                                    "DMA start failed", "slots busy (resize)", "DMA limit" };
 #define DROP_BURSTS   24u
 #define DROP_JOIN_US  500000u   /* drops of one kind and screen this close are one burst */
 typedef struct { u32 startUs, endUs, count; Result rc; u8 kind, screen; } DropBurst;
@@ -616,7 +712,7 @@ static void Drop(int kind, int screen, Result rc)
     const u32 nowUs = TicksToUs(Ticks() - g_recStartTick);
     LightLock_Lock(&g_dropLock);
     g_drops[kind]++;
-    if (kind <= DROP_DMA_ERROR)
+    if (kind <= DROP_DMA_ERROR || kind == DROP_DMA_LIMIT)
         g_dropped++;
     DropBurst *b = NULL;
     for (u32 i = g_dropBurstCount; i-- > 0 && !b;)
@@ -755,7 +851,7 @@ static void WriterMain(void *arg)
             }
             u32 done = 0;
             const u64 w0 = Ticks();
-            g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), g_block, FS_WRITE_FLUSH);
+            g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), g_block, g_writeFlags);
             g_written += done;
             const u64 now = Ticks();
             g_writeTicks += now - w0;
@@ -789,17 +885,144 @@ static void WriterFlushTail(void)
 
 static u32 RingFill(void) { return (u32)(g_w - g_r); }
 
-/* Encodes one DMA'd frame straight into the ring (single producer). */
-static void EncodeSlot(Slot *s)
+static void RingCommit(u32 advance);
+
+/*
+ * Two stages since 0.10.1 (with the Huffman stage on): the converter (Old 3DS: on the game's core,
+ * in the time the game leaves idle) packs a frame to XR32 into a staging buffer; the packer, on the
+ * system core, Huffman-codes it into the ring and is the ring's only producer (audio included).
+ * With both on the game's core, Huffman was left out of 2 frames in 3 in Mario Kart 7 (~35 ms a
+ * frame there, O3DS 2026-11-09); the system core has time to spare too (Flashback's notes: about a
+ * third of it in Mario Kart 7). Without the Huffman stage the converter writes the ring itself.
+ */
+typedef struct {
+    u8 *buf;               /* XR32 stream */
+    R3dRecHeader h;        /* as it goes into the ring (magic R3DY, len = XR32 bytes) */
+    u32 reserve;           /* ring bytes held for it (record + a possible pad) */
+} Stage;
+#define STAGES_MAX 3u
+static Stage g_stage[STAGES_MAX];
+static u32 g_stageN;                     /* 0: no packer in this recording */
+static volatile u32 g_stHead, g_stTail;  /* converter produces, packer consumes */
+static volatile u32 g_reserved;          /* ring bytes held for staged frames */
+static volatile bool g_convWaiting;      /* a frame waits for a staging buffer: Huffman gives way */
+static LightEvent g_packEvent;
+static u64 g_packTicks;                  /* time in the packer per frame (Huffman + copy) */
+
+static bool PackerOn(void) { return g_stageN != 0; }
+static bool StagesIdle(void) { return g_stHead == g_stTail; }
+
+/* Ring bytes free for a new record: what the writer has not reached, less what staged frames hold. */
+static u32 RingFree(void) { return g_ringSize - RingFill() - g_reserved; }
+
+/* Writes the pad record that fills the ring's tail. */
+static void PutPad(u32 pos, u32 padBytes)
+{
+    R3dRecHeader *pad = (R3dRecHeader *)(g_ring + pos);
+    pad->magic = R3D_MAGIC_PAD;
+    pad->len = padBytes - sizeof(R3dRecHeader);
+    pad->timeUs = 0;
+    pad->screen = 0xFF;
+    pad->srcFormat = 0;
+    pad->cols = 0;
+}
+
+/* Bookkeeping once a video record is in the ring at stream offset `at`. */
+static void VideoStored(int sc, u64 at)
+{
+    g_bound[g_boundN % BOUNDS] = at;
+    __atomic_store_n(&g_boundN, g_boundN + 1, __ATOMIC_RELEASE);
+    if (sc == 0)
+        g_shared.framesTop++;
+    else
+        g_shared.framesBot++;
+}
+
+/* One frame, coded into `dst` (room for an XR32 frame of its size): Q565 when most of the picture
+   changed (3D with a moving camera: XR32 against the last frame saved almost nothing there), else
+   XR32 against the last frame. A Q565 frame is a keyframe; the next keyframe comes KEYFRAME_EVERY
+   frames after it. Converter thread. */
+/* The top screen's 800 px mode: one recorded column from two of the framebuffer's, channels averaged
+   (rounding down). fmt carries WIDE_FMT; the second column is g_wideStride bytes on. */
+#define WIDE_FMT 0x80000000u
+static u32 g_wideStride;
+
+static int WideColumn(u16 *dst, const u8 *src, u32 fmt, u32 rows)
+{
+    u16 b[256];
+    if (rows > 256 || !fb_column_to_rgb565(dst, src, fmt & 7u, rows) ||
+        !fb_column_to_rgb565(b, src + g_wideStride, fmt & 7u, rows))
+        return 0;
+    for (u32 r = 0; r < rows; r++)
+    {
+        const u32 x = dst[r], y = b[r];
+        /* per channel (r 5, g 6, b 5 bits): (x & y) + ((x ^ y) >> 1) without carries between them */
+        dst[r] = (u16)((x & y) + (((x ^ y) & 0xF7DEu) >> 1));
+    }
+    return 1;
+}
+
+static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 *dst, u32 cap, u32 *magic,
+                       bool *key, bool busy)
+{
+    const u32 rows = 240, words = cols * rows;
+    const bool sameSize = g_codecWords[sc] == words;
+    /* busy: more frames wait, and Q565 costs more time than XR32: XR32 for this one */
+    if (g_intraOn && busy && sameSize)
+        g_intraBusy++;
+    else if (g_intraOn && sameSize && g_codecFrames[sc] && !(fmt & WIDE_FMT) && (fmt & 7u) == FB_RGB565 &&
+             codec_changed_pct(g_prev[sc], src, cols, rows, stride) > Q565_CHANGED_PCT)
+    {
+        const u32 len = g_q565ArmBad ? (u32)codec_q565_encode(src, cols, rows, stride, dst, cap)
+                                     : (u32)codec_q565_encode_arm(src, cols, rows, stride, dst, cap);
+        if (len)
+        {
+            /* the next XR32 frame's reference */
+            if (stride == rows * 2)
+                memcpy(g_prev[sc], src, words * 2);
+            else
+                for (u32 c = 0; c < cols; c++)
+                    memcpy(g_prev[sc] + c * rows, src + c * stride, rows * 2);
+            g_codecFrames[sc] = 1;
+            g_intraFrames[sc]++;
+            g_intraBytes += len;
+            *magic = R3D_MAGIC_QFRAME;
+            *key = true;
+            return len;
+        }
+        g_intraMiss++;   /* bigger than XR32 could be: XR32 */
+    }
+    *key = !sameSize || g_codecFrames[sc] % KEYFRAME_EVERY == 0;
+    /* another format (BGR8: HOME Menu and many games): converted a column at a time into the cache
+       and encoded from there, not a pass over the whole frame through main memory first */
+    u32 len;
+    if (fmt & WIDE_FMT)
+        len = (u32)codec_xr32_encode_conv(g_prev[sc], src, cols, rows, 2u * stride, fmt, WideColumn, *key, dst);
+    else if ((fmt & 7u) == FB_RGB565)
+        len = (u32)codec_xr32_encode_strided_v(g_prev[sc], src, cols, rows, stride, 1, *key, 1, dst);
+    else
+        len = (u32)codec_xr32_encode_conv(g_prev[sc], src, cols, rows, stride, fmt, fb_column_to_rgb565, *key, dst);
+    g_codecFrames[sc]++;
+    g_codecWords[sc] = words;
+    *magic = R3D_MAGIC_YFRAME;
+    return len;
+}
+
+/* Encodes one DMA'd frame: into a staging buffer (packer on), else straight into the ring
+   (single producer). */
+static void EncodeSlot(Slot *s, bool busy)
 {
     const int sc = s->screen;
     const u32 cols = sc == 0 ? 400 : 320, rows = 240, words = cols * rows;
     const u32 maxLen = ((u32)codec_xr32_max_size(words) + 15u) & ~15u;
     const u32 need = sizeof(R3dRecHeader) + maxLen;
+    const u32 audio = g_audioReserve ? g_audioReserveBytes : 0u;
     u32 pos = (u32)(g_w % g_ringSize);
     const u32 tail = g_ringSize - pos;
-    const u32 padBytes = tail < need ? tail : 0;
-    if (g_ringSize - RingFill() < padBytes + need + (g_audioReserve ? g_audioReserveBytes : 0u))
+    /* with the packer the place in the ring is not known yet: room for the worst pad too */
+    const u32 padBytes = !PackerOn() && tail < need && !g_ringOver ? tail : 0;
+    const u32 room = PackerOn() ? (g_ringOver ? need : 2u * need) : padBytes + need;
+    if (RingFree() < room + audio)
     {
         /* SD behind: video gives way, audio keeps AUDIO_RESERVE. No keyframe needed after
            a skipped frame: the encoder's reference (g_prev) is the last frame it stored. */
@@ -808,48 +1031,106 @@ static void EncodeSlot(Slot *s)
     }
     const u8 *src = s->buf;
     u32 stride = s->stride;
-    if ((s->fmt & 7u) != FB_RGB565)
+    u32 fmt = s->fmt;   /* the frame's format as EncodeFrame reads it */
+    if (s->wide)
     {
-        /* BGR8 / RGBA8 / ...: pack to RGB565 in place (output never overtakes input) */
-        if (fb_to_rgb565((u16 *)s->buf, s->buf, s->fmt, cols, rows, s->stride, 1) != words * 2)
+        /* 800 columns: XR32 from pairs of columns averaged into one (EncodeFrame), no Q565 */
+        g_wideStride = stride;
+        fmt |= WIDE_FMT;
+    }
+    else if ((fmt & 7u) != FB_RGB565 && g_intraOn)
+    {
+        /* BGR8 / RGBA8 / ...: pack to RGB565 in place for Q565 (output never overtakes input).
+           Without Q565, XR32 converts a column at a time (EncodeFrame). */
+        if (fb_to_rgb565((u16 *)s->buf, s->buf, fmt, cols, rows, s->stride, 1) != words * 2)
             return;
         stride = rows * 2;
+        fmt = FB_RGB565;
+    }
+    R3dRecHeader hd = { R3D_MAGIC_YFRAME, 0, s->timeUs, (u8)sc, (u8)s->fmt, (u16)cols };
+    u32 magic = 0;
+    bool key = false;
+    if (PackerOn())
+    {
+        Stage *st = &g_stage[g_stHead % g_stageN];
+        hd.len = EncodeFrame(sc, src, fmt, cols, stride, st->buf, maxLen, &magic, &key, busy);
+        hd.magic = magic;
+        hd.screen = (u8)(sc | (key ? R3D_SCREEN_KEY : 0));
+        st->h = hd;
+        const u32 rec = sizeof(R3dRecHeader) + ((hd.len + 15u) & ~15u);
+        st->reserve = g_ringOver ? rec : 2u * rec;
+        __atomic_add_fetch(&g_reserved, st->reserve, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&g_stHead, g_stHead + 1, __ATOMIC_RELEASE);
+        LightEvent_Signal(&g_packEvent);
+        return;
     }
     if (padBytes)
     {
-        R3dRecHeader *pad = (R3dRecHeader *)(g_ring + pos);
-        pad->magic = R3D_MAGIC_PAD;
-        pad->len = padBytes - sizeof(R3dRecHeader);
-        pad->timeUs = 0;
-        pad->screen = 0xFF;
-        pad->srcFormat = 0;
-        pad->cols = 0;
+        PutPad(pos, padBytes);
         pos = 0;
     }
-    const bool key = g_codecWords[sc] != words || g_codecFrames[sc] % KEYFRAME_EVERY == 0;
     u8 *payload = g_ring + pos + sizeof(R3dRecHeader);
-    const u32 len = (u32)codec_xr32_encode_strided_v(g_prev[sc], src, cols, rows, stride, 1, key, 1, payload);
-    const u32 stored = (len + 15u) & ~15u;
-    memset(payload + len, 0, stored - len);
-    R3dRecHeader *h = (R3dRecHeader *)(g_ring + pos);
-    h->magic = R3D_MAGIC_YFRAME;
-    h->len = len;
-    h->timeUs = s->timeUs;
-    h->screen = (u8)(sc | (key ? R3D_SCREEN_KEY : 0));
-    h->srcFormat = (u8)s->fmt;
-    h->cols = (u16)cols;
-    g_codecWords[sc] = words;
-    g_codecFrames[sc]++;
-    g_bound[g_boundN % BOUNDS] = g_w + padBytes;
-    __atomic_store_n(&g_boundN, g_boundN + 1, __ATOMIC_RELEASE);
-    __atomic_store_n(&g_w, g_w + padBytes + sizeof(R3dRecHeader) + stored, __ATOMIC_RELEASE);
-    const u32 fill = RingFill();
-    if (fill > g_ringMax)
-        g_ringMax = fill;
-    if (sc == 0)
-        g_shared.framesTop++;
+    hd.len = EncodeFrame(sc, src, fmt, cols, stride, payload, maxLen, &magic, &key, busy);
+    hd.magic = magic;
+    hd.screen = (u8)(sc | (key ? R3D_SCREEN_KEY : 0));
+    const u32 stored = (hd.len + 15u) & ~15u;
+    memset(payload + hd.len, 0, stored - hd.len);
+    *(R3dRecHeader *)(g_ring + pos) = hd;
+    const u64 at = g_w + padBytes;
+    if (padBytes)
+        __atomic_store_n(&g_w, g_w + padBytes, __ATOMIC_RELEASE);
+    RingCommit(sizeof(R3dRecHeader) + stored);
+    VideoStored(sc, at);
+}
+
+/* Packer: the oldest staged frame into the ring, Huffman-coded when that is smaller and the
+   converter is not waiting for a staging buffer. */
+static void PackStage(void)
+{
+    Stage *st = &g_stage[g_stTail % g_stageN];
+    const u64 t0 = Ticks();
+    const u32 raw = st->h.len, rawStored = (raw + 15u) & ~15u;
+    const int sc = st->h.screen & 1;
+    u32 pos = (u32)(g_w % g_ringSize);
+    const u32 tail = g_ringSize - pos;
+    const u32 padBytes = tail < sizeof(R3dRecHeader) + rawStored && !g_ringOver ? tail : 0;
+    if (padBytes)
+    {
+        PutPad(pos, padBytes);
+        pos = 0;
+    }
+    u8 *payload = g_ring + pos + sizeof(R3dRecHeader);
+    R3dRecHeader hd = st->h;
+    size_t coded = 0;
+    const bool xr32 = hd.magic == R3D_MAGIC_YFRAME;   /* Q565 frames go in as they are */
+    if (xr32 && raw >= HUFF_MIN_BYTES && !g_convWaiting)
+    {
+        coded = huff_encode(st->buf, raw, payload, raw - raw / 32u);   /* at least ~3% smaller */
+        g_huffFrames++;
+        g_huffIn += raw;
+        g_huffOut += coded ? coded : raw;
+        g_huffKept += coded == 0;
+    }
+    else if (xr32 && raw >= HUFF_MIN_BYTES)
+        g_huffBusy++;
+    if (coded)
+    {
+        hd.magic = R3D_MAGIC_HFRAME;
+        hd.len = (u32)coded;
+    }
     else
-        g_shared.framesBot++;
+        memcpy(payload, st->buf, raw);
+    const u32 stored = (hd.len + 15u) & ~15u;
+    memset(payload + hd.len, 0, stored - hd.len);
+    *(R3dRecHeader *)(g_ring + pos) = hd;
+    const u64 at = g_w + padBytes;
+    if (padBytes)
+        __atomic_store_n(&g_w, g_w + padBytes, __ATOMIC_RELEASE);
+    RingCommit(sizeof(R3dRecHeader) + stored);
+    __atomic_sub_fetch(&g_reserved, st->reserve, __ATOMIC_SEQ_CST);
+    VideoStored(sc, at);
+    g_packTicks += Ticks() - t0;
+    __atomic_store_n(&g_stTail, g_stTail + 1, __ATOMIC_RELEASE);
 }
 
 /* ------------------------------------------------------------------ audio */
@@ -913,8 +1194,8 @@ static R3dRecHeader *RingReserve(u32 stored, u32 *advance)
     const u32 need = sizeof(R3dRecHeader) + stored;
     u32 pos = (u32)(g_w % g_ringSize);
     const u32 tail = g_ringSize - pos;
-    const u32 padBytes = tail < need ? tail : 0;
-    if (g_ringSize - RingFill() < padBytes + need)
+    const u32 padBytes = tail < need && !g_ringOver ? tail : 0;
+    if (RingFree() < padBytes + need)
         return NULL;
     if (padBytes)
     {
@@ -933,6 +1214,11 @@ static R3dRecHeader *RingReserve(u32 stored, u32 *advance)
 
 static void RingCommit(u32 advance)
 {
+    /* a record that ran past the ring's end into the overhang: that part goes to the ring's start
+       (free: the space check covered the whole record), before the writer may see it */
+    const u32 pos = (u32)(g_w % g_ringSize);
+    if (g_ringOver && !g_ringMirror && pos + advance > g_ringSize)
+        memcpy(g_ring, g_ring + g_ringSize, pos + advance - g_ringSize);
     __atomic_store_n(&g_w, g_w + advance, __ATOMIC_RELEASE);
     const u32 fill = RingFill();
     if (fill > g_ringMax)
@@ -1026,7 +1312,7 @@ static void PollAudio(void)
         __atomic_store_n(&g_aqHead, head + 1, __ATOMIC_RELEASE);
     }
     if (g_aqHead - g_aqTail >= 16)
-        LightEvent_Signal(&g_convEvent);
+        LightEvent_Signal(PackerOn() ? &g_packEvent : &g_convEvent);
 }
 
 /* audio_debug=on: every poll where either region's block changed, both blocks as
@@ -1067,7 +1353,7 @@ static void PollAudioRaw(void)
     }
     __atomic_store_n(&g_aqHead, head + 2, __ATOMIC_RELEASE);
     if (g_aqHead - g_aqTail >= 32)
-        LightEvent_Signal(&g_convEvent);
+        LightEvent_Signal(PackerOn() ? &g_packEvent : &g_convEvent);
 }
 
 /* Audio thread: polls the DSP output every 1 ms while recording (the main loop's
@@ -1166,54 +1452,128 @@ static volatile bool g_boosted;
 static volatile u64 g_appSwapUs;   /* recording time of the last new FCRAM frame on the top screen */
 static volatile bool g_appSwapSeen; /* g_appSwapUs is set (in this recording) */
 
+/* Converter thread state for StopRecording: g_convHold makes it leave the slots alone; g_convInSlot
+   is set while it handles one. */
+static volatile bool g_convHold, g_convInSlot;
+
+/* Main thread, every loop: every running DMA that finished gets its handle closed at once (each
+   holds one of the ARM11's few DMA channels until then); one that failed or took too long is
+   stopped and dropped. The main thread starts the DMAs and closes them; the converter only takes
+   finished ones (state 2). When the converter closed them, between frames, finished DMAs held
+   their channels through each encode and through a starved converter, and the DMA limit dropped
+   frames in bursts mid-race (Mario Kart 7, O3DS 0.11.3, 2026-11-09). */
+static void ReapDmas(void)
+{
+    for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+    {
+        Slot *s = &g_slots[i];
+        if (s->state != 1)
+            continue;
+        DmaState st = DMASTATE_STARTING;
+        const Result rc = svcGetDmaState(&st, s->dma);
+        if (R_SUCCEEDED(rc) && st == DMASTATE_DONE)
+        {
+            svcCloseHandle(s->dma);
+            s->dma = 0;
+            __atomic_store_n(&s->state, 2, __ATOMIC_RELEASE);
+            LightEvent_Signal(&g_convEvent);
+        }
+        else if (R_FAILED(rc) || TicksToUs(Ticks() - s->startTick) > DMA_TIMEOUT_US)
+        {
+            svcStopDma(s->dma);
+            svcCloseHandle(s->dma);
+            s->dma = 0;
+            Drop(R_FAILED(rc) ? DROP_DMA_ERROR : DROP_DMA_TIMEOUT, s->screen, rc);   /* not encoded: no keyframe needed */
+            __atomic_store_n(&s->state, 0, __ATOMIC_RELEASE);
+        }
+    }
+}
+
 static void ConverterMain(void *arg)
 {
     (void)arg;
     for (;;)
     {
-        DrainAudio();
+        if (g_convHold)
+        {
+            svcSleepThread(2 * 1000 * 1000);
+            continue;
+        }
+        if (!PackerOn())
+            DrainAudio();
+        g_convInSlot = true;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        if (g_convHold)
+        {
+            g_convInSlot = false;
+            continue;
+        }
         Slot *next = NULL;
+        bool running = false;
         for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
         {
             Slot *s = &g_slots[i];
-            if (s->state == 1 && (!next || s->screen < next->screen ||
+            running |= s->state == 1;
+            if (s->state == 2 && (!next || s->screen < next->screen ||
                                   (s->screen == next->screen && s->startTick < next->startTick)))
                 next = s;
         }
         if (!next)
         {
-            LightEvent_WaitTimeout(&g_convEvent, 100ull * 1000 * 1000);
+            g_convInSlot = false;
+            if (running)
+                svcSleepThread(300 * 1000);
+            else
+                LightEvent_WaitTimeout(&g_convEvent, 100ull * 1000 * 1000);
             continue;
         }
-        DmaState st = DMASTATE_STARTING;
-        const Result rc = svcGetDmaState(&st, next->dma);
-        if (R_SUCCEEDED(rc) && st == DMASTATE_DONE)
+        if (PackerOn() && g_stHead - g_stTail >= g_stageN)
         {
-            svcCloseHandle(next->dma);
-            next->dma = 0;
-            svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, (u32)next->buf, next->size);
-            const u64 t0 = Ticks();
-            EncodeSlot(next);
-            const u32 us = TicksToUs(Ticks() - t0);
-            if (us > g_encodeMaxUs[next->screen])
-                g_encodeMaxUs[next->screen] = us;
-            g_encodeSlow[next->screen] += us > 1000000u / 30u;
-            g_encodeSumUs[next->screen] += us;
-            __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
-            if (g_boosted)
-                svcSleepThread(BOOST_YIELD_US * 1000ull);
+            /* every staging buffer full: wait for the packer (it leaves Huffman out meanwhile) */
+            g_convInSlot = false;
+            g_convWaiting = true;
+            LightEvent_Signal(&g_packEvent);
+            svcSleepThread(1000 * 1000);
             continue;
         }
-        if (R_FAILED(rc) || TicksToUs(Ticks() - next->startTick) > DMA_TIMEOUT_US)
+        g_convWaiting = false;
+        /* on this core, where the frame is read: the DMA wrote around the cache */
+        svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, (u32)next->buf, next->size);
+        u32 waiting = 0;   /* other frames DMA'd or on their way */
+        for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+            waiting += g_slots[i].state != 0 && &g_slots[i] != next;
+        const u64 t0 = Ticks();
+        EncodeSlot(next, waiting >= 2);
+        const u32 us = TicksToUs(Ticks() - t0);
+        if (us > g_encodeMaxUs[next->screen])
+            g_encodeMaxUs[next->screen] = us;
+        g_encodeSlow[next->screen] += us > 1000000u / 30u;
+        g_encodeSumUs[next->screen] += us;
+        __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
+        g_convInSlot = false;
+        if (g_boosted)
+            svcSleepThread(BOOST_YIELD_US * 1000ull);
+    }
+}
+
+/* Packer thread (system core, lowest priority): staged frames and queued audio into the ring. */
+static void PackerMain(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        if (!PackerOn())
         {
-            svcStopDma(next->dma);
-            svcCloseHandle(next->dma);
-            next->dma = 0;
-            Drop(R_FAILED(rc) ? DROP_DMA_ERROR : DROP_DMA_TIMEOUT, next->screen, rc);   /* not encoded: no keyframe needed */
-            __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
+            LightEvent_WaitTimeout(&g_packEvent, 100ull * 1000 * 1000);
             continue;
         }
-        svcSleepThread(300 * 1000);
+        DrainAudio();
+        if (g_stTail != __atomic_load_n(&g_stHead, __ATOMIC_ACQUIRE))
+        {
+            PackStage();
+            continue;
+        }
+        LightEvent_WaitTimeout(&g_packEvent, 10ull * 1000 * 1000);   /* audio comes every ~5 ms: 16 queued wake it */
     }
 }
 
@@ -1234,7 +1594,7 @@ static bool EnsureSlots(int sc, u32 size)
     for (u32 i = 0; i < g_slotCount[sc]; i++)
         if (g_slots[sc * MAX_SLOTS + i].state)
             return false;
-    const u32 slotSize = (size + 63u) & ~63u;
+    const u32 slotSize = (size + 0xFFFu) & ~0xFFFu;   /* page-aligned DMA destinations */
     u32 n = slotSize ? g_arenaCap[sc] / slotSize : 0;
     if (n > MAX_SLOTS)
         n = MAX_SLOTS;
@@ -1409,17 +1769,44 @@ static u32 Bpp(u32 fmt)
     switch (fmt & 7u) { case 0: return 4; case 1: return 3; default: return 2; }
 }
 
+/* DMAs running at once, both screens (handles open: each holds a DMA channel; the ARM11 has 8).
+   With the converter starved (the game's core busy while a game loads), both screens filled every
+   slot with a DMA still open, and the kernel panicked in svcStartInterProcessDma starting the 6th
+   of one screen (Mario Kart 7 launched from HOME while recording, O3DS 0.11.0-0.11.1, 2026-11-09;
+   0.10 had let the bottom screen capture behind a busy top one). */
+#define DMA_MAX_RUNNING 4u
+static u32 g_dmaMaxRunning;
+
+static u32 DmasRunning(void)
+{
+    u32 n = 0;
+    for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+        n += g_slots[i].state == 1;
+    return n;
+}
+
 static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStatic)
 {
+    if ((fmt & 7u) > FB_RGBA4)
+        return;   /* not a pixel format: a register read while the game set its screens up */
     /* the stride bounded first: a garbage register value times 400 could wrap to a small size */
     if (stride < 240 * Bpp(fmt) || stride > 240u * 4u * 2u)
         return;
-    const u32 size = (sc == 0 ? 400u : 320u) * stride;
+    /* the top screen's 800 px mode: neither "normal 2D" (bit 6) nor 3D (bit 5) in its format
+       register (as Rosalina's screenshots read it); 800 columns, recorded as 400 (pairs averaged) */
+    const bool wide = sc == 0 && (fmt & 0x60u) == 0;
+    const u32 size = (sc == 0 ? (wide ? 800u : 400u) : 320u) * stride;
     if (size > g_arenaCap[sc])
         return;
     if (!EnsureSlots(sc, size))
     {
         Drop(DROP_SLOTS_BUSY, sc, 0);
+        return;
+    }
+    const u32 running = DmasRunning();
+    if (running >= DMA_MAX_RUNNING)
+    {
+        Drop(DROP_DMA_LIMIT, sc, 0);   /* not encoded: no keyframe needed */
         return;
     }
     Slot *slot = NULL;
@@ -1444,41 +1831,69 @@ static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStat
     slot->isStatic = isStatic;
     slot->fmt = fmt;
     slot->stride = stride;
+    slot->wide = wide;
     slot->size = size;
     slot->timeUs = timeUs;
     slot->startTick = Ticks();
     __atomic_store_n(&slot->state, 1, __ATOMIC_RELEASE);
+    if (running + 1 > g_dmaMaxRunning)
+        g_dmaMaxRunning = running + 1;
     LightEvent_Signal(&g_convEvent);
 }
 
-typedef struct { u32 lastAddr, lastSel, lastFmt, lastStride; u64 lastNewUs, lastCapUs; bool hasCap; } Track;
+typedef struct {
+    u32 lastAddr, lastSel, lastFmt, lastStride;
+    u64 lastNewUs, lastCapUs;   /* last swap seen; last capture slot (taken or throttled) */
+    u64 lastRealUs;             /* last frame actually captured */
+    u64 modeUs;                 /* when its mode (format, stride, VRAM / FCRAM) last changed */
+    bool vram;
+    bool hasCap;
+    u8 throttleN;               /* capture slots while throttled */
+} Track;
 static Track g_track[2];
 
 static bool IsVram(u32 pa) { return pa >= VRAM_PA && pa < VRAM_PA + VRAM_SIZE; }
-static bool g_throttleFlip;
+#define THROTTLE_HARD_PCT 85u        /* ring this full: the bottom screen pauses */
+#define BOTTOM_MIN_GAP_US 100000u     /* behind a busy top screen the bottom still gets 10 fps */
+#define TORN_US           4000u       /* a swap this soon after a capture started: its DMA may read a frame being drawn */
+#define POLL_EARLY_US     3000u       /* wake this long before the next capture is due */
+/* No DMA from a screen this long after its mode changed: the game is setting its screens up then.
+   A kernel panic (rec3ds, core 1) hit right as Mario Kart 7 moved its top screen to a new VRAM
+   buffer with a new stride after a launch from HOME while recording (O3DS 0.11.0, 2026-11-09). */
+#define MODE_SETTLE_US    200000u
 
-static void PollScreens(void)
+/* Captures the screens that swapped (or a still VRAM one now and then). Returns how long the main
+   loop may sleep: until shortly before the next capture is due, polling every POLL_REC_US from
+   then on so a swap is caught within ~2 ms (the frame stays put until the game's next swap). */
+static u32 PollScreens(void)
 {
     const u64 nowUs = TicksToUs(Ticks() - g_recStartTick);
     const u32 gapUs = 1000000u / g_cfg.fps - 8000u;   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
     const u32 fill = RingFill();
-    for (int sc = 0; sc < (g_cfg.bottom ? 2 : 1); sc++)
+    u64 wakeUs = nowUs + 20000u;
+    for (int sc = 0; sc < 2; sc++)
     {
+        if (sc == 0 ? !g_cfg.top : !g_cfg.bottom)
+            continue;
         const u32 base = PDC_VA(sc);
         const u32 a = REG32(base + 0x68), b = REG32(base + 0x6C);
         const u32 fmt = REG32(base + 0x70), sel = REG32(base + 0x78) & 1u, stride = REG32(base + 0x90);
         const u32 cur = sel ? b : a;
         Track *t = &g_track[sc];
-        if (fmt != t->lastFmt || stride != t->lastStride)   /* a mode change (New 3DS 800 px, 3D, a program's own) */
+        if (fmt != t->lastFmt || stride != t->lastStride || IsVram(cur) != t->vram)   /* a mode change (800 px, 3D, a program's own) */
         {
             t->lastFmt = fmt;
             t->lastStride = stride;
+            t->vram = IsVram(cur);
+            t->modeUs = nowUs;
             Log("%s screen: format %03lX stride %lu at %s pa %08lX, %lu s", sc ? "bottom" : "top", fmt, stride,
                 IsVram(cur) ? "VRAM" : "FCRAM", cur, (u32)(nowUs / 1000000u));
         }
         const bool isNew = cur != t->lastAddr || sel != t->lastSel;
         if (isNew)
         {
+            if (t->hasCap && nowUs - t->lastRealUs < TORN_US)
+                g_torn[sc]++;
             t->lastAddr = cur;
             t->lastSel = sel;
             t->lastNewUs = nowUs;
@@ -1488,7 +1903,10 @@ static void PollScreens(void)
                 g_appSwapSeen = true;
             }
         }
-        const bool due = !t->hasCap || nowUs - t->lastCapUs >= gapUs;
+        const u64 dueUs = t->hasCap ? t->lastCapUs + gapUs : nowUs;
+        if (dueUs < wakeUs + POLL_EARLY_US)
+            wakeUs = dueUs > POLL_EARLY_US ? dueUs - POLL_EARLY_US : 0;
+        const bool due = !t->hasCap || nowUs >= dueUs;
         /* A screen that does not swap is re-captured every STATIC_GAP_US, but only from VRAM:
            re-reading an application's FCRAM framebuffer kept a closing app alive, and the next
            launch waited until the recording stopped (Homebrew Launcher -> 3DS Recorder, O3DS
@@ -1497,23 +1915,96 @@ static void PollScreens(void)
                               nowUs - t->lastNewUs >= STATIC_GAP_US;
         if (!(due && (isNew || isStatic)))
             continue;
+        if (t->hasCap && nowUs - t->modeUs < MODE_SETTLE_US)
+            continue;   /* the screen's mode just changed: let it settle */
         t->lastCapUs = nowUs;
         t->hasCap = true;
         if (fill > g_ringSize / 100u * THROTTLE_PCT)
         {
-            /* SD behind: top at half rate, bottom paused (no random losses, no forced keyframes) */
-            if (sc == 0)
-                g_throttleFlip = !g_throttleFlip;
-            if (sc == 1 || g_throttleFlip)
+            /* SD behind (no random losses, no forced keyframes): with both screens the bottom drops
+               to g_bottomKeep of its rate first and the top stays at full rate; the top halves only
+               when the ring is nearly full, and the bottom pauses then. Before: the bottom paused at
+               once (games played on it, New Love Plus+, stuttered: Reddit 2026-11-09), then both at
+               half rate (the top lost ~5 fps in Mario Kart 7); the top went from ~19 to ~25 fps this
+               way (O3DS 2026-11-09). A single recorded screen runs at half rate. */
+            const bool hard = fill > g_ringSize / 100u * THROTTLE_HARD_PCT;
+            const bool both = g_cfg.top && g_cfg.bottom;
+            const bool skip = !both               ? ++t->throttleN % 2u != 0u
+                              : sc == 1           ? hard || (g_bottomKeep == 1u ? ++t->throttleN % 2u != 0u
+                                                                        : ++t->throttleN % 3u == 0u)
+                              : hard && ++t->throttleN % 2u != 0u;
+            if (skip)
             {
                 g_throttled++;
                 continue;
             }
         }
-        if (sc == 1 && BusySlots(0) >= 2)
-            continue;   /* top screen first */
+        if (sc == 1 && g_cfg.top && BusySlots(0) >= 2 && nowUs - t->lastRealUs < BOTTOM_MIN_GAP_US)
+            continue;   /* top screen first, but the bottom keeps 10 fps */
+        t->lastRealUs = nowUs;
         Capture(sc, cur, fmt, stride, (u32)nowUs, isStatic);
     }
+    const u64 after = TicksToUs(Ticks() - g_recStartTick);
+    return wakeUs > after + POLL_REC_US ? (u32)(wakeUs - after) : POLL_REC_US;
+}
+
+/* Once at start-up (HOME, nothing recording): the encoders' own speed on this console, without a
+   game taking the processor, on a synthetic 3D-like frame (smooth shading with noise) against
+   itself panned by one column. Checks the ARM Q565 encoder against the C one. config codec_bench=on.
+   O3DS 2026-11-09 (at boot, the system core busy too): XR32 35 ms, Q565 C 90 ms, ARM 76 ms. */
+static void CodecBench(void)
+{
+    const u32 cols = 400, rows = 240, words = cols * rows;
+    const u32 cap = (u32)codec_xr32_max_size(words) + 16u;
+    u16 *src = BigAlloc(words * 2), *prev = BigAlloc(words * 2), *ref = BigAlloc(words * 2);
+    u8 *outA = BigAlloc(cap), *outB = BigAlloc(cap);
+    if (!src || !prev || !ref || !outA || !outB)
+    {
+        BigFreeAll();
+        Log("codec bench: no memory");
+        return;
+    }
+    u32 seed = 1;
+    for (u32 c = 0; c <= cols; c++)
+        for (u32 r = 0; r < rows; r++)
+        {
+            seed = seed * 1103515245u + 12345u;
+            const u32 n = (seed >> 16) % 8u < 3u ? (seed >> 20) & 3u : 0u;
+            const u16 v = (u16)((((c + r * 3u) >> 3) + n) % 32u << 11 | ((c * 2u + r) >> 2) % 64u << 5 | ((r >> 3) + n) % 32u);
+            if (c < cols)
+                src[c * rows + r] = v;
+            if (c > 0)
+                ref[(c - 1) * rows + r] = v;
+        }
+    u32 best[4] = { ~0u, ~0u, ~0u, ~0u };
+    u32 lenX = 0, lenC = 0, lenA = 0, pct = 0;
+    for (u32 k = 0; k < 3; k++)
+    {
+        memcpy(prev, ref, words * 2);
+        u64 t0 = Ticks();
+        lenX = (u32)codec_xr32_encode_strided_v(prev, (const u8 *)src, cols, rows, rows * 2, 1, 0, 1, outA);
+        u64 t1 = Ticks();
+        if (TicksToUs(t1 - t0) < best[0]) best[0] = TicksToUs(t1 - t0);
+        t0 = Ticks();
+        lenC = (u32)codec_q565_encode((const u8 *)src, cols, rows, rows * 2, outA, cap);
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) < best[1]) best[1] = TicksToUs(t1 - t0);
+        t0 = Ticks();
+        lenA = (u32)codec_q565_encode_arm((const u8 *)src, cols, rows, rows * 2, outB, cap);
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) < best[2]) best[2] = TicksToUs(t1 - t0);
+        t0 = Ticks();
+        pct = codec_changed_pct(ref, (const u8 *)src, cols, rows, rows * 2);
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) < best[3]) best[3] = TicksToUs(t1 - t0);
+    }
+    const bool same = lenA == lenC && memcmp(outA, outB, lenA) == 0;
+    Log("codec bench (no game, synthetic panned frame, %lu%% changed): XR32 %lu us %lu KB; Q565 C %lu us, ARM %lu us, "
+        "%lu KB (%s); change check %lu us", pct, best[0], lenX / KB, best[1], best[2], lenA / KB,
+        same ? "ARM = C" : "ARM DIFFERS FROM C", best[3]);
+    if (!same)
+        g_q565ArmBad = true;
+    BigFreeAll();
 }
 
 /* ------------------------------------------------------------------ start / stop */
@@ -1538,7 +2029,7 @@ static void LogMemory(const char *when)
 
 /* ------------------------------------------------------------------ priority boost */
 
-static Thread g_writerThread, g_convThread;
+static Thread g_writerThread, g_convThread, g_packThread;
 static bool g_convOnGameCore;   /* Old 3DS: the converter runs on core 0 at the lowest priority */
 
 static void SetBoost(bool on, const char *why)
@@ -1548,7 +2039,11 @@ static void SetBoost(bool on, const char *why)
     g_boosted = on;
     /* on the game's core a boost would take time from the game itself: the converter stays lowest */
     if (!g_convOnGameCore)
+    {
         svcSetThreadPriority(threadGetHandle(g_convThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+        if (g_packThread)   /* New 3DS: both on the system core */
+            svcSetThreadPriority(threadGetHandle(g_packThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+    }
     svcSetThreadPriority(threadGetHandle(g_writerThread), on ? CONVERTER_PRIO_BOOST - 1 : CONVERTER_PRIO - 1);
     Log("priority %s (converter %02X): %s", on ? "boosted" : "normal", on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO, why);
 }
@@ -1580,6 +2075,7 @@ static u32 ApplicationPid(void)
 /* Twice a second while recording: boost once the same application has run PRIO_BOOST_AFTER_US,
    drop back as soon as it is gone or another one starts (launches happen at low priority). */
 static const char *CpuState(void);
+static void CpuBoost(bool on);
 
 static void UpdateBoost(void)
 {
@@ -1932,8 +2428,9 @@ static bool RecordFits(const R3dRecHeader *h, u32 prevUs, bool haveTime, u64 at,
     const u32 m = h->magic;
     if (m == R3D_MAGIC_PAD || m == R3D_MAGIC_DSPMEM)
         return h->len < 64u * MB && at + sizeof(*h) + h->len <= size;
-    if (m != R3D_MAGIC_FRAME && m != R3D_MAGIC_XFRAME && m != R3D_MAGIC_YFRAME && m != R3D_MAGIC_AUDIO &&
-        m != R3D_MAGIC_END)
+    if (m != R3D_MAGIC_FRAME && m != R3D_MAGIC_XFRAME && m != R3D_MAGIC_YFRAME && m != R3D_MAGIC_HFRAME &&
+        m != R3D_MAGIC_QFRAME &&
+        m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END)
         return false;
     if (h->len > 2u * MB || at + sizeof(*h) + h->len > size)
         return false;
@@ -1977,7 +2474,8 @@ static void RecoverCutOff(void)
             break;
         if (!RecordFits(&h, prevUs, haveTime, at, size))
             break;
-        const bool delta = h.magic == R3D_MAGIC_XFRAME || h.magic == R3D_MAGIC_YFRAME;
+        const bool delta = h.magic == R3D_MAGIC_XFRAME || h.magic == R3D_MAGIC_YFRAME || h.magic == R3D_MAGIC_HFRAME ||
+                           h.magic == R3D_MAGIC_QFRAME;
         last = at;
         at += sizeof(h) + (delta ? ((h.len + 15u) & ~15u) : h.len);
         end = at;
@@ -2059,7 +2557,10 @@ static bool MapPluginMemory(void)
         }
         FSUSER_DeleteFile(g_sd, p);
         if (R_SUCCEEDED(rc) && done == 0x1000u)
+        {
             g_plgSize = heapSize & ~0xFFFu;
+            g_plgHeapVa = heapVa;
+        }
         else
         {
             svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA, heapSize & ~0xFFFu);
@@ -2072,10 +2573,56 @@ static bool MapPluginMemory(void)
     return R_SUCCEEDED(rc);
 }
 
+/* Maps the plugin ring's first `over` bytes again right after the plugin's memory (where the ring
+   ends). False: not mapped (pad records as before). */
+static u32 g_mirrorSize;
+
+static bool MirrorRing(u32 over)
+{
+    const u32 ringOff = (u32)g_ring - PLG_MEM_VA;
+    if (!g_ring || !over || over > g_ringSize || ringOff + g_ringSize != g_plgSize || !g_plgHeapVa)
+        return false;
+    const u32 pid = ApplicationPid();
+    Handle game = 0;
+    if (!pid || R_FAILED(svcOpenProcess(&game, pid)))
+        return false;
+    const Result rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff,
+                                            over, 1);
+    svcCloseHandle(game);
+    if (R_FAILED(rc))
+    {
+        Log("plugin ring mirror not mapped (rc %08lX): pad records", (u32)rc);
+        return false;
+    }
+    /* the mirror must show the ring's own bytes */
+    volatile u32 *a = (volatile u32 *)g_ring, *b = (volatile u32 *)(PLG_MEM_VA + g_plgSize);
+    const u32 keep = a[0];
+    a[0] = 0x4D525252u;
+    const bool same = b[0] == 0x4D525252u;
+    a[0] = keep;
+    if (!same)
+    {
+        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, over);
+        Log("plugin ring mirror does not show the ring: pad records");
+        return false;
+    }
+    g_mirrorSize = over;
+    return true;
+}
+
+static void UnmirrorRing(void)
+{
+    if (g_mirrorSize)
+        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, g_mirrorSize);
+    g_mirrorSize = 0;
+    g_ringMirror = false;
+}
+
 static void UnmapPluginMemory(void)
 {
     if (!g_plgSize)
         return;
+    UnmirrorRing();
     svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA, g_plgSize);
     g_plgSize = 0;
     g_inPlg = false;
@@ -2101,7 +2648,20 @@ static bool StartRecording(void)
     const u32 ringMax = lite ? LITE_RING_MAX : 8u * MB;
     g_keepFree = lite ? KEEP_FREE_LITE : KEEP_FREE;
     g_aqCap = g_inPlg ? AUDIO_QUEUE_PLG : lite ? AUDIO_QUEUE_LITE : AUDIO_QUEUE;
-    g_block = lite ? BLOCK_LITE : BLOCK;   /* set while the writer is idle (not recording) */
+    /* A/B test: this recording's variant (the writer is idle: it is not recording) */
+    const u32 ab = g_cfg.abTest ? g_abNext++ % AB_VARIANTS : AB_DEFAULT;
+    g_abVariant = ab;
+    g_block = lite ? BLOCK_LITE : BLOCK;   /* 1 MB blocks: +2%, within the noise (MK7, O3DS 2026-11-09) */
+    /* Q565 (g_intraOn, set above): off on an Old 3DS (intra=on for tests): in ARM assembly it still
+       took ~2.2x XR32's time (start-up bench: 76 vs 35 ms without a game; ~1 frame in 3 got it in
+       Mario Kart 7, the rest fell back to XR32, and the bottom screen was jerkier, O3DS 2026-11-09). */
+    g_bottomKeep = ab == AB_BOTTOM_1_2 ? 1u : 2u;
+    g_intraFrames[0] = g_intraFrames[1] = g_intraMiss = g_intraBusy = 0;
+    g_intraBytes = 0;
+    g_writeFlags = FS_WRITE_FLUSH;   /* without it: +2%, within the noise (MK7, O3DS 2026-11-09) */
+    s64 isN3ds = 0;
+    svcGetSystemInfo(&isN3ds, 0x10000, 0x201);
+    g_intraOn = g_cfg.intra || isN3ds;   /* New 3DS: the processor has the time (804 MHz, L2: CpuBoost) */
     /* Half in the plugin's small ring: with the full 256 KB Smash lost as much sound (queue full 376
        vs 364: the converter's stalls, not the ring) and 2.4x more video frames (ring full 851 vs 361),
        O3DS 2026-11-08. */
@@ -2115,21 +2675,53 @@ static bool StartRecording(void)
         g_codecFrames[sc] = 0;
         g_codecWords[sc] = 0;
     }
+    /* before the ring: given back with the encoder's memory (ReleaseEncoderMemory) */
+    const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
+    /* staging buffers for the packer (Huffman on): three in the normal profile, one in the light
+       ones (no memory to spare there: the ring gets less) */
+    u32 stages = g_cfg.huff ? (lite ? 1u : STAGES_MAX) : 0u;
+    for (u32 i = 0; i < stages; i++)
+        if (!(g_stage[i].buf = BigAlloc(recMax)))
+            stages = i;
+    g_stHead = g_stTail = 0;
+    g_reserved = 0;
+    g_convWaiting = false;
+    g_packTicks = 0;
+    g_huffFrames = g_huffKept = g_huffBusy = 0;
+    g_huffIn = g_huffOut = 0;
+    g_torn[0] = g_torn[1] = 0;
+    /* the overhang only in the normal profile: the light ones have no memory to spare */
+    const u32 over = lite && !g_inPlg ? 0u : (recMax + 0xFFFu) & ~0xFFFu;   /* the plugin's: mirrored, no memory */
     /* 8 MB rides out ~3 s of SD stall at 2.5 MB/s */
     static const u32 ringSizes[] = { 8u * MB, 6u * MB, 4u * MB, 3u * MB, 2u * MB, 1u * MB };
     g_ring = NULL;
+    void *plgAq = NULL;
     if (g_inPlg && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1])
     {
-        /* what is left after the audio queue, in whole write blocks */
-        const u32 aqBytes = g_cfg.audio ? ((g_aqCap * sizeof(AudioItem) + 0xFFFu) & ~0xFFFu) : 0u;
+        /* the audio queue first, then the ring in whole write blocks up to the end of the plugin's
+           memory, where its mirror goes (MirrorRing) */
+        plgAq = g_cfg.audio ? BigAlloc(g_aqCap * sizeof(AudioItem)) : NULL;
         const u32 left = g_plgSize - g_plgTop;
-        const u32 size = left > aqBytes ? ((left - aqBytes) / g_block) * g_block : 0u;
-        if (size >= 4u * g_block && (g_ring = BigAlloc(size)) != NULL)
+        const u32 size = (left / g_block) * g_block;
+        if (size >= 4u * g_block && (!g_cfg.audio || plgAq))
+        {
+            g_plgTop = g_plgSize - size;
+            g_ring = BigAlloc(size);
             g_ringSize = size;
+            g_ringMirror = MirrorRing(over);
+        }
     }
+    /* New 3DS: ~60 MB of SYSTEM memory free with a game running (tester's logs, 2026-11-08); a
+       bigger ring rides out a slow card's long spells (Flashback's notes: ~220 frames a minute lost
+       on a SanDisk Ultra with ~3 MB, none with ~25 MB). 24 MB stays free for HOME and applets. */
+    static const u32 bigRings[] = { 24u * MB, 16u * MB };
+    for (u32 i = 0; i < 2 && isN3ds && !lite && !g_ring && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1]; i++)
+        if ((g_ring = BigAllocChunked(bigRings[i] + over, 24u * MB)) != NULL)
+            g_ringSize = bigRings[i];
     for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1]; i++)
-        if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i])) != NULL)
+        if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i] + over)) != NULL)
             g_ringSize = ringSizes[i];
+    g_ringOver = !g_ring ? 0u : g_ringMirror ? over : !g_inPlg ? over : 0u;
     if (!g_ring)
     {
         BigFreeAll();
@@ -2139,7 +2731,7 @@ static bool StartRecording(void)
     }
     memset(g_slots, 0, sizeof(g_slots));
     memset(g_track, 0, sizeof(g_track));
-    g_aq = g_cfg.audio ? BigAlloc(g_aqCap * sizeof(AudioItem)) : NULL;
+    g_aq = !g_cfg.audio ? NULL : g_inPlg ? plgAq : BigAlloc(g_aqCap * sizeof(AudioItem));
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
     g_audioFrames = g_audioDropped = g_dspSnaps = g_dspOffPolls = 0;
@@ -2178,6 +2770,8 @@ static bool StartRecording(void)
     g_dropped = g_throttled = g_ringMax = 0;
     memset(g_drops, 0, sizeof(g_drops));
     g_dropBurstCount = g_dropBurstsLost = 0;
+    g_dmaMaxRunning = 0;
+    g_convHold = false;
     memset(g_encodeMaxUs, 0, sizeof(g_encodeMaxUs));
     memset(g_encodeSlow, 0, sizeof(g_encodeSlow));
     memset(g_encodeSumUs, 0, sizeof(g_encodeSumUs));
@@ -2189,9 +2783,8 @@ static bool StartRecording(void)
     memset(fh, 0, sizeof(*fh));
     fh->magic = R3D_MAGIC_FILE;
     fh->version = R3D_VERSION;
-    s64 isN3ds = 0;
-    fh->isNew3ds = svcGetSystemInfo(&isN3ds, 0x10001, 0) == 0;
-    fh->mode = g_cfg.bottom ? R3D_MODE_FULL_BOTH : R3D_MODE_FULL_TOP;
+    fh->isNew3ds = isN3ds != 0;
+    fh->mode = !g_cfg.bottom ? R3D_MODE_FULL_TOP : !g_cfg.top ? R3D_MODE_FULL_BOTTOM : R3D_MODE_FULL_BOTH;
     fh->fps = (u8)g_cfg.fps;
     fh->audioRate = g_aq ? R3D_AUDIO_RATE_MHZ : 0;
     g_recStartMs = osGetTime();
@@ -2199,7 +2792,9 @@ static bool StartRecording(void)
     g_w = sizeof(*fh);
     OpenInfo();
 
+    CpuBoost(true);
     g_recStartTick = Ticks();
+    g_stageN = stages;   /* the packer takes over the ring (audio too) */
     g_writerActive = true;
     g_recording = true;
     g_shared.ringKb = g_ringSize / KB;
@@ -2209,7 +2804,7 @@ static bool StartRecording(void)
     Log("recording started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, %s memory profile%s, "
         "SYSTEM free %lu KB, SD free %lu MB, %s)",
         g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
-        *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, g_cfg.bottom ? "both screens" : "top screen",
+        *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, ScreensName(),
         g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, lite ? "light" : "normal",
         g_inPlg ? " in the launcher plugin's memory" : "",
         g_shared.sysFreeKb, sdFree,
@@ -2219,6 +2814,35 @@ static bool StartRecording(void)
 }
 
 /* New 3DS: the clock and L2 the running program chose (the converter's speed depends on them). */
+/* New 3DS: 804 MHz and the L2 cache while recording (Rosalina's New 3DS menu changes them the same
+   way while a game runs); what was set before comes back when the recording stops. A game in
+   legacy mode runs at 268 MHz without L2, and the converter shares the system core there.
+   ptm:sysm (rec3ds.rsf). */
+static bool g_ptmSysm;
+static s32  g_cpuBefore = -1;   /* PTMSYSM_ConfigureNew3DSCPU value to restore, -1: nothing changed */
+
+static void CpuBoost(bool on)
+{
+    if (!g_ptmSysm)
+        return;
+    if (on && g_cpuBefore < 0)
+    {
+        s64 mhz = 0, l2 = 0;
+        if (R_FAILED(svcGetSystemInfo(&mhz, 0x10001, 0)) || R_FAILED(svcGetSystemInfo(&l2, 0x10001, 2)))
+            return;
+        const s32 before = (mhz > 300 ? 1 : 0) | (l2 ? 2 : 0);
+        if (before == 3)
+            return;   /* the game runs that way already */
+        if (R_SUCCEEDED(PTMSYSM_ConfigureNew3DSCPU(3)))
+            g_cpuBefore = before;
+    }
+    else if (!on && g_cpuBefore >= 0)
+    {
+        PTMSYSM_ConfigureNew3DSCPU((u8)g_cpuBefore);
+        g_cpuBefore = -1;
+    }
+}
+
 static const char *CpuState(void)
 {
     static char buf[48];
@@ -2234,9 +2858,9 @@ static const char *CpuState(void)
 static void LogDrops(void)
 {
     Log("video drops: ring full %lu, no free slot %lu, DMA timeout %lu, DMA error %lu, DMA start failed %lu (last rc %08lX), "
-        "slots busy %lu; encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
+        "slots busy %lu, DMA limit %lu (most running at once %lu); encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
         g_drops[DROP_RING], g_drops[DROP_NO_SLOT], g_drops[DROP_DMA_TIMEOUT], g_drops[DROP_DMA_ERROR],
-        g_drops[DROP_DMA_START], (u32)g_dmaStartRc, g_drops[DROP_SLOTS_BUSY],
+        g_drops[DROP_DMA_START], (u32)g_dmaStartRc, g_drops[DROP_SLOTS_BUSY], g_drops[DROP_DMA_LIMIT], g_dmaMaxRunning,
         g_shared.framesTop ? (u32)(g_encodeSumUs[0] / g_shared.framesTop) : 0,
         g_shared.framesBot ? (u32)(g_encodeSumUs[1] / g_shared.framesBot) : 0, g_encodeMaxUs[0], g_encodeMaxUs[1],
         g_encodeSlow[0], g_encodeSlow[1], CpuState());
@@ -2297,14 +2921,44 @@ static void StopRecording(const char *why, bool releaseFirst)
 {
     g_shared.state = REC_STATE_SAVING;
     g_recording = false;
-    /* pending DMAs finish or time out, the converter empties the slots */
-    for (u32 i = 0; i < 200 && !SlotsIdle(); i++)
+    /* pending DMAs finish or time out, the converter empties the slots, the packer the stages */
+    for (u32 i = 0; i < 400 && (!SlotsIdle() || !StagesIdle()); i++)
+    {
+        ReapDmas();   /* this thread closes finished DMAs */
+        LightEvent_Signal(&g_packEvent);
         svcSleepThread(5 * 1000 * 1000);
+    }
+    if (!SlotsIdle())
+    {
+        /* the converter is starved (the game's core busy): it leaves the slots alone from here, and
+           DMAs still running are stopped before their buffers are given back (they used to be freed
+           with the DMA still writing into them, the handles left open) */
+        g_convHold = true;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        for (u32 i = 0; i < 2000 && g_convInSlot; i++)
+            svcSleepThread(5 * 1000 * 1000);
+        u32 stopped = 0;
+        for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+        {
+            Slot *sl = &g_slots[i];
+            if (sl->state == 1 && sl->dma)
+            {
+                svcStopDma(sl->dma);
+                svcCloseHandle(sl->dma);
+                sl->dma = 0;
+                stopped++;
+            }
+            sl->state = 0;
+        }
+        Log("stop: converter starved, %lu DMAs stopped, slots cleared%s", stopped,
+            g_convInSlot ? " (converter still inside a frame)" : "");
+    }
     while (g_audioInPoll)   /* the audio thread sees g_recording == false from its next poll */
         svcSleepThread(1 * 1000 * 1000);
     for (u32 i = 0; i < 100 && g_aq && g_aqTail != g_aqHead; i++)   /* queued audio into the ring */
     {
         LightEvent_Signal(&g_convEvent);
+        LightEvent_Signal(&g_packEvent);
         svcSleepThread(5 * 1000 * 1000);
     }
     void *const aq = g_aq;
@@ -2315,7 +2969,7 @@ static void StopRecording(const char *why, bool releaseFirst)
         svcSleepThread(1 * 1000 * 1000);
     bool ringDropped = false;
     u64 dropFrom = 0;
-    if (releaseFirst && SlotsIdle())
+    if (releaseFirst && SlotsIdle() && StagesIdle())
     {
         ReleaseEncoderMemory(aq);
         /* The ring too, without waiting for the SD: HOME Menu took the memory within 0.4 s while
@@ -2342,6 +2996,7 @@ static void StopRecording(const char *why, bool releaseFirst)
             svcControlMemoryUnsafe(&out, g_bigLow, g_bigTop - g_bigLow, MEMOP_FREE, (MemPerm)0);
             g_bigLow = g_bigTop = BIG_VA;
             g_ring = NULL;
+            g_ringOver = 0;
             ringDropped = true;
         }
         Log("HOME: recording memory given back at once (ring %s), SYSTEM free %lu KB",
@@ -2382,8 +3037,20 @@ static void StopRecording(const char *why, bool releaseFirst)
     }
     if (ringDropped)
         Log("  file cut at %llu KB: the part not yet on the SD was dropped for HOME", dropFrom / KB);
+    {
+        const u32 packed = g_huffFrames + g_huffBusy, packUs = TicksToUs(g_packTicks);
+        Log("compression: Q565 %lu + %lu frames (%llu KB, %lu not smaller, %lu left to XR32: converter behind)",
+            g_intraFrames[0], g_intraFrames[1], g_intraBytes / KB, g_intraMiss, g_intraBusy);
+        Log("compression: %s, %lu staging buffers, Huffman %lu frames (%lu kept as XR32, %lu skipped: converter "
+            "waiting) %llu -> %llu KB (%lu%%), packer %lu us a frame; ring %lu KB + overhang %lu KB, write block %lu KB%s; "
+            "maybe-torn frames %lu / %lu",
+            AB_NAMES[g_abVariant], g_stageN, g_huffFrames, g_huffKept, g_huffBusy, g_huffIn / KB, g_huffOut / KB,
+            g_huffIn ? (u32)(g_huffOut * 100u / g_huffIn) : 0u, packed ? packUs / packed : 0u, g_ringSize / KB,
+            g_ringOver / KB, g_block / KB, g_writeFlags ? "" : " (no flush)", g_torn[0], g_torn[1]);
+    }
     LogDrops();
     LogMemory("recording stopped");
+    CpuBoost(false);
     SetBoost(false, "recording stopped");
     snprintf((char *)g_shared.lastFile, sizeof(g_shared.lastFile), "%s", name);
     g_shared.files++;
@@ -2391,8 +3058,12 @@ static void StopRecording(const char *why, bool releaseFirst)
         g_shared.lastError = R_FAILED(g_writeRc) ? g_writeRc : rn;
 
     g_ring = NULL;
+    g_stageN = 0;   /* the stages are empty (waited for above) */
+    g_ringOver = 0;
+    UnmirrorRing();
     BigFreeAll();
     g_appPid = g_appBase = 0;
+    g_convHold = false;
     g_shared.state = REC_STATE_IDLE;
     if (R_FAILED(g_shared.lastError))
         LED_SIGNAL(LED_ERROR);
@@ -2423,6 +3094,7 @@ int main(void)
 {
     svcGetProcessId(&g_ownPid, CUR_PROCESS_HANDLE);
     LightEvent_Init(&g_convEvent, RESET_ONESHOT);
+    LightEvent_Init(&g_packEvent, RESET_ONESHOT);
     LightLock_Init(&g_dropLock);
     InitFs();
     LoadConfig();
@@ -2447,10 +3119,13 @@ int main(void)
         conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
     g_writerThread = writer;
     g_convThread = conv;
+    /* the packer on the system core at the converter's priority (the writer stays above it) */
+    Thread pack = threadCreate(PackerMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
+    g_packThread = pack;
     /* highest non-privileged priority: a poll late by more than ~6 ms loses a frame
        (v5: ~1 per second at 0x20); it only reads 1.3 KB per ms */
     Thread audio = threadCreate(AudioMain, NULL, 4 * KB, 0x18, 1, false);
-    if (!writer || !conv || !audio)
+    if (!writer || !conv || !audio || !pack)
     {
         g_shared.state = REC_STATE_ERROR;
         g_shared.lastError = (s32)0xE0000004;
@@ -2471,11 +3146,17 @@ int main(void)
     svcGetSystemInfo(&n3ds, 0x10000, 0x201);
     const u32 kv = osGetKernelVersion();
     Log("recorder started (build " __DATE__ " " __TIME__ ", %s, Luma %lu.%lu.%lu, kernel %lu.%lu-%lu, hotkey mask %03lX, "
-        "fps %lu, screens %s, audio %s, file limit %lu MB, SYSTEM free %lu KB, SD free %lu MB, converter on core %d)",
+        "fps %lu, screens %s, audio %s, file limit %lu MB, SYSTEM free %lu KB, SD free %lu MB, converter on core %d, "
+        "FS priority %ld -> %ld%s%s)",
         n3ds ? "New 3DS" : "Old 3DS", (u32)(luma >> 24) & 0xFF, (u32)(luma >> 16) & 0xFF, (u32)(luma >> 8) & 0xFF,
         GET_VERSION_MAJOR(kv), GET_VERSION_MINOR(kv), GET_VERSION_REVISION(kv), g_cfg.hotkey, g_cfg.fps,
-        g_cfg.bottom ? "both" : "top", g_cfg.audio ? "on" : "off", g_cfg.maxFileMb, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
-        SdFreeMb(), g_convOnGameCore ? 0 : 1);
+        ScreensName(), g_cfg.audio ? "on" : "off", g_cfg.maxFileMb, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
+        SdFreeMb(), g_convOnGameCore ? 0 : 1, (s32)g_fsPrioOld, (s32)g_fsPrioNew, g_cfg.huff ? "" : ", Huffman off",
+        g_cfg.abTest ? ", A/B test" : "");
+    if (n3ds)
+        g_ptmSysm = R_SUCCEEDED(ptmSysmInit());
+    if (g_cfg.bench)
+        CodecBench();
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
     g_shared.state = REC_STATE_IDLE;
@@ -2629,7 +3310,7 @@ int main(void)
             reloadPending = false;
             LoadConfig();
             Log("settings reloaded (hotkey mask %03lX, fps %lu, screens %s, audio %s, led %lu)", g_cfg.hotkey, g_cfg.fps,
-                g_cfg.bottom ? "both" : "top", g_cfg.audio ? "on" : "off", g_cfg.led);
+                ScreensName(), g_cfg.audio ? "on" : "off", g_cfg.led);
         }
 
         if (lidClosed && !g_recording)   /* asleep: no LED, no buttons, no screens until the lid opens */
@@ -2652,8 +3333,12 @@ int main(void)
 
         if (g_recording)
         {
+            u32 sleepUs = POLL_REC_US;
+            ReapDmas();
             if (!g_cfg.audioDebug)
-                PollScreens();
+                sleepUs = PollScreens();
+            if (DmasRunning())
+                sleepUs = POLL_REC_US;   /* close them soon after they finish */
             UpdateBoost();
             const u64 now = Ticks();
             g_shared.recSeconds = TicksToUs(now - g_recStartTick) / 1000000u;
@@ -2685,7 +3370,8 @@ int main(void)
                 LED_SIGNAL(LED_ERROR);
             if (cmd == REC_CMD_EXIT)
                 break;
-            svcSleepThread(POLL_REC_US * 1000ull);
+            /* the pad, notifications and the lid are read here too: at most 20 ms late */
+            svcSleepThread((u64)(g_recording ? sleepUs : POLL_REC_US) * 1000ull);
             continue;
         }
 

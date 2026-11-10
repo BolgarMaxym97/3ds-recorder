@@ -14,6 +14,7 @@
  * Output: width x height RGB24 frames at a constant rate, built from the
  * frame timestamps (a screen keeps its last picture until a new one arrives):
  *   both screens: 400 x 480, top above, bottom centred below
+ *   bottom screen only: 400 x 240, centred
  *   top only:     400 x 240
  * The size line "WxH fps" is printed to stderr before the frames.
  * Reading stops at the first unknown record (an unclosed file ends in stale
@@ -23,6 +24,7 @@
 #include "audio_order.h"
 #include "audio_place.h"
 #include "codec.h"
+#include "huff.h"
 #include "r3d_format.h"
 
 #include <stdio.h>
@@ -147,7 +149,8 @@ int main(int argc, char **argv)
     if (fps == 0 || fps > 60) {
         fps = 30;
     }
-    const int both = fh.mode != R3D_MODE_FULL_TOP;
+    const int bottomOnly = fh.mode == R3D_MODE_FULL_BOTTOM;   /* 400 x 240, the bottom screen centred */
+    const int both = fh.mode != R3D_MODE_FULL_TOP && !bottomOnly;
     const uint32_t outW = 400, outH = both ? 480 : 240;
     fprintf(stderr, "%ux%u %u\n", outW, outH, fps);
 
@@ -229,7 +232,8 @@ int main(int argc, char **argv)
             aTime[aCount++] = rh.timeUs;
             continue;
         }
-        const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME;
+        const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
+                          rh.magic == R3D_MAGIC_QFRAME;
         const uint32_t sc = rh.screen & 0x3F;
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(400 * 240) + 16) {
             break;   /* end of valid data */
@@ -247,9 +251,11 @@ int main(int argc, char **argv)
         if (!info) {
             while ((uint64_t)emitted * 1000000u / fps < rh.timeUs) {
                 memset(rgb, 0, (size_t)outW * outH * 3);
-                put_screen(rgb, outW, &scr[0], 0, 0);
-                if (both) {
-                    put_screen(rgb, outW, &scr[1], 40, 240);
+                if (!bottomOnly) {
+                    put_screen(rgb, outW, &scr[0], 0, 0);
+                }
+                if (both || bottomOnly) {
+                    put_screen(rgb, outW, &scr[1], 40, both ? 240 : 0);
                 }
                 fwrite(rgb, 1, (size_t)outW * outH * 3, stdout);
                 emitted++;
@@ -265,6 +271,11 @@ int main(int argc, char **argv)
             continue;   /* waiting for a keyframe after a damaged frame */
         } else if (rh.magic == R3D_MAGIC_YFRAME) {
             bad = codec_xr32_decode(payload, rh.len, s->px, s->n, key);
+        } else if (rh.magic == R3D_MAGIC_QFRAME) {
+            bad = codec_q565_decode(payload, rh.len, s->px, s->n);
+        } else if (rh.magic == R3D_MAGIC_HFRAME) {
+            static HuffTables tables;
+            bad = huff_xr32_decode(payload, rh.len, s->px, s->n, key, &tables);
         } else {
             bad = codec_xrle_decode(payload, rh.len, s->px, s->n, key);
         }

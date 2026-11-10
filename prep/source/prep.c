@@ -18,6 +18,7 @@
 #include "audio_eq.h"
 #include "audio_place.h"
 #include "codec.h"
+#include "huff.h"
 #include "r3d_format.h"
 
 #include "cmnMemory.h"
@@ -94,7 +95,7 @@ struct PrepJob {
     FILE *src, *part, *tbl, *prep;
     char *srcBuf, *tblBuf;
     R3dFileHeader fh;
-    int both, H, fps, audio, skipCk, finished;
+    int both, bottomOnly, H, fps, audio, skipCk, finished;
     double inRate, rsStep;
     uint32_t endUs, haveEnd;
     State s;
@@ -260,10 +261,13 @@ static void yuv_tables(void)
 
 #define Y_OF(p) ((uint8_t)((g_yr[(p) >> 11] + g_yg[((p) >> 5) & 63] + g_yb[(p) & 31] + 128 + 4096) >> 8))
 
+/* the screens in the video: both (400 x 480), the top or the bottom one (400 x 240) */
+#define SCREEN_SHOWN(j, sc) ((sc) == 0 ? !(j)->bottomOnly : ((j)->both || (j)->bottomOnly))
+
 /* One screen (column-major, word 0 = bottom row, 240 rows) into the picture at (ox, oy). */
 static void yuv_screen(const PrepJob *j, int sc)
 {
-    const int W = 400, cols = sc ? 320 : 400, ox = sc ? 40 : 0, oy = sc ? 240 : 0;
+    const int W = 400, cols = sc ? 320 : 400, ox = sc ? 40 : 0, oy = sc && !j->bottomOnly ? 240 : 0;
     uint8_t *Y = j->yuv, *U = Y + W * j->H, *V = U + W * j->H / 4;
     const uint16_t *px = j->px[sc];
     for (int y = 0; y < 240; y += 2) {
@@ -622,7 +626,7 @@ static int produce_picture(PrepJob *j, uint64_t tick, uint64_t recStart)
     j->skipCk = 0;
     const uint64_t t0 = now_us(j);
     for (int sc = 0; sc < 2; sc++)
-        if (s->dirty & (1u << sc) && (sc == 0 || j->both))
+        if (s->dirty & (1u << sc) && SCREEN_SHOWN(j, sc))
             yuv_screen(j, sc);
     s->dirty = 0;
     j->st.yuvMs += ms_since(j, t0);
@@ -753,7 +757,8 @@ static int produce(PrepJob *j)
                 return PREP_ERROR;
             continue;
         }
-        const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME;
+        const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
+                          rh.magic == R3D_MAGIC_QFRAME;
         const uint32_t sc = rh.screen & 0x3F;
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(TOP_N) + 16)
             return produce_end(j);   /* end of valid data */
@@ -767,7 +772,7 @@ static int produce(PrepJob *j)
         s->srcOffset += sizeof(rh) + stored;
         s->lastUs = rh.timeUs > s->lastUs ? rh.timeUs : s->lastUs;
         const uint32_t cols = sc ? 320 : 400, n = sc ? BOT_N : TOP_N;
-        if (rh.cols != cols || (sc == 1 && !j->both))
+        if (rh.cols != cols || !SCREEN_SHOWN(j, sc))
             continue;
         const int key = (rh.screen & R3D_SCREEN_KEY) != 0;
         t0 = now_us(j);
@@ -778,6 +783,12 @@ static int produce(PrepJob *j)
             continue;
         else if (rh.magic == R3D_MAGIC_YFRAME)
             bad = codec_xr32_decode(j->payload, rh.len, j->px[sc], n, key);
+        else if (rh.magic == R3D_MAGIC_QFRAME)
+            bad = codec_q565_decode(j->payload, rh.len, j->px[sc], n);
+        else if (rh.magic == R3D_MAGIC_HFRAME) {
+            static HuffTables tables;   /* one conversion at a time */
+            bad = huff_xr32_decode(j->payload, rh.len, j->px[sc], n, key, &tables);
+        }
         else
             bad = codec_xrle_decode(j->payload, rh.len, j->px[sc], n, key);
         j->st.decodeMs += ms_since(j, t0);
@@ -1388,7 +1399,8 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
     }
     fseek(j->src, 0, SEEK_END);
     const uint64_t srcSize = (uint64_t)ftell(j->src);
-    j->both = j->fh.mode != R3D_MODE_FULL_TOP;
+    j->both = j->fh.mode != R3D_MODE_FULL_TOP && j->fh.mode != R3D_MODE_FULL_BOTTOM;
+    j->bottomOnly = j->fh.mode == R3D_MODE_FULL_BOTTOM;   /* 400 x 240, the bottom screen centred */
     j->H = j->both ? 480 : 240;
     j->fps = j->fh.version >= 3 && j->fh.fps ? j->fh.fps : 30;
     if (j->fps > 60)
@@ -1418,7 +1430,7 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
         j->st.resumedFrom = j->s.videoFrames;
         j->skipCk = 1;   /* the resume point is this very state */
         for (int sc = 0; sc < 2; sc++)
-            if (j->s.seen[sc] && (sc == 0 || j->both))
+            if (j->s.seen[sc] && SCREEN_SHOWN(j, sc))
                 yuv_screen(j, sc);
         if (j->audio && j->s.aacHistFill) {   /* warm the new encoder up; its output is in the file */
             j->aacDiscard = j->s.aacHistFill;

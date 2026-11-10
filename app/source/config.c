@@ -12,7 +12,7 @@ static const char DEFAULTS[] = "; 3DS Recorder settings (read when the recorder 
                                "hotkey=R+SELECT\n"
                                "; fps: 30, 20 or 15\n"
                                "fps=30\n"
-                               "; screens: both or top\n"
+                               "; screens: both, top or bottom\n"
                                "screens=both\n"
                                "; led: pulse, solid or off\n"
                                "led=pulse\n"
@@ -35,7 +35,7 @@ static size_t ReadAll(char *buf, size_t cap)
 void config_load(Config *c)
 {
     c->fps = 30;
-    c->bothScreens = true;
+    c->screens = SCREENS_BOTH;
     c->audio = true;
     c->led = 2;
     snprintf(c->hotkey, sizeof(c->hotkey), "R+SELECT");
@@ -61,7 +61,9 @@ void config_load(Config *c)
             if (fps == 30 || fps == 20 || fps == 15)
                 c->fps = fps;
         } else if (strcasecmp(line, "screens") == 0)
-            c->bothScreens = strcasecmp(v, "top") != 0;
+            c->screens = strcasecmp(v, "top") == 0      ? SCREENS_TOP
+                         : strcasecmp(v, "bottom") == 0 ? SCREENS_BOTTOM
+                                                        : SCREENS_BOTH;
         else if (strcasecmp(line, "audio") == 0)
             c->audio = strcasecmp(v, "off") != 0;
         else if (strcasecmp(line, "led") == 0)

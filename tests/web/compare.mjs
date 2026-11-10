@@ -15,7 +15,7 @@ const file = process.argv[2];
 const conv = join(repo, 'build', 'r3dconv');
 if (!existsSync(conv))
   execFileSync('cc', ['-std=c11', '-O2', '-Wall', '-I' + join(repo, 'codec/include'), '-o', conv,
-    join(repo, 'tools/r3dconv/r3dconv.c'), join(repo, 'codec/source/codec.c'), '-lm']);
+    join(repo, 'tools/r3dconv/r3dconv.c'), join(repo, 'codec/source/codec.c'), join(repo, 'codec/source/huff.c'), '-lm']);
 
 // r3dconv: video on stdout, audio into a wav
 const wav = join(mkdtempSync(join(tmpdir(), 'r3dcmp')), 'a.wav');

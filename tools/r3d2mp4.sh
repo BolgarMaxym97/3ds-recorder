@@ -16,10 +16,11 @@ fi
 if [ ! -x "$CONV" ] || [ "$REPO/tools/r3dconv/r3dconv.c" -nt "$CONV" ] || [ "$REPO/tools/r3dconv/audio_place.h" -nt "$CONV" ] \
     || [ "$REPO/tools/r3dconv/audio_order.h" -nt "$CONV" ] \
     || [ "$REPO/tools/r3dconv/audio_eq.h" -nt "$CONV" ] \
-    || [ "$REPO/codec/include/r3d_format.h" -nt "$CONV" ]; then
+    || [ "$REPO/codec/include/r3d_format.h" -nt "$CONV" ] \
+    || [ "$REPO/codec/source/huff.c" -nt "$CONV" ]; then
     mkdir -p "$REPO/build"
     cc -std=c11 -O2 -Wall -I"$REPO/codec/include" -o "$CONV" \
-        "$REPO/tools/r3dconv/r3dconv.c" "$REPO/codec/source/codec.c" -lm
+        "$REPO/tools/r3dconv/r3dconv.c" "$REPO/codec/source/codec.c" "$REPO/codec/source/huff.c" -lm
 fi
 
 # Pass 1: summary (first stderr line "WxH fps") and the audio track.

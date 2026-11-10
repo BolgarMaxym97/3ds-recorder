@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "codec.h"
+#include "huff.h"
 #include "r3d_format.h"
 #include "recorder.h"
 
@@ -90,7 +91,8 @@ static bool read_at(Handle f, u64 off, void *buf, u32 len)
 static bool plausible(const R3dRecHeader *h)
 {
     const u32 m = h->magic;
-    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_XFRAME || m == R3D_MAGIC_FRAME || m == R3D_MAGIC_AUDIO) &&
+    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_XFRAME ||
+            m == R3D_MAGIC_FRAME || m == R3D_MAGIC_AUDIO) &&
            h->len < MAX_RECORD && (h->screen & 0x3F) <= R3D_STREAM_AUDIO && h->timeUs < 6u * 3600u * 1000000u;
 }
 
@@ -106,6 +108,7 @@ static void read_info(GalItem *it)
         it->readable = true;
         it->fps = fh.fps;
         it->both = fh.mode == R3D_MODE_FULL_BOTH;
+        it->bottomOnly = fh.mode == R3D_MODE_FULL_BOTTOM;
         it->audio = fh.audioRate != 0;
     }
     struct {
@@ -158,7 +161,7 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
             off += h.len;
             continue;
         }
-        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_XFRAME;
+        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_XFRAME;
         const u32 sc = h.screen & 0x3F;
         if ((m != R3D_MAGIC_FRAME && !delta) || sc > 1 || h.len > MAX_RECORD)
             break;
@@ -176,6 +179,12 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
                         memcpy(frame, payload, words * 2);
                 } else if (m == R3D_MAGIC_YFRAME)
                     bad = codec_xr32_decode(payload, h.len, frame, words, 1);
+                else if (m == R3D_MAGIC_QFRAME)
+                    bad = codec_q565_decode(payload, h.len, frame, words);
+                else if (m == R3D_MAGIC_HFRAME) {
+                    static HuffTables tables;   /* the gallery's thread only */
+                    bad = huff_xr32_decode(payload, h.len, frame, words, 1, &tables);
+                }
                 else
                     bad = codec_xrle_decode(payload, h.len, frame, words, 1);
             }
@@ -191,10 +200,12 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
     return found;
 }
 
+static int g_thumbScreen;   /* the screen the list thumbnail shows (1: a bottom-screen-only recording) */
+
 static void got_preview(int screen, const u16 *frame, void *thumb)
 {
     to_texture(frame, screen == 0 ? 400 : 320, g_work[screen]);
-    if (screen == 0 && thumb)
+    if (screen == g_thumbScreen && thumb)
         to_thumb(frame, thumb, GAL_THUMB_W, GAL_THUMB_H, 8);
 }
 
@@ -205,9 +216,10 @@ static void got_thumb(int screen, const u16 *frame, void *thumb)
 }
 
 /* The selected recording: g_work[0] / [1] (tiled) and its list thumbnail. */
-static int read_frames(const char *name, bool both, u16 *thumb)
+static int read_frames(const char *name, int want, u16 *thumb)
 {
-    return scan_keys(name, both ? 3 : 1, g_frame, got_preview, thumb);
+    g_thumbScreen = want == 2 ? 1 : 0;
+    return scan_keys(name, want, g_frame, got_preview, thumb);
 }
 
 static void got_last(int screen, const u16 *frame, void *thumb)
@@ -219,7 +231,8 @@ static void got_last(int screen, const u16 *frame, void *thumb)
 bool gal_last_thumb(const char *name, u16 *thumb)
 {
     u16 *frame = malloc(400 * 240 * 2);
-    const bool ok = frame && scan_keys(name, 1, frame, got_last, thumb) == 1;
+    const bool ok = frame && (scan_keys(name, 1, frame, got_last, thumb) == 1 ||
+                              scan_keys(name, 2, frame, got_last, thumb) == 2);   /* bottom screen only */
     free(frame);
     return ok;
 }
@@ -310,21 +323,22 @@ static bool do_delete(void)
 static bool do_preview(void)
 {
     char name[32];
-    bool both = false;
+    int want = 1;   /* screens to read: bit 0 top, bit 1 bottom */
     LightLock_Lock(&g_lock);
     const bool need = g_want[0] && strcmp(g_want, g_preview.name) != 0;
     snprintf(name, sizeof(name), "%s", g_want);
     GalItem *it = need ? find(name) : NULL;
     if (it)
-        both = !it->info || it->both;
+        want = !it->info || it->both ? 3 : it->bottomOnly ? 2 : 1;
     LightLock_Unlock(&g_lock);
     if (!need)
         return false;
     u16 *thumb = malloc(GAL_THUMB_W * GAL_THUMB_H * 2);
-    const int got = it ? read_frames(name, both, thumb) : 0;
+    const int got = it ? read_frames(name, want, thumb) : 0;
+    const int primary = want == 2 ? 2 : 1;   /* the screen the thumbnail comes from */
     LightLock_Lock(&g_lock);
     snprintf(g_preview.name, sizeof(g_preview.name), "%s", name);
-    g_preview.ok = got & 1;
+    g_preview.ok = (got & primary) != 0;
     g_preview.hasBottom = (got & 2) != 0;
     for (int s = 0; s < 2; s++) { /* the decoded buffers become the shown ones */
         u16 *shown = s ? g_preview.bottom : g_preview.top;
@@ -336,7 +350,7 @@ static bool do_preview(void)
     }
     g_preview.version++;
     it = find(name);
-    if (it && (got & 1) && !it->thumb) {
+    if (it && (got & primary) && !it->thumb) {
         it->thumb = thumb;
         thumb = NULL;
         g_list.version++;
@@ -377,6 +391,7 @@ static bool do_next_item(void)
             it->ended = copy.ended;
             it->audio = copy.audio;
             it->both = copy.both;
+            it->bottomOnly = copy.bottomOnly;
             it->fps = copy.fps;
             it->durationMs = copy.durationMs;
             it->dropped = copy.dropped;

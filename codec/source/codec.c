@@ -420,6 +420,34 @@ size_t codec_xr32_encode_strided_v(uint16_t *prev, const uint8_t *src, uint32_t 
     }
 }
 
+size_t codec_xr32_encode_conv(uint16_t *prev, const uint8_t *src, uint32_t src_cols, uint32_t src_rows,
+                              uint32_t src_stride, uint32_t fmt,
+                              int (*conv)(uint16_t *dst, const uint8_t *src, uint32_t fmt, uint32_t rows),
+                              int keyframe, uint8_t *out)
+{
+    uint32_t tmp[128];   /* one column: up to 256 pixels */
+    uint32_t *p = (uint32_t *)(void *)prev;
+    const uint32_t pairs = src_rows / 2;
+    if (src_rows > 256)
+        return 0;
+    if (keyframe) {
+        memset(p, 0, (size_t)src_cols * src_rows * 2);
+    }
+    xr32_state_t s = { (uint16_t *)(void *)out, NULL, 0, 0 };
+    uint32_t sink = 0;
+    for (uint32_t c = 0; c < src_cols; c++) {
+        if (!conv((uint16_t *)(void *)tmp, src + (size_t)c * src_stride, fmt, src_rows))
+            return 0;
+        xr32_column(&s, (const uint8_t *)tmp, p, pairs, 1, 1, &sink);
+        p += pairs;
+    }
+    xr32_flush_zero(&s);
+    if (s.lit) {
+        xr32_close_literal(&s);
+    }
+    return (size_t)((uint8_t *)s.o - out);
+}
+
 size_t codec_xr32_encode_strided(uint16_t *prev, const uint8_t *src, uint32_t src_cols, uint32_t src_rows,
                                  uint32_t src_stride, uint32_t step, int keyframe, uint8_t *out)
 {
@@ -496,4 +524,137 @@ int codec_tiles_decode(const uint8_t *in, size_t in_size, uint16_t *frame, uint3
         }
     }
     return p == end ? 0 : -1;
+}
+
+/* -------------------------------------------------------------------- Q565 */
+
+#define Q565_RAW 0xFEu
+
+static inline uint32_t q565_hash(uint32_t px) { return (px * 0x9E3779B1u) >> 26; }
+
+size_t codec_q565_encode(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out,
+                         size_t cap)
+{
+    uint16_t index[64];
+    memset(index, 0, sizeof(index));
+    uint8_t *o = out;
+    uint8_t *const limit = out + (cap >= 4 ? cap - 4 : 0);   /* room for a run flush and the largest op */
+    uint32_t prev = 0, run = 0;
+    if (cap < 4)
+        return 0;
+    for (uint32_t c = 0; c < cols; c++) {
+        const uint16_t *col = (const uint16_t *)(src + (size_t)c * stride);
+        for (uint32_t r = 0; r < rows; r++) {
+            const uint32_t v = col[r];
+            if (v == prev) {
+                if (++run == 62) {
+                    if (o >= out + cap)
+                        return 0;
+                    *o++ = (uint8_t)(0xC0u | 61u);
+                    run = 0;
+                }
+                continue;
+            }
+            if (o > limit)
+                return 0;
+            if (run) {
+                *o++ = (uint8_t)(0xC0u | (run - 1));
+                run = 0;
+            }
+            const uint32_t h = q565_hash(v);
+            if (index[h] == v) {
+                *o++ = (uint8_t)h;
+            } else {
+                index[h] = (uint16_t)v;
+                /* channel differences, wrapped (the decoder adds them back modulo 32 / 64) */
+                const uint32_t dr = ((v >> 11) - (prev >> 11)) & 31u, dg = (((v >> 5) & 63u) - ((prev >> 5) & 63u)) & 63u,
+                               db = ((v & 31u) - (prev & 31u)) & 31u;
+                const uint32_t ur = (dr + 2u) & 31u, ug = (dg + 2u) & 63u, ub = (db + 2u) & 31u;
+                const uint32_t gb = (dg + 32u) & 63u;    /* LUMA's g field: dg + 32 */
+                const uint32_t half = (gb >> 1) - 16u;   /* floor(dg / 2), wrapped */
+                const uint32_t lr = (dr - half + 8u) & 31u, lb = (db - half + 8u) & 31u;
+                if ((ur | ub) < 4u && ug < 4u)
+                    *o++ = (uint8_t)(0x40u | ur << 4 | ug << 2 | ub);
+                else if ((lr | lb) < 16u) {
+                    o[0] = (uint8_t)(0x80u | gb);
+                    o[1] = (uint8_t)(lr << 4 | lb);
+                    o += 2;
+                } else {
+                    o[0] = Q565_RAW;
+                    o[1] = (uint8_t)v;
+                    o[2] = (uint8_t)(v >> 8);
+                    o += 3;
+                }
+            }
+            prev = v;
+        }
+    }
+    if (run) {
+        if (o >= out + cap)
+            return 0;
+        *o++ = (uint8_t)(0xC0u | (run - 1));
+    }
+    return (size_t)(o - out);
+}
+
+int codec_q565_decode(const uint8_t *in, size_t in_size, uint16_t *frame, size_t n)
+{
+    uint16_t index[64];
+    memset(index, 0, sizeof(index));
+    uint32_t prev = 0;
+    size_t pos = 0, i = 0;
+    while (i < n) {
+        if (pos >= in_size)
+            return -1;
+        const uint32_t b = in[pos++];
+        if (b == Q565_RAW) {
+            if (pos + 2 > in_size)
+                return -1;
+            prev = in[pos] | (uint32_t)in[pos + 1] << 8;
+            pos += 2;
+            index[q565_hash(prev)] = (uint16_t)prev;
+        } else if ((b & 0xC0u) == 0xC0u) {
+            const uint32_t k = (b & 0x3Fu) + 1;
+            if (i + k > n)
+                return -1;
+            for (uint32_t j = 0; j < k; j++)
+                frame[i + j] = (uint16_t)prev;
+            i += k;
+            continue;
+        } else if ((b & 0xC0u) == 0x00u) {
+            prev = index[b];
+        } else {
+            int sr, sg, sb;
+            if ((b & 0xC0u) == 0x40u) {
+                sr = (int)((b >> 4) & 3u) - 2;
+                sg = (int)((b >> 2) & 3u) - 2;
+                sb = (int)(b & 3u) - 2;
+            } else {
+                if (pos >= in_size)
+                    return -1;
+                const uint32_t b2 = in[pos++];
+                sg = (int)(b & 0x3Fu) - 32;
+                const int half = (sg + 32) / 2 - 16;
+                sr = (int)(b2 >> 4) - 8 + half;
+                sb = (int)(b2 & 15u) - 8 + half;
+            }
+            const uint32_t r = ((prev >> 11) + (uint32_t)sr) & 31u, g = (((prev >> 5) & 63u) + (uint32_t)sg) & 63u,
+                           bl = ((prev & 31u) + (uint32_t)sb) & 31u;
+            prev = r << 11 | g << 5 | bl;
+            index[q565_hash(prev)] = (uint16_t)prev;
+        }
+        frame[i++] = (uint16_t)prev;
+    }
+    return pos == in_size ? 0 : -1;
+}
+
+uint32_t codec_changed_pct(const uint16_t *prev, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride)
+{
+    uint32_t seen = 0, changed = 0;
+    for (uint32_t c = 0; c < cols; c += 4) {
+        const uint16_t *col = (const uint16_t *)(src + (size_t)c * stride), *p = prev + (size_t)c * rows;
+        for (uint32_t r = 3; r < rows; r += 8, seen++)
+            changed += col[r] != p[r];
+    }
+    return seen ? changed * 100u / seen : 0;
 }

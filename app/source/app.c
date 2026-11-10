@@ -52,7 +52,11 @@ static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 #define HELP_TOPICS 7
 static Rect help_row(int i) { return (Rect){12, 40 + i * 28.0f, 296, 25}; }   /* 7 topics: down to y 233 */
 
-#define MB_PER_MIN_BOTH_30 128u /* measured on O3DS (v10, 2026-11-03): 2.1 MB/s, both screens, 30 fps */
+/* A 3D game at 30 fps fills what the SD card takes: ~5.4 MB/s while writing, both screens or the top
+   one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
+   paused whenever the card was behind). Menus and 2D games take much less: the estimate is the
+   worst case. */
+#define MB_PER_MIN_BOTH_30 320u
 
 /* ------------------------------------------------------------------ state */
 
@@ -526,7 +530,7 @@ static bool row_seg(const App *a, int row, Seg *g)
         *g = (Seg){{FPS_LABEL[0], FPS_LABEL[1], FPS_LABEL[2]}, 3, fps_index(a), -1};
         return true;
     case ROW_SCREENS:
-        *g = (Seg){{T(S_BOTH), T(S_TOP), NULL}, 2, a->cfg.bothScreens ? 0 : 1, -1};
+        *g = (Seg){{T(S_BOTH), T(S_TOP), T(S_BOTTOM)}, 3, a->cfg.screens, -1};
         return true;
     case ROW_LED:
         *g = (Seg){{T(S_LED_PULSE), T(S_LED_SOLID), T(S_LED_OFF)}, 3, a->cfg.led == 2 ? 0 : a->cfg.led == 1 ? 1 : 2, -1};
@@ -549,8 +553,10 @@ static void choose(App *a, int row, int opt)
         }
         break;
     case ROW_SCREENS:
-        if ((opt == 0) != a->cfg.bothScreens)
-            apply_setting(a, "screens", opt == 0 ? "both" : "top");
+        if (opt != a->cfg.screens) {
+            static const char *const V[3] = {"both", "top", "bottom"};
+            apply_setting(a, "screens", V[opt]);
+        }
         break;
     case ROW_LED: {
         static const char *const V[3] = {"pulse", "solid", "off"};
@@ -1269,11 +1275,16 @@ static void format_name(char *buf, size_t cap, const char *name)
         snprintf(buf, cap, "%s %d, %04d · %02d:%02d", MON[mo - 1], d, y, h, mi);
 }
 
+/* the top screen alone still fills the card in 3D; the bottom one alone takes about half of it */
+static u32 mb_per_min(const App *a)
+{
+    const u32 perMin = MB_PER_MIN_BOTH_30 * (u32)a->cfg.fps / 30u;
+    return a->cfg.screens == SCREENS_BOTTOM ? perMin / 2 : perMin;
+}
+
 static u32 minutes_left(const App *a)
 {
-    u32 perMin = MB_PER_MIN_BOTH_30 * (u32)a->cfg.fps / 30u;
-    if (!a->cfg.bothScreens)
-        perMin = perMin * 6 / 10;
+    const u32 perMin = mb_per_min(a);
     return perMin ? a->sdFreeMb / perMin : 0;
 }
 
@@ -1349,7 +1360,7 @@ static void draw_panel_top(App *a)
         snprintf(fps, sizeof(fps), "%d fps", a->cfg.fps);
         stat_card(14, y, w, T(S_PROFILE), T(S_PROFILE_STD), "XR32");
         stat_card(14 + (w + 7), y, w, T(S_FPS), fps, T(S_TARGET));
-        stat_card(14 + 2 * (w + 7), y, w, T(S_SCREENS), T(a->cfg.bothScreens ? S_BOTH : S_TOP),
+        stat_card(14 + 2 * (w + 7), y, w, T(S_SCREENS), T(a->cfg.screens == SCREENS_BOTH ? S_BOTH : a->cfg.screens == SCREENS_TOP ? S_TOP : S_BOTTOM),
                   T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
         stat_card(14 + 3 * (w + 7), y, w, T(S_SD_FREE), v, s);
         ui_card(14, 120, 372, 106, 8, COL_SURFACE);
@@ -1522,25 +1533,24 @@ static void draw_guide_bottom(App *a)
     button(GD_NEXT, T(pg + 1 < GUIDE_PAGES ? S_GUIDE_NEXT : S_GUIDE_DONE), 1, true);
 }
 
-static u32 mb_per_min(const App *a)
-{
-    const u32 perMin = MB_PER_MIN_BOTH_30 * (u32)a->cfg.fps / 30u;
-    return a->cfg.bothScreens ? perMin : perMin * 6 / 10;
-}
 
 static void draw_settings_top(App *a)
 {
     char v[48], note[220], s1[32], s2[32], s3[32];
     ui_text(14, 13, 9, FONT_REG, COL_MUTED, T(S_FRAME_IN_FILE));
-    ui_frame(14, 28, 104, a->cfg.bothScreens ? 122 : 64, 6, 1, COL_FAINT);
-    ui_rrect(19, 33, 94, 54, 4, COL_INFO_BG);
-    ui_text_center(66, 53, 8, FONT_BOLD, COL_SOFT, T(S_TOP_BOX));
-    if (a->cfg.bothScreens) {
-        ui_rrect(28, 91, 76, 54, 4, COL_INFO_BG);
-        ui_text_center(66, 111, 8, FONT_BOLD, COL_SOFT, T(S_BOTTOM_BOX));
+    const bool both = a->cfg.screens == SCREENS_BOTH;
+    ui_frame(14, 28, 104, both ? 122 : 64, 6, 1, COL_FAINT);
+    if (a->cfg.screens != SCREENS_BOTTOM) {
+        ui_rrect(19, 33, 94, 54, 4, COL_INFO_BG);
+        ui_text_center(66, 53, 8, FONT_BOLD, COL_SOFT, T(S_TOP_BOX));
+    }
+    if (a->cfg.screens != SCREENS_TOP) {
+        const float y = both ? 91 : 33;
+        ui_rrect(28, y, 76, 54, 4, COL_INFO_BG);
+        ui_text_center(66, y + 20, 8, FONT_BOLD, COL_SOFT, T(S_BOTTOM_BOX));
     }
     snprintf(v, sizeof(v), "%d fps · %s", a->cfg.fps, T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
-    ui_text_center(66, a->cfg.bothScreens ? 156 : 98, 9, FONT_BOLD, COL_TEXT, v);
+    ui_text_center(66, both ? 156 : 98, 9, FONT_BOLD, COL_TEXT, v);
     ui_text(132, 13, 15, FONT_BOLD, COL_TEXT, T(S_FILE_TITLE));
     const u32 perMin = mb_per_min(a);
     const float w = (254 - 6) / 2.0f;
@@ -1698,9 +1708,13 @@ static void draw_gallery_top(App *a)
     const GalItem *it = &l->items[a->galSel];
     const bool mine = strcmp(p->name, it->name) == 0 && g_galTexOk;
     const bool failed = mine && !p->ok;
-    frame_box(12, 14, 150, 90, &g_galTex[0], 400, mine && p->ok, failed);
-    if (!it->info || it->both)
-        frame_box(27, 112, 120, 90, &g_galTex[1], 320, mine && p->hasBottom, failed || (mine && !p->hasBottom));
+    if (it->info && it->bottomOnly)   /* the bottom screen in the top one's place */
+        frame_box(27, 14, 120, 90, &g_galTex[1], 320, mine && p->hasBottom, failed || (mine && !p->hasBottom));
+    else {
+        frame_box(12, 14, 150, 90, &g_galTex[0], 400, mine && p->ok, failed);
+        if (!it->info || it->both)
+            frame_box(27, 112, 120, 90, &g_galTex[1], 320, mine && p->hasBottom, failed || (mine && !p->hasBottom));
+    }
     if (failed)
         ui_text_center(87, 54, 9, FONT_REG, COL_MUTED, T(S_UNREADABLE));
 
@@ -1724,7 +1738,7 @@ static void draw_gallery_top(App *a)
         stat_card(x, 118, w, T(S_PROFILE), prof, NULL);
         stat_card(x + w + 6, 118, w, T(S_DROPPED), drop, NULL);
         snprintf(buf, sizeof(buf), "%s · %s", T(it->audio ? S_WITH_SOUND : S_NO_SOUND),
-                 T(it->both ? S_BOTH_SCREENS : S_TOP_SCREEN));
+                 T(it->both ? S_BOTH_SCREENS : it->bottomOnly ? S_BOTTOM_SCREEN : S_TOP_SCREEN));
         ui_text(x, 176, 9, FONT_REG, COL_SOFT, buf);
         if (!it->ended) { /* cut off (power, a crash): hard to miss */
             ui_card(x, 188, 212, 25, 6, COL_WARN_BG);
@@ -1765,6 +1779,8 @@ static void draw_player_top(App *a)
     ui_rect(0, 0, TOP_W, SCREEN_H, RGBA(0, 0, 0, 0xFF));
     if (shown & 1)
         ui_tex_screen(&g_plTex[0], 400, 200, 120);
+    else if (player_bottom_only())
+        ui_text_center(200, 110, 10, FONT_REG, COL_FAINT, T(S_PL_BOTTOM_ONLY));
     else
         ui_spinner(200, 120, 14, COL_FAINT);
     if (player_controls(a) && player_file_audio() && !player_has_audio())
@@ -2088,7 +2104,7 @@ static void draw_gallery_bottom(App *a)
 static void draw_player_bottom(App *a)
 {
     ui_rect(0, 0, BOTTOM_W, SCREEN_H, RGBA(0, 0, 0, 0xFF));
-    if (player_both()) {
+    if (player_both() || player_bottom_only()) {
         /* the texture was filled on the top screen's pass (player_present) */
         ui_tex_screen(&g_plTex[1], 320, 160, 120);
     } else

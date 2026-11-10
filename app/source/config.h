@@ -11,9 +11,11 @@
 
 #define CONFIG_PATH "sdmc:/3ds/recorder/config.ini"
 
+enum { SCREENS_BOTH, SCREENS_TOP, SCREENS_BOTTOM };
+
 typedef struct {
     int fps;          /* 30, 20, 15 */
-    bool bothScreens;
+    int screens;      /* SCREENS_* */
     bool audio;
     int led;          /* 0 off, 1 solid, 2 pulse */
     char hotkey[48];  /* as written, e.g. R+SELECT */

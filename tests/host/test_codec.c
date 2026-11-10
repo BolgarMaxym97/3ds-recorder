@@ -102,6 +102,65 @@ static size_t xr32_reference(const uint16_t *p, const uint16_t *c, size_t n, uin
     return (size_t)(o - out);
 }
 
+/* Q565: round trip from a strided source (column stride larger than the column), every op kind */
+static void q565_roundtrip(const uint16_t *pix, uint32_t cols, uint32_t rows, const char *name)
+{
+    const uint32_t stride = rows * 2 + 32;
+    uint8_t *src = calloc(cols, stride);
+    for (uint32_t c = 0; c < cols; c++)
+        memcpy(src + c * stride, pix + c * rows, rows * 2);
+    const size_t cap = (size_t)cols * rows * 3 + 16;
+    uint8_t *enc = malloc(cap);
+    uint16_t *dec = malloc((size_t)cols * rows * 2);
+    const size_t len = codec_q565_encode(src, cols, rows, stride, enc, cap);
+    CHECK(len > 0);
+    if (codec_q565_decode(enc, len, dec, (size_t)cols * rows) != 0 || memcmp(dec, pix, (size_t)cols * rows * 2) != 0) {
+        fprintf(stderr, "q565 %s: round trip failed\n", name);
+        failures++;
+    }
+    /* too little room: refused, not overrun */
+    if (len > 8)
+        CHECK(codec_q565_encode(src, cols, rows, stride, enc, len - 1) == 0);
+    /* cut short or with junk after it: an error */
+    CHECK(codec_q565_decode(enc, len - 1, dec, (size_t)cols * rows) != 0);
+    free(src);
+    free(enc);
+    free(dec);
+}
+
+static void q565_tests(void)
+{
+    static uint16_t pix[N];
+    for (int i = 0; i < N; i++)   /* random: RAW */
+        pix[i] = rnd16();
+    q565_roundtrip(pix, COLS, ROWS, "random");
+    memset(pix, 0, sizeof(pix));   /* black: runs (over 62), the initial pixel */
+    q565_roundtrip(pix, COLS, ROWS, "black");
+    for (int i = 0; i < N; i++)   /* smooth gradient: DIFF and LUMA, wrapping channels */
+        pix[i] = (uint16_t)(((i / 7) & 31) << 11 | ((i * 3) & 63) << 5 | ((31 - i / 5) & 31));
+    q565_roundtrip(pix, COLS, ROWS, "gradient");
+    for (int i = 0; i < N; i++)   /* a few colours again and again: INDEX */
+        pix[i] = (uint16_t)(0x1234u * (uint32_t)(rnd16() % 5));
+    q565_roundtrip(pix, COLS, ROWS, "palette");
+    for (int t = 0; t < 200; t++) {   /* mixed noise */
+        for (int i = 0; i < N; i++)
+            pix[i] = (rnd16() & 7) ? (uint16_t)(pix[i ? i - 1 : 0] + (rnd16() % 3) * 0x0821u) : rnd16();
+        q565_roundtrip(pix, COLS, ROWS, "mixed");
+    }
+    /* damaged streams never crash */
+    for (int i = 0; i < N; i++)
+        pix[i] = (uint16_t)(i * 37);
+    uint8_t enc[N * 3 + 16];
+    uint16_t dec[N];
+    const size_t len = codec_q565_encode((const uint8_t *)pix, COLS, ROWS, ROWS * 2, enc, sizeof(enc));
+    for (int t = 0; t < 2000; t++) {
+        uint8_t d[sizeof(enc)];
+        memcpy(d, enc, len);
+        d[rnd16() % len] ^= (uint8_t)(1 + rnd16() % 255);
+        (void)codec_q565_decode(d, len, dec, N);
+    }
+}
+
 static void both(const uint16_t *p, const uint16_t *c, const char *name)
 {
     xrle_roundtrip(p, c, name);
@@ -110,6 +169,7 @@ static void both(const uint16_t *p, const uint16_t *c, const char *name)
 
 int main(void)
 {
+    q565_tests();
     for (int i = 0; i < N; i++) {
         prev[i] = rnd16();
     }

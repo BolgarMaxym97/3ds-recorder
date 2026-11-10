@@ -7,6 +7,7 @@
 #include "audio_eq.h"
 #include "audio_place.h"
 #include "codec.h"
+#include "huff.h"
 #include "r3d_format.h"
 #include "recorder.h"
 
@@ -20,11 +21,11 @@
 #define AUDIO_PAD_LAG_US 200000u     /* a video record this far past the sound: silence up to it */
 #define WAVE_BUFS 28                 /* ~0.87 s: more than LEAD_US, so writing sound never waits */
 #define WAVE_SAMPLES 1024            /* stereo samples per DSP buffer (~31 ms) */
-#define SEEK_EARLY_US 1100000u       /* land this much before the target (a top keyframe every ~1 s) */
+#define SEEK_EARLY_US 2100000u       /* land this much before the target (a top keyframe every ~2 s; ~1 s before 0.10) */
 #define SEEK_WINDOW_US 600000u       /* ... or up to this much earlier: the scan to the target is short */
-#define KEY_NEAR_US 1700000u         /* a known keyframe this close before the target: start there */
-#define KEYS_MAX 16384               /* keyframes remembered per screen (top: ~1 a second) */
-#define CHAIN_MAX 64                 /* frames decoded per screen to reach the target (keys: every 30) */
+#define KEY_NEAR_US 3200000u         /* a known keyframe this close before the target: start there */
+#define KEYS_MAX 16384               /* keyframes remembered per screen (top: one every ~2 s) */
+#define CHAIN_MAX 128                /* frames decoded per screen to reach the target (keys: every 60) */
 #define FIND_BLOCK (256u << 10)
 #define HOP_BLOCK (32u << 10)
 
@@ -83,6 +84,8 @@ static u64 g_wallStart;              /* osGetTime() at that point (no sound), pa
 static u64 g_pausedAt;
 static bool g_paused, g_ended;
 static u32 g_framesShown, g_framesSkipped; /* pictures published / not (no free slot), for app.log */
+static u32 g_audioStarved;
+static bool g_audioFresh = true;           /* no sound queued since the start or a seek */                 /* sound buffers queued with the DSP's queue already empty (a gap heard) */
 static u32 g_lastVideoUs;            /* the latest frame read: the sound is padded to it at the end */
 static int g_shown;                  /* screens with a picture in their texture */
 static volatile s64 g_seekTo = -1;   /* requested by the UI, done by the thread */
@@ -134,13 +137,18 @@ static bool plausible(const R3dRecHeader *h)
         return h->len <= (1u << 20);
     if (m == R3D_MAGIC_AUDIO)
         return h->len <= 4096 && h->cols == 160;
-    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_XFRAME || m == R3D_MAGIC_FRAME) && h->len <= MAX_RECORD &&
+    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_XFRAME ||
+            m == R3D_MAGIC_FRAME) &&
+           h->len <= MAX_RECORD &&
            (h->screen & 0x3F) <= 1 && (h->cols == 400 || h->cols == 320);
 }
 
 static u32 stored_len(const R3dRecHeader *h)
 {
-    return h->magic == R3D_MAGIC_YFRAME || h->magic == R3D_MAGIC_XFRAME ? (h->len + 15) & ~15u : h->len;
+    return h->magic == R3D_MAGIC_YFRAME || h->magic == R3D_MAGIC_HFRAME || h->magic == R3D_MAGIC_QFRAME ||
+                       h->magic == R3D_MAGIC_XFRAME
+               ? (h->len + 15) & ~15u
+               : h->len;
 }
 
 /* ------------------------------------------------------------------ clock and sound */
@@ -201,6 +209,10 @@ static void audio_flush(void)
     w->nsamples = (u32)g_fillN;
     DSP_FlushDataCache(w->data_pcm16, (u32)g_fillN * 4);
     LightLock_Lock(&g_lock);
+    audio_reap();
+    if (g_queued == 0 && !g_audioFresh)
+        g_audioStarved++;
+    g_audioFresh = false;
     ndspChnWaveBufAdd(0, w);
     g_queued++;
     LightLock_Unlock(&g_lock);
@@ -285,6 +297,7 @@ static void audio_reset(u32 atUs)
     for (int i = 0; i < WAVE_BUFS; i++)
         g_wave[i].status = NDSP_WBUF_FREE;
     g_fillBuf = g_fillN = g_oldest = g_queued = 0;
+    g_audioFresh = true;   /* the next buffer starts the sound again: not a gap */
     g_doneSamples = 0;
     g_baseUs = atUs;
     g_wallStart = osGetTime();
@@ -331,6 +344,12 @@ static void video_frame(const R3dRecHeader *h, const u8 *payload, bool publish)
             memcpy(g_cur[sc], payload, words * 2);
     } else if (h->magic == R3D_MAGIC_YFRAME)
         bad = codec_xr32_decode(payload, h->len, g_cur[sc], words, key);
+    else if (h->magic == R3D_MAGIC_QFRAME)
+        bad = codec_q565_decode(payload, h->len, g_cur[sc], words);
+    else if (h->magic == R3D_MAGIC_HFRAME) {
+        static HuffTables tables;   /* the player's thread only */
+        bad = huff_xr32_decode(payload, h->len, g_cur[sc], words, key, &tables);
+    }
     else
         bad = codec_xrle_decode(payload, h->len, g_cur[sc], words, key);
     if (bad) {
@@ -744,7 +763,7 @@ bool player_start(const char *name, u32 durationMs)
 
     /* sound: needs the DSP firmware (sdmc:/3ds/dspfirm.cdc, from DSP1); without it, video only */
     g_audio = false;
-    g_framesShown = g_framesSkipped = 0;
+    g_framesShown = g_framesSkipped = g_audioStarved = 0;
     Result ndspRc = 0;
     g_ndspOk = g_hdr.audioRate && R_SUCCEEDED(ndspRc = ndspInit());
     if (g_hdr.audioRate && !g_ndspOk) /* most often no sdmc:/3ds/dspfirm.cdc */
@@ -782,8 +801,9 @@ bool player_start(const char *name, u32 durationMs)
 void player_stop(void)
 {
     if (g_thread)
-        app_log("player: %lu pictures shown, %lu skipped (screen behind), sound %s", (unsigned long)g_framesShown,
-                (unsigned long)g_framesSkipped, g_ndspOk ? "on" : "off");
+        app_log("player: %lu pictures shown, %lu skipped (screen behind), sound %s, sound ran dry %lu times",
+                (unsigned long)g_framesShown, (unsigned long)g_framesSkipped, g_ndspOk ? "on" : "off",
+                (unsigned long)g_audioStarved);
     if (g_thread) {
         g_quit = true;
         LightEvent_Signal(&g_wake);
@@ -872,6 +892,7 @@ bool player_muted(void) { return g_muted; }
 bool player_has_audio(void) { return g_audio; }
 bool player_file_audio(void) { return g_hdr.audioRate != 0; }
 bool player_both(void) { return g_hdr.mode == R3D_MODE_FULL_BOTH; }
+bool player_bottom_only(void) { return g_hdr.mode == R3D_MODE_FULL_BOTTOM; }
 u32 player_duration_ms(void) { return g_durationMs; }
 
 u32 player_time_ms(void)

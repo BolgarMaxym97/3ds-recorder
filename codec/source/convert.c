@@ -60,6 +60,18 @@ static void col_rgba4(uint16_t *d, const uint8_t *s, uint32_t rows, uint32_t ste
     }
 }
 
+int fb_column_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format, uint32_t rows)
+{
+    switch (format & 7u) {
+    case FB_RGBA8:  col_rgba8(dst, src, rows, 1);  return 1;
+    case FB_BGR8:   col_bgr8(dst, src, rows, 1);   return 1;
+    case FB_RGB565: col_rgb565(dst, src, rows, 1); return 1;
+    case FB_RGB5A1: col_rgb5a1(dst, src, rows, 1); return 1;
+    case FB_RGBA4:  col_rgba4(dst, src, rows, 1);  return 1;
+    default:        return 0;
+    }
+}
+
 uint32_t fb_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format,
                       uint32_t cols, uint32_t rows, uint32_t stride, uint32_t step)
 {

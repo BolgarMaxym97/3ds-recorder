@@ -21,6 +21,8 @@ tests/host/test_audio
 tests/host/test_bench
 tests/host/test_codec
 tests/host/test_convert
+tests/host/test_fused
+tests/host/test_huff
 tools/azahar/azwin
 tools/codecsim/codecsim
 tools/r3dconv/r3dconv

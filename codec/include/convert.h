@@ -34,6 +34,9 @@ enum {
 uint32_t fb_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format,
                       uint32_t cols, uint32_t rows, uint32_t stride, uint32_t step);
 
+/* One column of `rows` pixels to RGB565 (step 1). Returns 0 for an unknown format. */
+int fb_column_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format, uint32_t rows);
+
 static inline uint32_t fb_out_bytes(uint32_t cols, uint32_t rows, uint32_t step)
 {
     return (cols / step) * (rows / step) * 2u;

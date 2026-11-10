@@ -65,10 +65,53 @@ int    codec_xr32_decode(const uint8_t *in, size_t in_size, uint16_t *frame, siz
  */
 size_t codec_xr32_encode_strided(uint16_t *prev, const uint8_t *src, uint32_t src_cols, uint32_t src_rows,
                                  uint32_t src_stride, uint32_t step, int keyframe, uint8_t *out);
+/*
+ * The same stream from a framebuffer in another format (BGR8, RGBA8...): each column is converted
+ * into a 240-pixel buffer that stays in the cache and encoded from there, instead of converting the
+ * whole frame first (a pass over the frame through main memory). conv(dst, column, rows, fmt)
+ * converts one column (convert.h fb_column_to_rgb565). rows <= 256, even.
+ */
+size_t codec_xr32_encode_conv(uint16_t *prev, const uint8_t *src, uint32_t src_cols, uint32_t src_rows,
+                              uint32_t src_stride, uint32_t fmt,
+                              int (*conv)(uint16_t *dst, const uint8_t *src, uint32_t fmt, uint32_t rows),
+                              int keyframe, uint8_t *out);
 /* Same stream; variant = memory hint at step 1: 0 none, 1 PLD, 2 touch-ahead loads (bench picks the fastest). */
 #define CODEC_XR32_VARIANTS 3
 size_t codec_xr32_encode_strided_v(uint16_t *prev, const uint8_t *src, uint32_t src_cols, uint32_t src_rows,
                                    uint32_t src_stride, uint32_t step, int keyframe, int variant, uint8_t *out);
+
+/*
+ * Q565 (R3DQ records): one frame on its own, no reference, for pictures that change all over
+ * (3D with a moving camera), where XR32 against the last frame saved almost nothing: Mario Kart
+ * 7's top screen took 69% of its XR32 bytes with Q565 used for frames where over 40% of the
+ * pixels changed, Smash 77%, menus 52% (O3DS recordings, 2026-11-09). A byte format after the
+ * public QOI idea, made for RGB565; pixels in stored order (column by column, `rows` each).
+ * Ops, by the first byte:
+ *   00iiiiii           INDEX  the colour in slot i of the 64 recently seen
+ *   01rrggbb           DIFF   r, g, b differ from the previous pixel by -2..1 (each + 2)
+ *   10gggggg rrrrbbbb  LUMA   g differs by -32..31 (+ 32); r and b by floor(dg / 2) + (-8..7) (+ 8)
+ *   11rrrrrr           RUN    the previous pixel repeated r + 1 times (r 0..61)
+ *   11111110 lo hi     RAW    the pixel itself
+ * Differences wrap within a channel (5 bits r and b, 6 bits g). The previous pixel starts as 0
+ * and the table as all 0; a pixel from DIFF, LUMA or RAW goes into slot
+ * (pixel * 0x9E3779B1) >> 26 of the table (32-bit), INDEX and RUN leave it.
+ */
+/* Encodes cols x rows RGB565 pixels (column c at src + c * stride bytes, 2-byte aligned) into
+   `out`; 0 when it would not fit in `cap` bytes. */
+size_t codec_q565_encode(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out,
+                         size_t cap);
+#ifdef __3DS__
+/* The same in ARM assembly for the ARM11 (codec/source/q565_arm.s): the same bytes. */
+size_t codec_q565_encode_arm(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out,
+                             size_t cap);
+#endif
+/* Decodes into `frame` (n words, packed). Returns 0, or -1 on a malformed stream. */
+int codec_q565_decode(const uint8_t *in, size_t in_size, uint16_t *frame, size_t n);
+
+/* Percent of sampled pixels that differ from `prev` (packed, cols x rows): one in 8 rows of one
+   in 4 columns. The recorder codes a frame as Q565 above Q565_CHANGED_PCT. */
+#define Q565_CHANGED_PCT 40u
+uint32_t codec_changed_pct(const uint16_t *prev, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride);
 
 /*
  * Dirty tiles: the frame is `cols` columns of `rows` words (rows and cols

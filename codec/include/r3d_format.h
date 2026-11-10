@@ -9,6 +9,9 @@
  *     R3DF  raw RGB565 frame
  *     R3DX  XOR-RLE frame            (screen byte bit 6 = keyframe)
  *     R3DY  XR32 frame (pixel pairs) (screen byte bit 6 = keyframe)
+ *     R3DQ  Q565 frame: the picture on its own (version 5, codec.h; always a keyframe, bit 6 set)
+ *     R3DH  XR32 frame with a Huffman stage over its bytes (version 5, codec/include/huff.h;
+ *           screen byte bit 6 = keyframe)
  *     R3DP  padding: skip `len` bytes (ring buffer wrap)
  *     R3DA  audio frame (version 4): `cols` stereo PCM16 samples (L R L R ...) at
  *           the header's audioRate, timeUs = when the recorder saw it; silence is
@@ -31,12 +34,14 @@
 #define R3D_MAGIC_FRAME  0x46443352u   /* "R3DF" */
 #define R3D_MAGIC_XFRAME 0x58443352u   /* "R3DX" */
 #define R3D_MAGIC_YFRAME 0x59443352u   /* "R3DY" */
+#define R3D_MAGIC_HFRAME 0x48443352u   /* "R3DH" */
+#define R3D_MAGIC_QFRAME 0x51443352u   /* "R3DQ" */
 #define R3D_MAGIC_PAD    0x50443352u   /* "R3DP" */
 #define R3D_MAGIC_AUDIO  0x41443352u   /* "R3DA" */
 #define R3D_MAGIC_DSPMEM 0x4D443352u   /* "R3DM" */
 #define R3D_MAGIC_END    0x45443352u   /* "R3DE" */
 
-#define R3D_VERSION      4u
+#define R3D_VERSION      5u   /* 5: R3DQ and R3DH frames, bottom-screen-only mode */
 #define R3D_STREAM_AUDIO  2u
 #define R3D_STREAM_DSPMEM 3u
 /* DSP output: 268111856 / 8192 Hz, 160 samples per DSP frame */
@@ -62,7 +67,7 @@ typedef struct {
 } R3dEndInfo;
 
 /* mode: what the file holds */
-enum { R3D_MODE_FULL_TOP = 3, R3D_MODE_FULL_BOTH = 4 };
+enum { R3D_MODE_FULL_TOP = 3, R3D_MODE_FULL_BOTH = 4, R3D_MODE_FULL_BOTTOM = 5 };
 
 typedef struct {
     uint32_t magic;        /* R3D_MAGIC_FILE */

@@ -1,6 +1,6 @@
 /*
  * .r3d decoding for the phone page: a JS port of tools/r3dconv (codec/include/r3d_format.h,
- * codec/source/codec.c XR32, tools/r3dconv/audio_place.h + audio_eq.h). It must give the same
+ * codec/source/codec.c XR32 and Q565, codec/source/huff.c, tools/r3dconv/audio_place.h + audio_eq.h). It must give the same
  * pictures and the same samples as r3dconv (tests/web/compare.mjs checks it byte for byte).
  *
  *   const conv = new R3D.Converter({ onHeader, onFrame, onAudio, onEnd });
@@ -9,7 +9,8 @@
  *
  * onHeader(h)           { fps, both, audio, audioRate (mHz), width 400, height 480 / 240 }
  * onFrame(rgba, index, picture)  one output frame at h.fps (constant rate, as r3dconv emits
- *                       them): RGBA, width x height, top screen above, bottom centred under it.
+ *                       them): RGBA, width x height, top screen above, bottom centred under it
+ *                       (a bottom-screen-only recording: 400 x 240, the bottom screen centred).
  *                       The buffer is reused: copy or encode it before returning. `picture`
  *                       changes only when the image does (static scenes repeat one picture).
  * onAudio(int16)        stereo samples (L R L R ...) at audioRate / 1000 Hz, in order, gaps as
@@ -20,11 +21,11 @@
   'use strict';
 
   const M = {
-    FILE: 0x42443352, FRAME: 0x46443352, XFRAME: 0x58443352, YFRAME: 0x59443352,
+    FILE: 0x42443352, FRAME: 0x46443352, XFRAME: 0x58443352, YFRAME: 0x59443352, HFRAME: 0x48443352, QFRAME: 0x51443352,
     PAD: 0x50443352, AUDIO: 0x41443352, DSPMEM: 0x4d443352, END: 0x45443352,
   };
   const SCREEN_KEY = 0x40;
-  const MODE_FULL_TOP = 3;
+  const MODE_FULL_TOP = 3, MODE_FULL_BOTTOM = 5;
   const AUDIO_RATE_MHZ = 32728498;
   const AUDIO_RAW = 2;
 
@@ -62,6 +63,139 @@
       i += words;
     }
     return pos === len && i === n;
+  }
+
+  /* ------------------------------------------------------------ Q565 (codec.c) */
+
+  // A frame on its own (codec_q565_decode). Returns false on a damaged frame.
+  function q565Decode(inp, frame) {
+    const n = frame.length, size = inp.length, index = new Uint16Array(64);
+    let prev = 0, pos = 0, i = 0;
+    const hash = (px) => Math.imul(px, 0x9e3779b1) >>> 26;
+    while (i < n) {
+      if (pos >= size) return false;
+      const b = inp[pos++];
+      if (b === 0xfe) {
+        if (pos + 2 > size) return false;
+        prev = inp[pos] | (inp[pos + 1] << 8);
+        pos += 2;
+        index[hash(prev)] = prev;
+      } else if ((b & 0xc0) === 0xc0) {
+        const k = (b & 0x3f) + 1;
+        if (i + k > n) return false;
+        frame.fill(prev, i, i + k);
+        i += k;
+        continue;
+      } else if ((b & 0xc0) === 0) {
+        prev = index[b];
+      } else {
+        let sr, sg, sb;
+        if ((b & 0xc0) === 0x40) {
+          sr = ((b >> 4) & 3) - 2;
+          sg = ((b >> 2) & 3) - 2;
+          sb = (b & 3) - 2;
+        } else {
+          if (pos >= size) return false;
+          const b2 = inp[pos++];
+          sg = (b & 0x3f) - 32;
+          const half = ((sg + 32) >> 1) - 16;
+          sr = (b2 >> 4) - 8 + half;
+          sb = (b2 & 15) - 8 + half;
+        }
+        const r = ((prev >> 11) + sr) & 31, g = (((prev >> 5) & 63) + sg) & 63, bl = ((prev & 31) + sb) & 31;
+        prev = (r << 11) | (g << 5) | bl;
+        index[hash(prev)] = prev;
+      }
+      frame[i++] = prev;
+    }
+    return pos === size;
+  }
+
+  /* ------------------------------------------------------------ Huffman over XR32 (huff.c) */
+
+  const HUFF_MAX_BITS = 12, HUFF_HEADER = 4 + 256;
+  const huffTables = [new Uint16Array(1 << HUFF_MAX_BITS), new Uint16Array(1 << HUFF_MAX_BITS)];
+
+  // Decoding table from 128 packed bytes of code lengths; false if they are not a valid code.
+  function huffTable(inp, at, table) {
+    const len = new Uint8Array(256);
+    let kraft = 0;
+    for (let k = 0; k < 128; k++) {
+      len[2 * k] = inp[at + k] & 15;
+      len[2 * k + 1] = inp[at + k] >> 4;
+    }
+    for (let sym = 0; sym < 256; sym++) {
+      if (len[sym] > HUFF_MAX_BITS) return false;
+      if (len[sym]) kraft += 1 << (HUFF_MAX_BITS - len[sym]);
+    }
+    if (kraft > (1 << HUFF_MAX_BITS)) return false;
+    table.fill(0);
+    // canonical codes (build_codes), bit-reversed: least significant bit first
+    const count = new Uint32Array(HUFF_MAX_BITS + 1), next = new Uint32Array(HUFF_MAX_BITS + 2);
+    for (let sym = 0; sym < 256; sym++) count[len[sym]]++;
+    count[0] = 0;
+    let c = 0;
+    for (let b = 1; b <= HUFF_MAX_BITS; b++) {
+      c = (c + count[b - 1]) << 1;
+      next[b] = c;
+    }
+    for (let sym = 0; sym < 256; sym++) {
+      const l = len[sym];
+      if (!l) continue;
+      let v = next[l]++, r = 0;
+      for (let k = 0; k < l; k++, v >>>= 1) r = (r << 1) | (v & 1);
+      const e = (sym << 4) | l;
+      for (let x = r; x < (1 << HUFF_MAX_BITS); x += 1 << l) table[x] = e;
+    }
+    return true;
+  }
+
+  // An R3DH frame straight into the picture (huff_xr32_decode). Returns false on a damaged frame.
+  function huffXr32Decode(inp, frame, key) {
+    const size = inp.length, n = frame.length;
+    if (size < HUFF_HEADER) return false;
+    const raw = (inp[0] | (inp[1] << 8) | (inp[2] << 16) | (inp[3] << 24)) >>> 0;
+    if (raw & 1) return false;
+    const t0 = huffTables[0], t1 = huffTables[1];
+    if (!huffTable(inp, 4, t0) || !huffTable(inp, 4 + 128, t1)) return false;
+    let p = HUFF_HEADER, acc = 0, nb = 0, zf = 0, bad = false;
+    const sym = (tab) => {
+      if (nb < 16) {
+        if (p + 2 <= size) {
+          acc = (acc | ((inp[p] | (inp[p + 1] << 8)) << nb)) >>> 0;
+          p += 2;
+        } else {
+          zf += 16;
+        }
+        nb += 16;
+      }
+      const e = tab[acc & 0xfff], l = e & 15;
+      if (!l) { bad = true; return 0; }
+      acc >>>= l;
+      nb -= l;
+      return e >> 4;
+    };
+    let left = raw / 2, i = 0;
+    while (left) {
+      const t = sym(t0) | (sym(t1) << 8);
+      if (bad) return false;
+      left--;
+      const words = ((t & 0x7fff) + 1) * 2;
+      if (i + words > n) return false;
+      if (t & 0x8000) {
+        if (words > left) return false;
+        left -= words;
+        for (let k = 0; k < words; k++) {
+          const v = sym(t0) | (sym(t1) << 8);
+          if (key) frame[i + k] = v; else frame[i + k] ^= v;
+        }
+        if (bad || zf > 32) return false;
+      } else if (key) {
+        frame.fill(0, i, i + words);
+      }
+      i += words;
+    }
+    return i === n && zf <= nb;
   }
 
   /* ------------------------------------------------------------ audio (audio_place.h, audio_eq.h) */
@@ -258,7 +392,7 @@
           screen: d.getUint8(p + 12), srcFormat: d.getUint8(p + 13), cols: d.getUint16(p + 14, true),
         };
         if (h.magic === M.END) { this.done = true; break; }
-        const delta = h.magic === M.XFRAME || h.magic === M.YFRAME;
+        const delta = h.magic === M.XFRAME || h.magic === M.YFRAME || h.magic === M.HFRAME || h.magic === M.QFRAME;
         const known = delta || h.magic === M.FRAME || h.magic === M.PAD || h.magic === M.AUDIO || h.magic === M.DSPMEM;
         if (!known) { this.done = true; break; } // the end of a cut-off file
         const stored = delta ? (h.len + 15) & ~15 : h.len;
@@ -274,11 +408,12 @@
       const audioRate = version >= 4 ? d.getUint32(20, true) : 0;
       let fps = version >= 3 && fps0 ? fps0 : 30;
       if (fps === 0 || fps > 60) fps = 30;
-      const both = mode !== MODE_FULL_TOP;
+      const bottomOnly = mode === MODE_FULL_BOTTOM; // 400 x 240, the bottom screen centred
+      const both = mode !== MODE_FULL_TOP && !bottomOnly;
       this.hdr = { fps, both, audio: audioRate !== 0, audioRate: audioRate || AUDIO_RATE_MHZ, width: 400, height: both ? 480 : 240 };
       this.scr = [
-        { cols: 400, px: new Uint16Array(400 * 240), needKey: true, seen: false, ox: 0, oy: 0 },
-        { cols: 320, px: new Uint16Array(320 * 240), needKey: true, seen: false, ox: 40, oy: 240 },
+        { cols: 400, px: new Uint16Array(400 * 240), needKey: true, seen: false, ox: 0, oy: 0, shown: !bottomOnly },
+        { cols: 320, px: new Uint16Array(320 * 240), needKey: true, seen: false, ox: 40, oy: both ? 240 : 0, shown: both || bottomOnly },
       ];
       this.rgba = new Uint8ClampedArray(400 * this.hdr.height * 4);
       for (let i = 3; i < this.rgba.length; i += 4) this.rgba[i] = 255;
@@ -290,7 +425,7 @@
     }
 
     putScreen(s) {
-      if (!s.seen || (s.oy && !this.hdr.both)) return;
+      if (!s.seen || !s.shown) return;
       const out = this.rgba, rows = 240;
       for (let y = 0; y < rows; y++) {
         let o = ((s.oy + y) * 400 + s.ox) * 4;
@@ -325,6 +460,10 @@
         return; // waiting for a keyframe after a damaged frame
       } else if (h.magic === M.YFRAME) {
         ok = xr32Decode(payload, s.px, key);
+      } else if (h.magic === M.HFRAME) {
+        ok = huffXr32Decode(payload, s.px, key);
+      } else if (h.magic === M.QFRAME) {
+        ok = q565Decode(payload, s.px);
       } else {
         ok = false; // XOR-RLE: bench recordings only
       }

@@ -108,6 +108,7 @@ AccessControlInfo:
     - fs:USER
     - mcu::HWC
     - ptm:u   # the lid (shell) state: no screen reads while the console sleeps
+    - ptm:sysm # New 3DS: 804 MHz + L2 while recording (CpuBoost)
     - plg:ldr # Rosalina plugin loader: on for one extended-memory game (Old 3DS), see WriteGameOrder
   FileSystemAccess:
     - DirectSdmc

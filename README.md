@@ -30,7 +30,7 @@ You do not need a PC or a capture card. The console turns each recording into a 
 send it to your phone over Wi-Fi by scanning a QR code.
 
 > [!WARNING]
-> **This is a beta (0.9.14).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
+> **This is a beta (0.11.4).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
 > console, game and SD card, so bugs are possible. If something goes wrong, please
 > [open an issue](../../issues/new) and attach the log (see [Problems and feedback](#problems-and-feedback)) —
 > every report helps make the release better.
@@ -39,7 +39,7 @@ send it to your phone over Wi-Fi by scanning a QR code.
 
 - A Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL or New 2DS XL with **Luma3DS** custom firmware.
 - **FBI** to install the `.cia` (or the Homebrew Launcher for the `.3dsx`).
-- Free space on the SD card: about **128 MB per minute** (both screens, 30 fps).
+- Free space on the SD card: up to **~320 MB per minute** in 3D games (both screens, 30 fps; menus and 2D games take much less). The MP4 made from it is about 10 MB a minute.
 - To get videos on your phone: the phone and the console on the same Wi-Fi network (the console uses 2.4 GHz).
 
 ### Install
@@ -66,7 +66,7 @@ send it to your phone over Wi-Fi by scanning a QR code.
   and tap **Save the video**. Nothing to install on the phone; iPhone and Android both work.
 - **Or take it from the SD card:** recordings are in `/3ds/recorder/recordings/`. Next to each recording
   (`.r3d`) the console makes an `.mp4` that plays anywhere.
-- **Settings:** frame rate (15 / 20 / 30 fps), both screens or the top one only, sound on or off, the LED, the language
+- **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, sound on or off, the LED, the language
   and the button combination.
 
 <p align="center">
@@ -162,7 +162,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
 
 > [!WARNING]
-> **Це бета-версія (0.9.14).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
+> **Це бета-версія (0.11.4).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
 > й SD-картці, тож можливі баги. Якщо щось пішло не так, будь ласка, [створіть issue](../../issues/new) і додайте
 > журнал (див. [Проблеми і відгуки](#проблеми-і-відгуки)) — кожен звіт допомагає зробити реліз кращим.
 
@@ -170,7 +170,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 
 - Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL або New 2DS XL з кастомною прошивкою **Luma3DS**.
 - **FBI**, щоб встановити `.cia` (або Homebrew Launcher для `.3dsx`).
-- Вільне місце на SD-картці: приблизно **128 MB на хвилину** (обидва екрани, 30 fps).
+- Вільне місце на SD-картці: до **~320 MB на хвилину** у 3D-іграх (обидва екрани, 30 fps; меню і 2D-ігри займають набагато менше). MP4 з такого запису — близько 10 MB на хвилину.
 - Щоб отримати відео на телефон: телефон і консоль в одній Wi-Fi мережі (консоль працює на 2.4 GHz).
 
 ### Встановлення
@@ -197,7 +197,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
   **Зберегти відео**. На телефон нічого ставити не треба; працює і на iPhone, і на Android.
 - **Або забрати з SD-картки:** записи лежать у `/3ds/recorder/recordings/`. Поруч із кожним записом (`.r3d`)
   консоль робить `.mp4`, яке відтворюється будь-де.
-- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани чи лише верхній, звук, LED, мова і комбінація
+- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, звук, LED, мова і комбінація
   кнопок.
 
 <p align="center">

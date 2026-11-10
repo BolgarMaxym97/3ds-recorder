@@ -29,6 +29,7 @@ bool player_muted(void);
 bool player_has_audio(void);            /* the file has sound and the DSP plays it */
 bool player_file_audio(void);           /* the file has sound (whether or not it plays) */
 bool player_both(void);                 /* both screens recorded */
+bool player_bottom_only(void);          /* only the bottom screen recorded */
 u32 player_time_ms(void);
 u32 player_duration_ms(void);
 

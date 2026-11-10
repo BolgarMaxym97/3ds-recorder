@@ -25,6 +25,7 @@
     X(S_SCREENS, "Screens", "Екрани") \
     X(S_BOTH, "Both", "Обидва") \
     X(S_TOP, "Top", "Верхній") \
+    X(S_BOTTOM, "Bottom", "Нижній") \
     X(S_SOUND_ON, "sound on", "звук увімк.") \
     X(S_SOUND_OFF, "sound off", "звук вимк.") \
     X(S_SD_FREE, "SD free", "SD вільно") \
@@ -195,6 +196,7 @@
     X(S_PL_SOUND, "sound", "звук") \
     X(S_PL_NO_DSP, "No sound: the DSP firmware is missing (run DSP1 once).", "Без звуку: немає прошивки DSP (запустіть DSP1 один раз).") \
     X(S_PL_TOP_ONLY, "Only the top screen was recorded", "Записано лише верхній екран") \
+    X(S_PL_BOTTOM_ONLY, "Only the bottom screen was recorded", "Записано лише нижній екран") \
     X(S_GAL_NTH, "Recording %d of %d", "Запис %d з %d") \
     X(S_DURATION, "Length", "Тривалість") \
     X(S_SIZE, "Size", "Розмір") \
@@ -203,6 +205,7 @@
     X(S_NO_SOUND, "no sound", "без звуку") \
     X(S_BOTH_SCREENS, "both screens", "обидва екрани") \
     X(S_TOP_SCREEN, "top screen", "верхній екран") \
+    X(S_BOTTOM_SCREEN, "bottom screen", "нижній екран") \
     X(S_NOT_CLOSED, "Cut off (power or a crash): what reached the card is saved.", "Обірвався (вимкнення чи збій): збережено, що встигло записатися.") \
     X(S_GAL_CUT, "Cut off", "Обірвався") \
     X(S_UNREADABLE, "This file can't be read.", "Цей файл не читається.") \
