@@ -15,6 +15,15 @@
   <img src="docs/screenshots/en/download.png" width="260" alt="Download to a phone">
 </p>
 
+### Demo
+
+<!-- the demo video: docs/demo.mp4 (kept locally), uploaded as a GitHub attachment -->
+
+https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
+
+*Recorded on an Old 3DS with 3DS Recorder itself: Mario Kart 7, both screens with sound. This is the MP4 the console
+made, as it is (400 × 480), only cut shorter.*
+
 ---
 
 <a id="english"></a>
@@ -30,7 +39,7 @@ You do not need a PC or a capture card. The console turns each recording into a 
 send it to your phone over Wi-Fi by scanning a QR code.
 
 > [!WARNING]
-> **This is a beta (0.11.4).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
+> **This is a beta (0.12.4).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
 > console, game and SD card, so bugs are possible. If something goes wrong, please
 > [open an issue](../../issues/new) and attach the log (see [Problems and feedback](#problems-and-feedback)) —
 > every report helps make the release better.
@@ -39,7 +48,7 @@ send it to your phone over Wi-Fi by scanning a QR code.
 
 - A Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL or New 2DS XL with **Luma3DS** custom firmware.
 - **FBI** to install the `.cia` (or the Homebrew Launcher for the `.3dsx`).
-- Free space on the SD card: up to **~320 MB per minute** in 3D games (both screens, 30 fps; menus and 2D games take much less). The MP4 made from it is about 10 MB a minute.
+- Free space on the SD card: up to **~320 MB per minute** in 3D games (both screens, 30 fps; menus and 2D games take much less). The MP4 made from it is about 25 MB a minute.
 - To get videos on your phone: the phone and the console on the same Wi-Fi network (the console uses 2.4 GHz).
 
 ### Install
@@ -66,8 +75,11 @@ send it to your phone over Wi-Fi by scanning a QR code.
   and tap **Save the video**. Nothing to install on the phone; iPhone and Android both work.
 - **Or take it from the SD card:** recordings are in `/3ds/recorder/recordings/`. Next to each recording
   (`.r3d`) the console makes an `.mp4` that plays anywhere.
-- **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, sound on or off, the LED, the language
-  and the button combination.
+- **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, quality, sound on or off, the LED,
+  the language and the button combination.
+- **Quality:** with **Auto** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
+  the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay exact.
+  **Lossless** keeps every frame exact; in 3D games the SD card then cannot take every frame and the video is less smooth.
 
 <p align="center">
   <img src="docs/screenshots/en/settings.png" width="260" alt="Settings">
@@ -120,7 +132,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 
 | Folder | What |
 |---|---|
-| `sysmod/` | the recorder: reads the screens and the sound, compresses them (XR32, lossless) and writes `.r3d` |
+| `sysmod/` | the recorder: reads the screens and the sound, compresses them (XR32, lossless; C420 for pictures in motion) and writes `.r3d` |
 | `app/` | the app: install, settings, gallery, player, the Wi-Fi server for the phone |
 | `plugin/` | the launcher plugin for extended-memory games on an Old 3DS (starts the recorder again inside the game) |
 | `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console |
@@ -153,6 +165,13 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
   <img src="docs/screenshots/uk/download.png" width="260" alt="Завантаження на телефон">
 </p>
 
+### Демо
+
+https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
+
+*Записано на Old 3DS самим 3DS Recorder: Mario Kart 7, обидва екрани зі звуком. Це MP4, який зробила сама консоль,
+як є (400 × 480), лише обрізаний.*
+
 ### Що це
 
 3DS Recorder записує всю консоль: усе, що на екранах, у будь-якій грі, меню HOME чи системній програмі, разом зі
@@ -162,7 +181,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
 
 > [!WARNING]
-> **Це бета-версія (0.11.4).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
+> **Це бета-версія (0.12.4).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
 > й SD-картці, тож можливі баги. Якщо щось пішло не так, будь ласка, [створіть issue](../../issues/new) і додайте
 > журнал (див. [Проблеми і відгуки](#проблеми-і-відгуки)) — кожен звіт допомагає зробити реліз кращим.
 
@@ -170,7 +189,7 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
 
 - Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL або New 2DS XL з кастомною прошивкою **Luma3DS**.
 - **FBI**, щоб встановити `.cia` (або Homebrew Launcher для `.3dsx`).
-- Вільне місце на SD-картці: до **~320 MB на хвилину** у 3D-іграх (обидва екрани, 30 fps; меню і 2D-ігри займають набагато менше). MP4 з такого запису — близько 10 MB на хвилину.
+- Вільне місце на SD-картці: до **~320 MB на хвилину** у 3D-іграх (обидва екрани, 30 fps; меню і 2D-ігри займають набагато менше). MP4 з такого запису — близько 25 MB на хвилину.
 - Щоб отримати відео на телефон: телефон і консоль в одній Wi-Fi мережі (консоль працює на 2.4 GHz).
 
 ### Встановлення
@@ -197,8 +216,11 @@ Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/
   **Зберегти відео**. На телефон нічого ставити не треба; працює і на iPhone, і на Android.
 - **Або забрати з SD-картки:** записи лежать у `/3ds/recorder/recordings/`. Поруч із кожним записом (`.r3d`)
   консоль робить `.mp4`, яке відтворюється будь-де.
-- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, звук, LED, мова і комбінація
-  кнопок.
+- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, мова і
+  комбінація кнопок.
+- **Якість:** в режимі **Авто** картинка, яка змінюється вся (3D-гра в русі), зберігається як у відео — колір із половинною
+  роздільністю, тому на Old 3DS обидва екрани тримають до 30 кадрів на секунду; меню, 2D-ігри й нерухомі картинки лишаються
+  точними. **Без втрат** зберігає кожен кадр точно; у 3D-іграх SD-картка тоді не встигає за всіма кадрами і відео менш плавне.
 
 <p align="center">
   <img src="docs/screenshots/uk/settings.png" width="260" alt="Налаштування">
