@@ -4,6 +4,9 @@
  *   r3dhuff <in.r3d> <out.r3d>           Huffman stage (R3DH), the recorder's rule (sysmod PackStage)
  *   r3dhuff --hybrid <in.r3d> <out.r3d>  Q565 for frames that changed all over (R3DQ), XR32 for the
  *                                        rest, keyframes as the recorder makes them (sysmod EncodeFrame)
+ *   r3dhuff --c420 <in.r3d> <out.r3d>    C420 (R3DC, lossy) while a screen's picture changes all over,
+ *                                        XR32 otherwise: the recorder's rule (sysmod EncodeFrame). Reads
+ *                                        R3DY, R3DH and R3DQ frames.
  */
 #include "codec.h"
 #include "huff.h"
@@ -18,8 +21,9 @@
 int main(int argc, char **argv)
 {
     const int hybrid = argc == 4 && strcmp(argv[1], "--hybrid") == 0;
-    if (argc != 3 && !hybrid) {
-        fprintf(stderr, "usage: r3dhuff [--hybrid] <in.r3d> <out.r3d>\n");
+    const int c420 = argc == 4 && strcmp(argv[1], "--c420") == 0;
+    if (argc != 3 && !hybrid && !c420) {
+        fprintf(stderr, "usage: r3dhuff [--hybrid | --c420] <in.r3d> <out.r3d>\n");
         return 2;
     }
     FILE *f = fopen(argv[argc - 2], "rb"), *o = fopen(argv[argc - 1], "wb");
@@ -43,12 +47,61 @@ int main(int argc, char **argv)
     R3dRecHeader h;
     while (fread(&h, 1, sizeof(h), f) == sizeof(h)) {
         const int delta = h.magic == R3D_MAGIC_XFRAME || h.magic == R3D_MAGIC_YFRAME || h.magic == R3D_MAGIC_HFRAME ||
-                          h.magic == R3D_MAGIC_QFRAME;
+                          h.magic == R3D_MAGIC_QFRAME || h.magic == R3D_MAGIC_CFRAME;
         const uint32_t stored = delta ? (h.len + 15u) & ~15u : h.len;
         if (stored > sizeof(in) || fread(in, 1, stored, f) != stored)
             break;
         size_t e = 0;
-        if (h.magic == R3D_MAGIC_YFRAME && hybrid) {
+        if (c420 && (h.magic == R3D_MAGIC_YFRAME || h.magic == R3D_MAGIC_HFRAME || h.magic == R3D_MAGIC_QFRAME)) {
+            /* sysmod EncodeFrame: C420_ENTER_PCT 40 twice running, C420_LEAVE_PCT 25 for C420_CALM_FRAMES 8 */
+            static uint32_t samples[2][CODEC_SAMPLES(400u, 240u)], hot[2], calm[2], words[2];
+            static int mode[2];
+            static HuffTables tables;
+            const int sc = h.screen & 1, key = (h.screen & R3D_SCREEN_KEY) != 0;
+            const uint32_t cols = h.cols, n = cols * 240u;
+            if (n > 400u * 240u)
+                break;
+            const int bad = h.magic == R3D_MAGIC_YFRAME   ? codec_xr32_decode(in, h.len, pic[sc], n, key)
+                            : h.magic == R3D_MAGIC_QFRAME ? codec_q565_decode(in, h.len, pic[sc], n)
+                                                          : huff_xr32_decode(in, h.len, pic[sc], n, key, &tables);
+            if (bad)
+                break;
+            rawBytes += h.len;
+            total++;
+            const int known = words[sc] == n;
+            const uint32_t pct = codec_sample_changed(samples[sc], (const uint8_t *)pic[sc], cols, 240, 480, 2, !known);
+            if (!known) {
+                mode[sc] = 0;
+                hot[sc] = calm[sc] = 0;
+            } else if (!mode[sc]) {
+                hot[sc] = pct > 40u ? hot[sc] + 1 : 0;
+                if (hot[sc] >= 2) {
+                    mode[sc] = 1;
+                    calm[sc] = 0;
+                }
+            } else {
+                calm[sc] = pct < 25u ? calm[sc] + 1 : 0;
+                if (calm[sc] >= 8u) {
+                    mode[sc] = 0;
+                    hot[sc] = 0;
+                }
+            }
+            if (mode[sc]) {
+                e = codec_c420_encode((const uint8_t *)pic[sc], cols, 240, 480, out);
+                h.magic = R3D_MAGIC_CFRAME;
+                h.screen = (uint8_t)(sc | R3D_SCREEN_KEY);
+                frames[sc] = 0;
+                intra++;
+            } else {
+                const int k = !known || frames[sc] % KEYFRAME_EVERY == 0;
+                e = codec_xr32_encode_strided_v(ref[sc], (const uint8_t *)pic[sc], cols, 240, 480, 1, k, 1, out);
+                h.magic = R3D_MAGIC_YFRAME;
+                h.screen = (uint8_t)(sc | (k ? R3D_SCREEN_KEY : 0));
+                frames[sc]++;
+            }
+            words[sc] = n;
+            outBytes += e;
+        } else if (h.magic == R3D_MAGIC_YFRAME && hybrid) {
             const int sc = h.screen & 1, key = (h.screen & R3D_SCREEN_KEY) != 0;
             const uint32_t cols = h.cols, n = cols * 240u;
             if (n > 400u * 240u || codec_xr32_decode(in, h.len, pic[sc], n, key) != 0)
@@ -72,7 +125,7 @@ int main(int argc, char **argv)
                 frames[sc]++;
             }
             outBytes += e;
-        } else if (h.magic == R3D_MAGIC_YFRAME && h.len >= 4096u) {
+        } else if (!c420 && h.magic == R3D_MAGIC_YFRAME && h.len >= 4096u) {
             e = huff_encode(in, h.len, out, h.len - h.len / 32u);
             rawBytes += h.len;
             outBytes += e ? e : h.len;
@@ -95,7 +148,7 @@ int main(int argc, char **argv)
     fclose(o);
     fprintf(stderr, "video frames rewritten: %.1f -> %.1f MB (%.0f%%)%s\n", rawBytes / 1e6, outBytes / 1e6,
             rawBytes ? 100.0 * outBytes / rawBytes : 0, hybrid ? "" : " (XR32 frames of 4 KB+)");
-    if (hybrid)
-        fprintf(stderr, "Q565: %u of %u frames\n", intra, total);
+    if (hybrid || c420)
+        fprintf(stderr, "%s: %u of %u frames\n", c420 ? "C420" : "Q565", intra, total);
     return 0;
 }

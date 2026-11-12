@@ -91,7 +91,7 @@ static bool read_at(Handle f, u64 off, void *buf, u32 len)
 static bool plausible(const R3dRecHeader *h)
 {
     const u32 m = h->magic;
-    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_XFRAME ||
+    return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME || m == R3D_MAGIC_XFRAME ||
             m == R3D_MAGIC_FRAME || m == R3D_MAGIC_AUDIO) &&
            h->len < MAX_RECORD && (h->screen & 0x3F) <= R3D_STREAM_AUDIO && h->timeUs < 6u * 3600u * 1000000u;
 }
@@ -161,7 +161,7 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
             off += h.len;
             continue;
         }
-        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_XFRAME;
+        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME || m == R3D_MAGIC_XFRAME;
         const u32 sc = h.screen & 0x3F;
         if ((m != R3D_MAGIC_FRAME && !delta) || sc > 1 || h.len > MAX_RECORD)
             break;
@@ -181,6 +181,8 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
                     bad = codec_xr32_decode(payload, h.len, frame, words, 1);
                 else if (m == R3D_MAGIC_QFRAME)
                     bad = codec_q565_decode(payload, h.len, frame, words);
+                else if (m == R3D_MAGIC_CFRAME)
+                    bad = codec_c420_decode(payload, h.len, frame, cols, 240);
                 else if (m == R3D_MAGIC_HFRAME) {
                     static HuffTables tables;   /* the gallery's thread only */
                     bad = huff_xr32_decode(payload, h.len, frame, words, 1, &tables);

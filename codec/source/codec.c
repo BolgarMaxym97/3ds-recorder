@@ -658,3 +658,181 @@ uint32_t codec_changed_pct(const uint16_t *prev, const uint8_t *src, uint32_t co
     }
     return seen ? changed * 100u / seen : 0;
 }
+
+/* -------------------------------------------------------------------- C420 */
+
+/*
+ * Two pixels at a time in one register (16-bit lanes): a = rows r and r + 1 of column c,
+ * b = the same of column c + 1. The sums stay within their lanes (s <= 125, r5 + 31 - b5 <= 62).
+ */
+#define C420_M5 0x001F001Fu
+#define C420_M6 0x003F003Fu
+static inline __attribute__((always_inline)) uint32_t c420_block(uint32_t a, uint32_t b)
+{
+    const uint32_t ra = (a >> 11) & C420_M5, ga = (a >> 5) & C420_M6, ba = a & C420_M5;
+    const uint32_t rb = (b >> 11) & C420_M5, gb = (b >> 5) & C420_M6, bb = b & C420_M5;
+    const uint32_t sa = ra + ga + ba, sb = rb + gb + bb;
+    const uint32_t ya = ((sa + 0x00020000u) >> 2) & C420_M5;   /* o = 0, 2 */
+    const uint32_t yb = ((sb + 0x00010002u) >> 2) & C420_M5;   /* o = 2, 1 */
+    /* per lane (two pixels), biased to stay positive: r - b + 62, and 2 * g - s + 128 */
+    const uint32_t cl = ra + rb + 0x003E003Eu - ba - bb;
+    const uint32_t gl = ((ga + gb) << 1) + 0x00800080u - sa - sb;
+    /* both lanes added (in the top half): the block's sums + 124 and + 256; the rounding and the
+       fields' + 32 are in the constants: (so + 2 + 128) >> 2 and (sg + 3 + 256) >> 3 */
+    const uint32_t co = ((cl + (cl << 16)) + (6u << 16)) >> 18, cg = ((gl + (gl << 16)) + (3u << 16)) >> 19;
+    /* a lane pair of y into 10 bits: the top lane lands right above the bottom one */
+    return ((ya | ya >> 11) & 0x3FFu) | ((yb | yb >> 11) & 0x3FFu) << 10 | co << 20 | cg << 26;
+}
+
+static inline __attribute__((always_inline)) uint32_t *c420_columns(const uint32_t *a, const uint32_t *b,
+                                                                    uint32_t pairs, uint32_t *o, int hint)
+{
+    for (uint32_t r = 0; r < pairs; r++) {
+        if (hint && (r & 7u) == 0) {   /* one hint per 32-byte cache line */
+            __builtin_prefetch(a + r + 32);
+            __builtin_prefetch(b + r + 32);
+        }
+        *o++ = c420_block(a[r], b[r]);
+    }
+    return o;
+}
+
+size_t codec_c420_encode(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out)
+{
+    uint32_t *o = (uint32_t *)(void *)out;
+    for (uint32_t c = 0; c + 2 <= cols; c += 2) {
+        const uint8_t *col = src + (size_t)c * stride;
+        o = c420_columns((const uint32_t *)(const void *)col, (const uint32_t *)(const void *)(col + stride),
+                         rows / 2, o, 1);
+    }
+    return (size_t)((uint8_t *)o - out);
+}
+
+size_t codec_c420_encode_conv(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint32_t fmt,
+                              int (*conv)(uint16_t *dst, const uint8_t *src, uint32_t fmt, uint32_t rows),
+                              uint8_t *out)
+{
+    uint32_t ta[128], tb[128];   /* two columns: up to 256 pixels each */
+    uint32_t *o = (uint32_t *)(void *)out;
+    if (rows > 256)
+        return 0;
+    for (uint32_t c = 0; c + 2 <= cols; c += 2) {
+        const uint8_t *col = src + (size_t)c * stride;
+        if (!conv((uint16_t *)(void *)ta, col, fmt, rows) || !conv((uint16_t *)(void *)tb, col + stride, fmt, rows))
+            return 0;
+        o = c420_columns(ta, tb, rows / 2, o, 0);
+    }
+    return (size_t)((uint8_t *)o - out);
+}
+
+/*
+ * Decoding with the clamps in tables: with A = 2 * co - 2 * cg + 2, B = -2 * co - 2 * cg + 2,
+ * C = 2 * cg + 1 for the block, a pixel is r5 = clamp((s' + A) >> 2), b5 = clamp((s' + B) >> 2),
+ * g6 = clamp((s' + C) >> 1). (s' + A) >> 2 and (s' + B) >> 2 are within -32..63, (s' + C) >> 1
+ * within -32..94: the tables are indexed from -32 and hold the channel in its place in the pixel.
+ * The player decodes 60 of these frames a second on an Old 3DS (both screens at 30).
+ */
+/*
+ * From 8-bit channels: with L = R + 2 * G + B (8 * s of the RGB565 pixel, with the bits RGB565
+ * drops), y = (L + 8 * o) >> 5, co = (sum of (R - B) + 16) >> 5, cg = (sum of (4 * G - L) + 32) >> 6;
+ * each can come out one above its field's range (white, pure red or green), so they are clamped.
+ */
+static inline __attribute__((always_inline)) uint32_t c420_min(uint32_t v, uint32_t max) { return v > max ? max : v; }
+
+size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint32_t bpp,
+                             uint8_t *out)
+{
+    uint32_t *o = (uint32_t *)(void *)out;
+    const uint32_t first = bpp == 4 ? 1u : 0u;   /* RGBA8: the alpha byte comes first */
+    for (uint32_t c = 0; c + 2 <= cols; c += 2) {
+        const uint8_t *a = src + (size_t)c * stride + first, *b = a + stride;
+        for (uint32_t r = 0; r + 2 <= rows; r += 2, a += 2 * bpp, b += 2 * bpp) {
+            if ((r & 15u) == 0) {
+                __builtin_prefetch(a + 96);
+                __builtin_prefetch(b + 96);
+            }
+            const uint32_t b0 = a[0], g0 = a[1], r0 = a[2], b1 = a[bpp], g1 = a[bpp + 1], r1 = a[bpp + 2];
+            const uint32_t b2 = b[0], g2 = b[1], r2 = b[2], b3 = b[bpp], g3 = b[bpp + 1], r3 = b[bpp + 2];
+            const uint32_t l0 = r0 + 2 * g0 + b0, l1 = r1 + 2 * g1 + b1, l2 = r2 + 2 * g2 + b2, l3 = r3 + 2 * g3 + b3;
+            /* biased to stay positive: + 1024 and + 2048 (32 after the shifts: the fields' offset) */
+            const uint32_t so = r0 + r1 + r2 + r3 + 1024u + 16u - b0 - b1 - b2 - b3;
+            const uint32_t sg = 4 * (g0 + g1 + g2 + g3) + 2048u + 32u - l0 - l1 - l2 - l3;
+            *o++ = c420_min(l0 >> 5, 31) | c420_min((l1 + 16) >> 5, 31) << 5 | c420_min((l2 + 16) >> 5, 31) << 10 |
+                   c420_min((l3 + 8) >> 5, 31) << 15 | c420_min(so >> 5, 63) << 20 | c420_min(sg >> 6, 63) << 26;
+        }
+    }
+    return (size_t)((uint8_t *)o - out);
+}
+
+static uint16_t c420_r[96], c420_g[128];
+static uint8_t c420_b[96];
+static int c420_ready;
+
+static void c420_tables(void)
+{
+    for (int i = 0; i < 96; i++) {
+        const int v = i - 32 < 0 ? 0 : i - 32 > 31 ? 31 : i - 32;
+        c420_r[i] = (uint16_t)(v << 11);
+        c420_b[i] = (uint8_t)v;
+    }
+    for (int i = 0; i < 128; i++) {
+        const int v = i - 32 < 0 ? 0 : i - 32 > 63 ? 63 : i - 32;
+        c420_g[i] = (uint16_t)(v << 5);
+    }
+    c420_ready = 1;
+}
+
+int codec_c420_decode(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows)
+{
+    return codec_c420_decode_strided(in, in_size, frame, cols, rows, rows);
+}
+
+int codec_c420_decode_strided(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows,
+                              uint32_t stride)
+{
+    if ((cols | rows) & 1u || in_size != codec_c420_size(cols, rows))
+        return -1;
+    if (!c420_ready)
+        c420_tables();
+    for (uint32_t c = 0; c < cols; c += 2) {
+        uint16_t *a = frame + (size_t)c * stride, *b = a + stride;
+        for (uint32_t r = 0; r < rows; r += 2, in += 4) {
+            const uint32_t w = in[0] | (uint32_t)in[1] << 8 | (uint32_t)in[2] << 16 | (uint32_t)in[3] << 24;
+            const int32_t co = (int32_t)((w >> 20) & 63u) - 32, cg = (int32_t)(w >> 26) - 32;
+            /* + 128 and + 64: the tables' offset of 32 after the shifts */
+            const uint32_t A = (uint32_t)(2 * co - 2 * cg + 2 + 128), B = (uint32_t)(-2 * co - 2 * cg + 2 + 128),
+                           C = (uint32_t)(2 * cg + 1 + 64);
+#define C420_PX(y, o) \
+    (s = 4u * (y) + 2u - (o), (uint16_t)(c420_r[(s + A) >> 2] | c420_g[(s + C) >> 1] | c420_b[(s + B) >> 2]))
+            uint32_t s;
+            a[r] = C420_PX(w & 31u, 0u);
+            a[r + 1] = C420_PX((w >> 5) & 31u, 2u);
+            b[r] = C420_PX((w >> 10) & 31u, 2u);
+            b[r + 1] = C420_PX((w >> 15) & 31u, 1u);
+#undef C420_PX
+        }
+    }
+    return 0;
+}
+
+uint32_t codec_sample_changed(uint32_t *samples, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride,
+                              uint32_t bpp, int first)
+{
+    const uint32_t mask = bpp >= 4 ? 0xFFFFFFFFu : (1u << (8u * bpp)) - 1u;
+    uint32_t seen = 0, changed = 0;
+    for (uint32_t c = 0; c < cols; c += 4) {
+        const uint8_t *col = src + (size_t)c * stride;
+        for (uint32_t r = 3; r < rows; r += 8, seen++) {
+            const uint8_t *p = col + (size_t)r * bpp;
+            uint32_t v = p[0] | (uint32_t)p[1] << 8;
+            if (bpp > 2)
+                v |= (uint32_t)p[2] << 16;
+            if (bpp > 3)
+                v |= (uint32_t)p[3] << 24;
+            v &= mask;
+            changed += samples[seen] != v;
+            samples[seen] = v;
+        }
+    }
+    return first || !seen ? 100u : changed * 100u / seen;
+}

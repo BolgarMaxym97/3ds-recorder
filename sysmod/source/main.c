@@ -146,12 +146,17 @@ typedef struct {
        on an Old 3DS (XR32 ~11 ms) and lost ~550 frames in 30 s of Mario Kart 7, though they took a
        third of the bytes (O3DS 2026-11-09). On again once the encoder is fast enough. */
     bool intra;
+    /* quality=lossless (the app's Quality setting): XR32 only, every frame exact, as before 0.12.
+       auto: frames of a picture that changes all over are stored as C420 (codec.h). */
+    bool lossless;
+    s8 c420;         /* c420=on / off (not in the app): overrides the console's default, -1: default */
+    u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
 } Config;
 
 static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
-                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .bench = false, .abTest = false };
+                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false };
 
 static const char *ScreensName(void)
 {
@@ -461,6 +466,8 @@ static void LoadConfig(void)
                        "fps=30\n"
                        "; screens: both, top or bottom\n"
                        "screens=both\n"
+                       "; quality: auto or lossless\n"
+                       "quality=auto\n"
                        "; led: pulse, solid or off\n"
                        "led=pulse\n"
                        "; audio: on or off\n"
@@ -510,6 +517,12 @@ static void LoadConfig(void)
             g_cfg.huff = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "intra") == 0)
             g_cfg.intra = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "quality") == 0)
+            g_cfg.lossless = strcasecmp(v, "lossless") == 0;
+        else if (strcasecmp(p, "c420") == 0)
+            g_cfg.c420 = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
+        else if (strcasecmp(p, "sd_limit_kb") == 0)
+            g_cfg.sdLimitKb = (u32)atoi(v);
         else if (strcasecmp(p, "codec_bench") == 0)
             g_cfg.bench = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "ab_test") == 0)
@@ -630,6 +643,11 @@ static u32 g_arenaCap[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
    cannot be bigger: Pokemon Ultra Moon did not start with 5 MB taken from it (75 MB left; 78 MB
    worked; Smash ran on 75), O3DS 2026-11-08. */
 static const u32 ARENA_CAP_PLG[2] = { 2u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
+/* With every frame C420 (no reference frames there): three top-screen frames (two in BGR8), and
+   2.5 s of audio instead of 1.25: Smash's loading starved the converter for up to 3.9 s and 554 of
+   5370 audio frames found the queue full (O3DS 0.12.1, 2026-11-11). */
+static const u32 ARENA_CAP_PLG_C420[2] = { 3u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
+#define AUDIO_QUEUE_PLG_C420 512u
 #define AUDIO_QUEUE_PLG 256u   /* 128 overflowed in Smash (queue full 617 of 13792, O3DS 2026-11-08) */
 static u32 g_aqCap = AUDIO_QUEUE;
 
@@ -660,8 +678,36 @@ static u32    g_huffFrames, g_huffKept, g_huffBusy;   /* coded / not smaller / s
 static u64    g_huffIn, g_huffOut;
 /* A/B test (config ab_test=on): each new recording takes the next variant (logged), so one
    series of recordings in one place compares them */
-enum { AB_DEFAULT, AB_BOTTOM_1_2, AB_VARIANTS };
-static const char *const AB_NAMES[AB_VARIANTS] = { "default (bottom 2/3)", "bottom 1/2" };
+enum { AB_DEFAULT, AB_LOSSLESS, AB_STEPS, AB_LOSSLESS_STEPS, AB_VARIANTS };
+static const char *const AB_NAMES[AB_VARIANTS] = { "default", "lossless", "throttle steps", "lossless, throttle steps (as 0.11.4)" };
+/*
+ * C420 frames (codec.h) in this recording: a screen whose picture changes all over (3D with a moving
+ * camera) is stored at a fixed half of its size, the rest stays XR32 (exact). In a Mario Kart 7
+ * race XR32 kept 98% of the top screen's bytes, so 30 + 30 frames a second were 9 MB/s for a card
+ * that takes 5.4 (O3DS 2026-11-09); with C420 they are ~5.2 MB/s. The choice needs no reference
+ * frame: a sample of the picture (codec_sample_changed) against the last one.
+ *   into C420: C420_ENTER_PCT of the sample changed in two frames running (one busy frame, a scene
+ *              cut, stays XR32);
+ *   back to XR32: C420_CALM_FRAMES frames running under C420_LEAVE_PCT. The first XR32 frame after
+ *              C420 is a keyframe (C420 frames are not exact, XR32 needs the exact last picture).
+ */
+#define C420_ENTER_PCT   40u
+#define C420_LEAVE_PCT   25u
+#define C420_CALM_FRAMES 8u
+static bool   g_c420On;
+static bool   g_c420Always;              /* every frame C420, no reference frames (g_prev is NULL) */
+static bool   g_c420Mode[2];             /* this screen's frames go out as C420 now */
+static u32    g_c420Hot[2], g_c420Calm[2];
+static bool   g_sampled[2];              /* g_samples holds the last frame's sample */
+static u32    g_samples[2][CODEC_SAMPLES(400u, 240u)];
+static u32    g_c420Frames[2], g_c420Switches;
+/* encode time by codec: [0] XR32 (and Q565), [1] C420; per screen */
+static u64    g_codecUs[2][2];
+static u32    g_codecN[2][2];
+static u32    g_lastCodec;               /* the codec of the frame EncodeFrame just made */
+static u64    g_waitUs[2];               /* capture start to encode start, summed: the converter's lag */
+static u32    g_waitMaxUs[2];
+static bool   g_paced;                   /* the pacer (PaceUpdate) instead of the throttle steps */
 static u32    g_abNext, g_abVariant;
 /* throttled bottom screen: 2 captures in every 3 (both screens; 1: 1 in 2). In Mario Kart 7 (O3DS
    2026-11-09) keeping 1 in 3 left the bottom at 7-8 fps; 1 in 2 ~10 fps; 2 in 3 ~11 fps for ~1 fps
@@ -853,6 +899,14 @@ static void WriterMain(void *arg)
             const u64 w0 = Ticks();
             g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), g_block, g_writeFlags);
             g_written += done;
+            if (g_cfg.sdLimitKb)
+            {
+                /* test: a slow card (the block takes at least as long as at sdLimitKb KB/s) */
+                const u32 wantUs = (u32)((u64)g_block * 1000000u / ((u64)g_cfg.sdLimitKb * KB));
+                const u32 tookUs = TicksToUs(Ticks() - w0);
+                if (tookUs < wantUs)
+                    svcSleepThread((s64)(wantUs - tookUs) * 1000);
+            }
             const u64 now = Ticks();
             g_writeTicks += now - w0;
             const u32 wms = TicksToUs(now - w0) / 1000u;
@@ -992,6 +1046,68 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
         }
         g_intraMiss++;   /* bigger than XR32 could be: XR32 */
     }
+    if (g_c420On)
+    {
+        const u32 f = fmt & 7u, bpp = f == FB_RGBA8 ? 4u : f == FB_BGR8 ? 3u : 2u;
+        const u32 colStride = fmt & WIDE_FMT ? 2u * stride : stride;
+        const bool known = sameSize && g_sampled[sc];
+        const u32 pct = g_c420Always ? 100u : codec_sample_changed(g_samples[sc], src, cols, rows, colStride, bpp, !known);
+        g_sampled[sc] = true;
+        if (g_c420Always)
+            g_c420Mode[sc] = true;
+        else if (!known)
+        {
+            g_c420Mode[sc] = false;
+            g_c420Hot[sc] = g_c420Calm[sc] = 0;
+        }
+        else if (!g_c420Mode[sc])
+        {
+            g_c420Hot[sc] = pct > C420_ENTER_PCT ? g_c420Hot[sc] + 1 : 0;
+            if (g_c420Hot[sc] >= 2)
+            {
+                g_c420Mode[sc] = true;
+                g_c420Calm[sc] = 0;
+                g_c420Switches++;
+            }
+        }
+        else
+        {
+            g_c420Calm[sc] = pct < C420_LEAVE_PCT ? g_c420Calm[sc] + 1 : 0;
+            if (g_c420Calm[sc] >= C420_CALM_FRAMES)
+            {
+                g_c420Mode[sc] = false;
+                g_c420Hot[sc] = 0;
+                g_c420Switches++;
+            }
+        }
+        if (g_c420Mode[sc])
+        {
+            const u32 len = fmt & WIDE_FMT ? (u32)codec_c420_encode_conv(src, cols, rows, 2u * stride, fmt, WideColumn, dst)
+                            : f == FB_RGB565 ? (u32)codec_c420_encode(src, cols, rows, stride, dst)
+                            : f == FB_BGR8 || f == FB_RGBA8 ? (u32)codec_c420_encode_888(src, cols, rows, stride, bpp, dst)
+                            : (u32)codec_c420_encode_conv(src, cols, rows, stride, fmt, fb_column_to_rgb565, dst);
+            if (len)
+            {
+                g_codecFrames[sc] = 0;   /* the next XR32 frame is a keyframe */
+                g_codecWords[sc] = words;
+                g_c420Frames[sc]++;
+                g_lastCodec = 1;
+                *magic = R3D_MAGIC_CFRAME;
+                *key = true;
+                return len;
+            }
+        }
+    }
+    if (!g_prev[sc])
+    {
+        /* no reference frame (g_c420Always) and C420 could not take this frame: an empty record,
+           which readers skip as damaged */
+        g_lastCodec = 2;
+        *magic = R3D_MAGIC_CFRAME;
+        *key = true;
+        return 0;
+    }
+    g_lastCodec = 0;
     *key = !sameSize || g_codecFrames[sc] % KEYFRAME_EVERY == 0;
     /* another format (BGR8: HOME Menu and many games): converted a column at a time into the cache
        and encoded from there, not a pass over the whole frame through main memory first */
@@ -1543,8 +1659,18 @@ static void ConverterMain(void *arg)
         for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
             waiting += g_slots[i].state != 0 && &g_slots[i] != next;
         const u64 t0 = Ticks();
+        const u32 waited = TicksToUs(t0 - next->startTick);
+        g_waitUs[next->screen] += waited;
+        if (waited > g_waitMaxUs[next->screen])
+            g_waitMaxUs[next->screen] = waited;
+        g_lastCodec = 2;   /* nothing encoded (frame dropped: ring full) */
         EncodeSlot(next, waiting >= 2);
         const u32 us = TicksToUs(Ticks() - t0);
+        if (g_lastCodec < 2)
+        {
+            g_codecUs[g_lastCodec][next->screen] += us;
+            g_codecN[g_lastCodec][next->screen]++;
+        }
         if (us > g_encodeMaxUs[next->screen])
             g_encodeMaxUs[next->screen] = us;
         g_encodeSlow[next->screen] += us > 1000000u / 30u;
@@ -1589,15 +1715,19 @@ static bool SlotsIdle(void)
 
 static bool EnsureSlots(int sc, u32 size)
 {
-    if (g_slotCount[sc] && size <= g_slotSize[sc])
-        return true;
-    for (u32 i = 0; i < g_slotCount[sc]; i++)
-        if (g_slots[sc * MAX_SLOTS + i].state)
-            return false;
     const u32 slotSize = (size + 0xFFFu) & ~0xFFFu;   /* page-aligned DMA destinations */
     u32 n = slotSize ? g_arenaCap[sc] / slotSize : 0;
     if (n > MAX_SLOTS)
         n = MAX_SLOTS;
+    const bool fits = g_slotCount[sc] && size <= g_slotSize[sc];
+    /* Frames got smaller (a recording started in HOME Menu, BGR8, then a game in RGB565): the
+       slots are laid out again for more of them once none is in use; until then the larger ones
+       do (5 instead of 6 of the top screen's stayed for the whole recording before). */
+    if (fits && n <= g_slotCount[sc])
+        return true;
+    for (u32 i = 0; i < g_slotCount[sc]; i++)
+        if (g_slots[sc * MAX_SLOTS + i].state)
+            return fits;
     if (!n)
         return false;
     for (u32 i = 0; i < MAX_SLOTS; i++)
@@ -1862,6 +1992,59 @@ static bool IsVram(u32 pa) { return pa >= VRAM_PA && pa < VRAM_PA + VRAM_SIZE; }
    buffer with a new stride after a launch from HOME while recording (O3DS 0.11.0, 2026-11-09). */
 #define MODE_SETTLE_US    200000u
 
+/*
+ * The pacer: when the SD card is behind, each screen keeps an even share of its frames, set from
+ * how full the ring is and which way it moves, instead of the steps at 70% and 85% (THROTTLE_PCT:
+ * all of the bottom screen's frames, then 2 in 3, then none, and the top at half rate, back and
+ * forth; the picture's pace jumped between ~30 and ~20 frames a second). g_paceCut 0 = every frame;
+ * a cut takes two thirds from the bottom screen and one third from the top, down to 3/8 and 1/2 of
+ * their frames. Frames are dropped by an error-diffusion counter, so what stays is evenly spaced.
+ */
+#define PACE_FULL     256u
+#define PACE_EVERY_US 100000u
+#define PACE_CUT_MAX  384u
+static u32 g_paceCut, g_paceAcc[2], g_paceFill, g_paceCutMax;
+static u64 g_paceUs, g_paceCutSum;
+static u32 g_paceTicks;
+
+static u32 PaceRate(int sc)
+{
+    const bool both = g_cfg.top && g_cfg.bottom;
+    const u32 cut = !both ? g_paceCut / 2u : sc == 1 ? g_paceCut * 2u / 3u : g_paceCut / 3u;
+    const u32 most = !both || sc == 0 ? PACE_FULL / 2u : PACE_FULL * 5u / 8u;
+    return PACE_FULL - (cut < most ? cut : most);
+}
+
+static void PaceUpdate(u64 nowUs, u32 fill)
+{
+    /* a small ring fills sooner: the plugin's 768 KB one in ~150 ms, and 179 frames found it full
+       with a step every 100 ms (Smash, O3DS 0.12.2, 2026-11-12) */
+    const u32 every = g_ringSize >= 8u * MB ? PACE_EVERY_US : PACE_EVERY_US / 100u * (g_ringSize / (8u * MB / 100u) + 1u);
+    if (nowUs - g_paceUs < (every < 10000u ? 10000u : every))
+        return;
+    g_paceUs = nowUs;
+    const u32 pct = fill / (g_ringSize / 100u);
+    const bool rising = fill > g_paceFill + g_ringSize / 64u;
+    g_paceFill = fill;
+    const s32 step = pct > 80u ? 48 : pct > 65u ? 24 : pct > 45u && rising ? 12 : pct < 30u ? -12 : pct < 50u && !rising ? -4 : 0;
+    const s32 cut = (s32)g_paceCut + step;
+    g_paceCut = cut < 0 ? 0u : cut > (s32)PACE_CUT_MAX ? PACE_CUT_MAX : (u32)cut;
+    if (g_paceCut > g_paceCutMax)
+        g_paceCutMax = g_paceCut;
+    g_paceCutSum += g_paceCut;
+    g_paceTicks++;
+}
+
+/* Whether this capture of the screen is kept. */
+static bool PaceTake(int sc)
+{
+    g_paceAcc[sc] += PaceRate(sc);
+    if (g_paceAcc[sc] < PACE_FULL)
+        return false;
+    g_paceAcc[sc] -= PACE_FULL;
+    return true;
+}
+
 /* Captures the screens that swapped (or a still VRAM one now and then). Returns how long the main
    loop may sleep: until shortly before the next capture is due, polling every POLL_REC_US from
    then on so a swap is caught within ~2 ms (the frame stays put until the game's next swap). */
@@ -1871,6 +2054,8 @@ static u32 PollScreens(void)
     const u32 gapUs = 1000000u / g_cfg.fps - 8000u;   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
     const u32 fill = RingFill();
     u64 wakeUs = nowUs + 20000u;
+    if (g_paced)
+        PaceUpdate(nowUs, fill);
     for (int sc = 0; sc < 2; sc++)
     {
         if (sc == 0 ? !g_cfg.top : !g_cfg.bottom)
@@ -1919,7 +2104,15 @@ static u32 PollScreens(void)
             continue;   /* the screen's mode just changed: let it settle */
         t->lastCapUs = nowUs;
         t->hasCap = true;
-        if (fill > g_ringSize / 100u * THROTTLE_PCT)
+        if (g_paced)
+        {
+            if (!PaceTake(sc))
+            {
+                g_throttled++;
+                continue;
+            }
+        }
+        else if (fill > g_ringSize / 100u * THROTTLE_PCT)
         {
             /* SD behind (no random losses, no forced keyframes): with both screens the bottom drops
                to g_bottomKeep of its rate first and the top stays at full rate; the top halves only
@@ -1976,7 +2169,7 @@ static void CodecBench(void)
             if (c > 0)
                 ref[(c - 1) * rows + r] = v;
         }
-    u32 best[4] = { ~0u, ~0u, ~0u, ~0u };
+    u32 best[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
     u32 lenX = 0, lenC = 0, lenA = 0, pct = 0;
     for (u32 k = 0; k < 3; k++)
     {
@@ -1985,6 +2178,14 @@ static void CodecBench(void)
         lenX = (u32)codec_xr32_encode_strided_v(prev, (const u8 *)src, cols, rows, rows * 2, 1, 0, 1, outA);
         u64 t1 = Ticks();
         if (TicksToUs(t1 - t0) < best[0]) best[0] = TicksToUs(t1 - t0);
+        t0 = Ticks();
+        codec_c420_encode((const u8 *)src, cols, rows, rows * 2, outA);
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) < best[4]) best[4] = TicksToUs(t1 - t0);
+        t0 = Ticks();
+        codec_c420_encode_888((const u8 *)src, 255, rows, rows * 3, 3, outA);   /* the same memory read as BGR8 (255 columns of it) */
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) * 400u / 255u < best[5]) best[5] = TicksToUs(t1 - t0) * 400u / 255u;
         t0 = Ticks();
         lenC = (u32)codec_q565_encode((const u8 *)src, cols, rows, rows * 2, outA, cap);
         t1 = Ticks();
@@ -2000,8 +2201,8 @@ static void CodecBench(void)
     }
     const bool same = lenA == lenC && memcmp(outA, outB, lenA) == 0;
     Log("codec bench (no game, synthetic panned frame, %lu%% changed): XR32 %lu us %lu KB; Q565 C %lu us, ARM %lu us, "
-        "%lu KB (%s); change check %lu us", pct, best[0], lenX / KB, best[1], best[2], lenA / KB,
-        same ? "ARM = C" : "ARM DIFFERS FROM C", best[3]);
+        "%lu KB (%s); C420 %lu us, from BGR8 %lu us (scaled to 400 columns); change check %lu us", pct, best[0], lenX / KB, best[1], best[2], lenA / KB,
+        same ? "ARM = C" : "ARM DIFFERS FROM C", best[4], best[5], best[3]);
     if (!same)
         g_q565ArmBad = true;
     BigFreeAll();
@@ -2429,7 +2630,7 @@ static bool RecordFits(const R3dRecHeader *h, u32 prevUs, bool haveTime, u64 at,
     if (m == R3D_MAGIC_PAD || m == R3D_MAGIC_DSPMEM)
         return h->len < 64u * MB && at + sizeof(*h) + h->len <= size;
     if (m != R3D_MAGIC_FRAME && m != R3D_MAGIC_XFRAME && m != R3D_MAGIC_YFRAME && m != R3D_MAGIC_HFRAME &&
-        m != R3D_MAGIC_QFRAME &&
+        m != R3D_MAGIC_QFRAME && m != R3D_MAGIC_CFRAME &&
         m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END)
         return false;
     if (h->len > 2u * MB || at + sizeof(*h) + h->len > size)
@@ -2475,7 +2676,7 @@ static void RecoverCutOff(void)
         if (!RecordFits(&h, prevUs, haveTime, at, size))
             break;
         const bool delta = h.magic == R3D_MAGIC_XFRAME || h.magic == R3D_MAGIC_YFRAME || h.magic == R3D_MAGIC_HFRAME ||
-                           h.magic == R3D_MAGIC_QFRAME;
+                           h.magic == R3D_MAGIC_QFRAME || h.magic == R3D_MAGIC_CFRAME;
         last = at;
         at += sizeof(h) + (delta ? ((h.len + 15u) & ~15u) : h.len);
         end = at;
@@ -2575,19 +2776,45 @@ static bool MapPluginMemory(void)
 
 /* Maps the plugin ring's first `over` bytes again right after the plugin's memory (where the ring
    ends). False: not mapped (pad records as before). */
-static u32 g_mirrorSize;
+static u32 g_mirrorSize, g_mirrorOff;   /* a mirror is mapped: its size, and the ring's offset it shows */
 
 static bool MirrorRing(u32 over)
 {
     const u32 ringOff = (u32)g_ring - PLG_MEM_VA;
     if (!g_ring || !over || over > g_ringSize || ringOff + g_ringSize != g_plgSize || !g_plgHeapVa)
         return false;
+    if (g_mirrorSize)
+    {
+        /* The last recording's mirror is still mapped (StopRecording leaves it: mapping one again
+           failed with E0A01BF5 in every recording after the first in one run of Smash, O3DS
+           0.12.1-0.12.2, and those went on with pad records). The same place: it serves again. */
+        volatile u32 *a = (volatile u32 *)g_ring, *b = (volatile u32 *)(PLG_MEM_VA + g_plgSize);
+        const u32 keep = a[0];
+        a[0] = 0x4D525253u;
+        const bool same = g_mirrorSize == over && g_mirrorOff == ringOff && b[0] == 0x4D525253u;
+        a[0] = keep;
+        if (same)
+            return true;
+        const Result un = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, g_mirrorSize);
+        Log("plugin ring mirror: another place now (%lu KB at %lu KB, was %lu KB at %lu KB), unmap rc %08lX", over / KB,
+            ringOff / KB, g_mirrorSize / KB, g_mirrorOff / KB, (u32)un);
+        g_mirrorSize = 0;
+    }
     const u32 pid = ApplicationPid();
     Handle game = 0;
     if (!pid || R_FAILED(svcOpenProcess(&game, pid)))
         return false;
-    const Result rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff,
-                                            over, 1);
+    Result rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff,
+                                      over, 1);
+    if (R_FAILED(rc))
+    {
+        /* The second recording in one run of Smash got E0A01BF5 here (O3DS 0.12.1, 2026-11-11): in
+           case the last recording's mirror is still mapped there, unmap and map once more. */
+        const Result first = rc;
+        const Result un = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, over);
+        rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff, over, 1);
+        Log("plugin ring mirror: map rc %08lX, unmap rc %08lX, second map rc %08lX", (u32)first, (u32)un, (u32)rc);
+    }
     svcCloseHandle(game);
     if (R_FAILED(rc))
     {
@@ -2607,13 +2834,18 @@ static bool MirrorRing(u32 over)
         return false;
     }
     g_mirrorSize = over;
+    g_mirrorOff = ringOff;
     return true;
 }
 
 static void UnmirrorRing(void)
 {
     if (g_mirrorSize)
-        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, g_mirrorSize);
+    {
+        const Result rc = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, g_mirrorSize);
+        if (R_FAILED(rc))
+            Log("plugin ring mirror unmap rc %08lX", (u32)rc);
+    }
     g_mirrorSize = 0;
     g_ringMirror = false;
 }
@@ -2655,26 +2887,49 @@ static bool StartRecording(void)
     /* Q565 (g_intraOn, set above): off on an Old 3DS (intra=on for tests): in ARM assembly it still
        took ~2.2x XR32's time (start-up bench: 76 vs 35 ms without a game; ~1 frame in 3 got it in
        Mario Kart 7, the rest fell back to XR32, and the bottom screen was jerkier, O3DS 2026-11-09). */
-    g_bottomKeep = ab == AB_BOTTOM_1_2 ? 1u : 2u;
+    g_bottomKeep = 2u;
+    g_paced = ab == AB_DEFAULT || ab == AB_LOSSLESS;
+    g_paceCut = g_paceCutMax = g_paceFill = g_paceTicks = 0;
+    g_paceAcc[0] = g_paceAcc[1] = PACE_FULL - 1u;   /* the first capture is kept */
+    g_paceUs = g_paceCutSum = 0;
     g_intraFrames[0] = g_intraFrames[1] = g_intraMiss = g_intraBusy = 0;
     g_intraBytes = 0;
     g_writeFlags = FS_WRITE_FLUSH;   /* without it: +2%, within the noise (MK7, O3DS 2026-11-09) */
     s64 isN3ds = 0;
     svcGetSystemInfo(&isN3ds, 0x10000, 0x201);
-    g_intraOn = g_cfg.intra || isN3ds;   /* New 3DS: the processor has the time (804 MHz, L2: CpuBoost) */
+    /* C420: on an Old 3DS, where the card cannot take a 3D game's frames whole; a New 3DS has the
+       processor for the exact codecs (Q565), so it stays as it was until measured there. */
+    g_c420On = !g_cfg.lossless && ab != AB_LOSSLESS && ab != AB_LOSSLESS_STEPS && (g_cfg.c420 >= 0 ? g_cfg.c420 != 0 : !isN3ds);
+    g_intraOn = (g_cfg.intra || isN3ds) && !g_c420On;   /* New 3DS: the processor has the time (804 MHz, L2: CpuBoost) */
+    /* In the launcher plugin's 2 MB every frame is C420: no reference frames (346 KB), which go to
+       a third top-screen frame and a longer audio queue (ARENA_CAP_PLG_C420, AUDIO_QUEUE_PLG_C420). */
+    g_c420Always = g_inPlg && g_c420On;
+    if (g_c420Always)
+        g_aqCap = AUDIO_QUEUE_PLG_C420;
+    for (int sc = 0; sc < 2; sc++)
+    {
+        g_c420Mode[sc] = g_sampled[sc] = false;
+        g_c420Hot[sc] = g_c420Calm[sc] = g_c420Frames[sc] = 0;
+        g_waitUs[sc] = 0;
+        g_waitMaxUs[sc] = 0;
+        g_codecUs[0][sc] = g_codecUs[1][sc] = 0;
+        g_codecN[0][sc] = g_codecN[1][sc] = 0;
+    }
+    g_c420Switches = 0;
     /* Half in the plugin's small ring: with the full 256 KB Smash lost as much sound (queue full 376
        vs 364: the converter's stalls, not the ring) and 2.4x more video frames (ring full 851 vs 361),
        O3DS 2026-11-08. */
     g_audioReserveBytes = g_inPlg ? AUDIO_RESERVE / 2u : AUDIO_RESERVE;
     for (int sc = 0; sc < 2; sc++)
     {
-        g_arenaCap[sc] = g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
+        g_arenaCap[sc] = g_c420Always ? ARENA_CAP_PLG_C420[sc] : g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
         g_arena[sc] = BigAlloc(g_arenaCap[sc]);
-        g_prev[sc] = BigAlloc((sc == 0 ? 400u : 320u) * 240u * 2u);
+        g_prev[sc] = g_c420Always ? NULL : BigAlloc((sc == 0 ? 400u : 320u) * 240u * 2u);
         g_slotCount[sc] = g_slotSize[sc] = 0;
         g_codecFrames[sc] = 0;
         g_codecWords[sc] = 0;
     }
+    const bool prevOk = g_c420Always || (g_prev[0] && g_prev[1]);
     /* before the ring: given back with the encoder's memory (ReleaseEncoderMemory) */
     const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
     /* staging buffers for the packer (Huffman on): three in the normal profile, one in the light
@@ -2696,7 +2951,7 @@ static bool StartRecording(void)
     static const u32 ringSizes[] = { 8u * MB, 6u * MB, 4u * MB, 3u * MB, 2u * MB, 1u * MB };
     g_ring = NULL;
     void *plgAq = NULL;
-    if (g_inPlg && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1])
+    if (g_inPlg && g_arena[0] && g_arena[1] && prevOk)
     {
         /* the audio queue first, then the ring in whole write blocks up to the end of the plugin's
            memory, where its mirror goes (MirrorRing) */
@@ -2715,10 +2970,10 @@ static bool StartRecording(void)
        bigger ring rides out a slow card's long spells (Flashback's notes: ~220 frames a minute lost
        on a SanDisk Ultra with ~3 MB, none with ~25 MB). 24 MB stays free for HOME and applets. */
     static const u32 bigRings[] = { 24u * MB, 16u * MB };
-    for (u32 i = 0; i < 2 && isN3ds && !lite && !g_ring && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1]; i++)
+    for (u32 i = 0; i < 2 && isN3ds && !lite && !g_ring && g_arena[0] && g_arena[1] && prevOk; i++)
         if ((g_ring = BigAllocChunked(bigRings[i] + over, 24u * MB)) != NULL)
             g_ringSize = bigRings[i];
-    for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && g_prev[0] && g_prev[1]; i++)
+    for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && prevOk; i++)
         if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i] + over)) != NULL)
             g_ringSize = ringSizes[i];
     g_ringOver = !g_ring ? 0u : g_ringMirror ? over : !g_inPlg ? over : 0u;
@@ -3047,6 +3302,21 @@ static void StopRecording(const char *why, bool releaseFirst)
             AB_NAMES[g_abVariant], g_stageN, g_huffFrames, g_huffKept, g_huffBusy, g_huffIn / KB, g_huffOut / KB,
             g_huffIn ? (u32)(g_huffOut * 100u / g_huffIn) : 0u, packed ? packUs / packed : 0u, g_ringSize / KB,
             g_ringOver / KB, g_block / KB, g_writeFlags ? "" : " (no flush)", g_torn[0], g_torn[1]);
+#define AVG(sum, n) ((n) ? (u32)((sum) / (n)) : 0u)
+        Log("codecs: C420 %s, %lu + %lu frames (top / bottom), %lu switches; encode XR32 %lu / %lu us (%lu + %lu frames), "
+            "C420 %lu / %lu us; capture to encode %lu / %lu ms on average, longest %lu / %lu ms",
+            g_c420On ? "on" : "off", g_c420Frames[0], g_c420Frames[1], g_c420Switches,
+            AVG(g_codecUs[0][0], g_codecN[0][0]), AVG(g_codecUs[0][1], g_codecN[0][1]), g_codecN[0][0], g_codecN[0][1],
+            AVG(g_codecUs[1][0], g_codecN[1][0]), AVG(g_codecUs[1][1], g_codecN[1][1]),
+            AVG(g_waitUs[0], g_codecN[0][0] + g_codecN[1][0]) / 1000u, AVG(g_waitUs[1], g_codecN[0][1] + g_codecN[1][1]) / 1000u,
+            g_waitMaxUs[0] / 1000u, g_waitMaxUs[1] / 1000u);
+        if (g_paced)
+            Log("pacer: frames kept at the end %lu%% / %lu%% (top / bottom), cut %lu on average, most %lu of %u",
+                PaceRate(0) * 100u / PACE_FULL, PaceRate(1) * 100u / PACE_FULL, AVG(g_paceCutSum, g_paceTicks), g_paceCutMax,
+                PACE_CUT_MAX);
+        else
+            Log("pacer: off (throttle steps at %u%% and %u%%)", THROTTLE_PCT, THROTTLE_HARD_PCT);
+#undef AVG
     }
     LogDrops();
     LogMemory("recording stopped");
@@ -3060,7 +3330,7 @@ static void StopRecording(const char *why, bool releaseFirst)
     g_ring = NULL;
     g_stageN = 0;   /* the stages are empty (waited for above) */
     g_ringOver = 0;
-    UnmirrorRing();
+    g_ringMirror = false;   /* the mapping stays for the next recording (MirrorRing); UnmapPluginMemory removes it */
     BigFreeAll();
     g_appPid = g_appBase = 0;
     g_convHold = false;

@@ -6,9 +6,9 @@
  * threads, tests/prep/host_prep.c runs the same code on a PC.
  *
  * One pass over the recording, the way tools/r3dconv reads it (no --repair): frames are
- * composed into the 400 x 480 (or 400 x 240, top only) picture r3dconv makes, on a grid of
- * the recording's fps, but a grid tick only becomes a video frame when a screen changed
- * since the last one (variable frame rate: a still picture costs nothing). Audio goes the
+ * composed into the 400 x 480 (or 400 x 240, top only) picture r3dconv makes; a video frame
+ * goes out when a screen changed, at the time the recorder captured it (a clock in ms, variable
+ * frame rate: a still picture costs nothing; see GRID_HZ in prep.c). Audio goes the
  * player's way (audio_place + audio_conceal + EQ), is resampled to 32 kHz and encoded to
  * AAC-LC.
  *
@@ -38,7 +38,7 @@ extern "C" {
 #define PREP_GOP 120   /* key frame every 120 video frames (4 s at 30 fps) */
 
 typedef struct {
-    int videoKbps;           /* 0: 1500 */
+    int videoKbps;           /* 0: PREP_VIDEO_KBPS (prep.c) */
     int audioKbps;           /* 0: 96 */
     uint64_t (*nowUs)(void); /* a clock for prep_stats (optional) */
     void (*sleepUs)(uint32_t us); /* waits on the queue (required) */

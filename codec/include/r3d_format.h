@@ -10,6 +10,8 @@
  *     R3DX  XOR-RLE frame            (screen byte bit 6 = keyframe)
  *     R3DY  XR32 frame (pixel pairs) (screen byte bit 6 = keyframe)
  *     R3DQ  Q565 frame: the picture on its own (version 5, codec.h; always a keyframe, bit 6 set)
+ *     R3DC  C420 frame: the picture on its own at half the bytes, lossy like 4:2:0 video (version 6,
+ *           codec.h; always a keyframe, bit 6 set; len = cols * 240)
  *     R3DH  XR32 frame with a Huffman stage over its bytes (version 5, codec/include/huff.h;
  *           screen byte bit 6 = keyframe)
  *     R3DP  padding: skip `len` bytes (ring buffer wrap)
@@ -36,12 +38,13 @@
 #define R3D_MAGIC_YFRAME 0x59443352u   /* "R3DY" */
 #define R3D_MAGIC_HFRAME 0x48443352u   /* "R3DH" */
 #define R3D_MAGIC_QFRAME 0x51443352u   /* "R3DQ" */
+#define R3D_MAGIC_CFRAME 0x43443352u   /* "R3DC" */
 #define R3D_MAGIC_PAD    0x50443352u   /* "R3DP" */
 #define R3D_MAGIC_AUDIO  0x41443352u   /* "R3DA" */
 #define R3D_MAGIC_DSPMEM 0x4D443352u   /* "R3DM" */
 #define R3D_MAGIC_END    0x45443352u   /* "R3DE" */
 
-#define R3D_VERSION      5u   /* 5: R3DQ and R3DH frames, bottom-screen-only mode */
+#define R3D_VERSION      6u   /* 5: R3DQ and R3DH frames, bottom-screen-only mode; 6: R3DC frames */
 #define R3D_STREAM_AUDIO  2u
 #define R3D_STREAM_DSPMEM 3u
 /* DSP output: 268111856 / 8192 Hz, 160 samples per DSP frame */

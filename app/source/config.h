@@ -16,6 +16,7 @@ enum { SCREENS_BOTH, SCREENS_TOP, SCREENS_BOTTOM };
 typedef struct {
     int fps;          /* 30, 20, 15 */
     int screens;      /* SCREENS_* */
+    bool lossless;    /* quality=lossless: every frame exact; auto (the default): 3D frames in half the bytes */
     bool audio;
     int led;          /* 0 off, 1 solid, 2 pulse */
     char hotkey[48];  /* as written, e.g. R+SELECT */

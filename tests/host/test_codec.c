@@ -161,6 +161,165 @@ static void q565_tests(void)
     }
 }
 
+/* C420: a reference encoder straight from the format's description (codec.h) */
+static void c420_reference(const uint16_t *pix, uint32_t cols, uint32_t rows, uint32_t *out)
+{
+    static const int o[4] = { 0, 2, 2, 1 };
+    for (uint32_t c = 0; c < cols; c += 2)
+        for (uint32_t r = 0; r < rows; r += 2) {
+            const uint16_t px[4] = { pix[c * rows + r], pix[c * rows + r + 1], pix[(c + 1) * rows + r],
+                                     pix[(c + 1) * rows + r + 1] };
+            int so = 0, sg = 0;
+            uint32_t w = 0;
+            for (int i = 0; i < 4; i++) {
+                const int r5 = px[i] >> 11, g6 = (px[i] >> 5) & 63, b5 = px[i] & 31, sum = r5 + g6 + b5;
+                w |= (uint32_t)((sum + o[i]) >> 2) << (5 * i);
+                so += r5 - b5;
+                sg += 2 * g6 - sum;
+            }
+            /* floor division, as an arithmetic shift does */
+            const int co = (so + 2 + 1024) / 4 - 256, cg = (sg + 3 + 1024) / 8 - 128;
+            *out++ = w | (uint32_t)(co + 32) << 20 | (uint32_t)(cg + 32) << 26;
+        }
+}
+
+static int conv_copy(uint16_t *dst, const uint8_t *src, uint32_t fmt, uint32_t rows)
+{
+    (void)fmt;
+    memcpy(dst, src, rows * 2);
+    return 1;
+}
+
+static void c420_check(const uint16_t *pix, int maxErr5, int maxErr6, const char *name)
+{
+    const uint32_t stride = ROWS * 2 + 8;   /* padded columns, as VRAM framebuffers have */
+    static uint32_t srcw[COLS * (ROWS * 2 + 8) / 4], enc[N / 4 + 1], ref[N / 4], enc2[N / 4];
+    uint8_t *src = (uint8_t *)srcw;
+    uint16_t dec[N];
+    memset(srcw, 0xA5, sizeof(srcw));
+    for (uint32_t c = 0; c < COLS; c++)
+        memcpy(src + c * stride, pix + c * ROWS, ROWS * 2);
+    enc[N / 4] = 0xDEADBEEFu;
+    CHECK(codec_c420_encode(src, COLS, ROWS, stride, (uint8_t *)enc) == N);
+    CHECK(enc[N / 4] == 0xDEADBEEFu);
+    c420_reference(pix, COLS, ROWS, ref);
+    if (memcmp(enc, ref, N) != 0) {
+        fprintf(stderr, "c420 %s: differs from the reference encoder\n", name);
+        failures++;
+    }
+    CHECK(codec_c420_encode_conv(src, COLS, ROWS, stride, 2, conv_copy, (uint8_t *)enc2) == N);
+    CHECK(memcmp(enc, enc2, N) == 0);
+    CHECK(codec_c420_decode((const uint8_t *)enc, N, dec, COLS, ROWS) == 0);
+    for (int i = 0; i < N; i++) {
+        const int dr = abs((pix[i] >> 11) - (dec[i] >> 11)), dg = abs(((pix[i] >> 5) & 63) - ((dec[i] >> 5) & 63)),
+                  db = abs((pix[i] & 31) - (dec[i] & 31));
+        if (dr > maxErr5 || db > maxErr5 || dg > maxErr6) {
+            fprintf(stderr, "c420 %s: pixel %d off by %d %d %d\n", name, i, dr, dg, db);
+            failures++;
+            break;
+        }
+    }
+}
+
+static void c420_tests(void)
+{
+    static uint16_t pix[N];
+    /* flat colours (every 2x2 block one colour): only the brightness step is lost */
+    for (int t = 0; t < 300; t++) {
+        const uint16_t v = t == 0 ? 0 : t == 1 ? 0xFFFF : t == 2 ? 0xF800 : t == 3 ? 0x07E0 : t == 4 ? 0x001F : rnd16();
+        for (int i = 0; i < N; i++)
+            pix[i] = v;
+        c420_check(pix, 2, 3, "flat");
+    }
+    /* smooth shading: close */
+    for (int i = 0; i < N; i++)
+        pix[i] = (uint16_t)(((i / ROWS / 2) & 31) << 11 | ((i % ROWS * 2) & 63) << 5 | ((i / ROWS / 3) & 31));
+    c420_check(pix, 3, 4, "gradient");
+    /* noise: the format holds (reference encoder), the picture is not kept */
+    for (int t = 0; t < 200; t++) {
+        for (int i = 0; i < N; i++)
+            pix[i] = rnd16();
+        c420_check(pix, 31, 63, "noise");
+    }
+    /* sizes */
+    uint16_t dec[N];
+    uint8_t enc[N] = { 0 };
+    CHECK(codec_c420_decode(enc, N - 4, dec, COLS, ROWS) != 0);
+    CHECK(codec_c420_decode(enc, N, dec, COLS - 1, ROWS) != 0);
+    CHECK(codec_c420_size(400, 240) == 96000);
+
+    /* sampled change */
+    static uint32_t samples[CODEC_SAMPLES(COLS, ROWS)];
+    for (int i = 0; i < N; i++)
+        pix[i] = rnd16() | 1;
+    CHECK(codec_sample_changed(samples, (const uint8_t *)pix, COLS, ROWS, ROWS * 2, 2, 1) == 100);
+    CHECK(codec_sample_changed(samples, (const uint8_t *)pix, COLS, ROWS, ROWS * 2, 2, 0) == 0);
+    for (int i = 0; i < N / 2; i++)   /* the first half of the columns */
+        pix[i] ^= 0x8000;
+    CHECK(codec_sample_changed(samples, (const uint8_t *)pix, COLS, ROWS, ROWS * 2, 2, 0) == 50);
+    CHECK(codec_sample_changed(samples, (const uint8_t *)pix, COLS, ROWS, ROWS * 2, 2, 0) == 0);
+}
+
+/* C420 from 8-bit channels: the picture comes back as close as from RGB565, and the words stay
+   within one step of the RGB565 path's */
+static void c420_888_tests(void)
+{
+    for (int bpp = 3; bpp <= 4; bpp++) {
+        static uint8_t src[COLS * (ROWS * 4 + 8)];
+        static uint16_t pix[N], dec[N];
+        static uint32_t enc[N / 4 + 1], viaPix[N / 4];
+        const uint32_t stride = ROWS * (uint32_t)bpp + 8;
+        for (int t = 0; t < 60; t++) {
+            for (uint32_t c = 0; c < COLS; c++)
+                for (uint32_t r = 0; r < ROWS; r++) {
+                    /* flat colours (t < 20: the extremes among them), then smooth shading */
+                    uint32_t R, G, B;
+                    if (t < 20) {
+                        static const uint8_t ext[5][3] = {{255, 255, 255}, {0, 0, 0}, {255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
+                        R = t < 5 ? ext[t][0] : (uint32_t)(t * 37) & 255, G = t < 5 ? ext[t][1] : (uint32_t)(t * 91) & 255;
+                        B = t < 5 ? ext[t][2] : (uint32_t)(t * 53) & 255;
+                    } else {
+                        R = (c * 5 + (uint32_t)t) & 255, G = (r * 9 + c) & 255, B = (c * 3 + r * 2 + (uint32_t)t * 7) & 255;
+                        if (t & 1)
+                            R = (R * 3 / 4) + (c & 1) * 8, B = B / 2 + (r & 1) * 8;
+                    }
+                    uint8_t *p = src + c * stride + r * (uint32_t)bpp;
+                    if (bpp == 4)
+                        *p++ = 0xFF;
+                    p[0] = (uint8_t)B, p[1] = (uint8_t)G, p[2] = (uint8_t)R;
+                    pix[c * ROWS + r] = (uint16_t)((R >> 3) << 11 | (G >> 2) << 5 | (B >> 3));
+                }
+            enc[N / 4] = 0xDEADBEEFu;
+            CHECK(codec_c420_encode_888(src, COLS, ROWS, stride, (uint32_t)bpp, (uint8_t *)enc) == N);
+            CHECK(enc[N / 4] == 0xDEADBEEFu);
+            c420_reference(pix, COLS, ROWS, viaPix);
+            for (int i = 0; i < N / 4; i++) {
+                int far = 0;
+                for (int k = 0; k < 4; k++)
+                    far |= abs((int)((enc[i] >> (5 * k)) & 31) - (int)((viaPix[i] >> (5 * k)) & 31)) > 1;
+                far |= abs((int)((enc[i] >> 20) & 63) - (int)((viaPix[i] >> 20) & 63)) > 1;
+                far |= abs((int)(enc[i] >> 26) - (int)(viaPix[i] >> 26)) > 1;
+                if (far) {
+                    fprintf(stderr, "c420 888 bpp %d test %d: block %d is %08X, from RGB565 %08X\n", bpp, t, i, enc[i], viaPix[i]);
+                    failures++;
+                    break;
+                }
+            }
+            CHECK(codec_c420_decode((const uint8_t *)enc, N, dec, COLS, ROWS) == 0);
+            if (t < 20)
+                for (int i = 0; i < N; i++) {
+                    const int dr = abs((pix[i] >> 11) - (dec[i] >> 11)), dg = abs(((pix[i] >> 5) & 63) - ((dec[i] >> 5) & 63)),
+                              db = abs((pix[i] & 31) - (dec[i] & 31));
+                    if (dr > 2 || db > 2 || dg > 3) {
+                        fprintf(stderr, "c420 888 bpp %d flat %d: pixel %d off by %d %d %d\n", bpp, t, i, dr, dg, db);
+                        failures++;
+                        break;
+                    }
+                }
+        }
+    }
+}
+
 static void both(const uint16_t *p, const uint16_t *c, const char *name)
 {
     xrle_roundtrip(p, c, name);
@@ -170,6 +329,8 @@ static void both(const uint16_t *p, const uint16_t *c, const char *name)
 int main(void)
 {
     q565_tests();
+    c420_tests();
+    c420_888_tests();
     for (int i = 0; i < N; i++) {
         prev[i] = rnd16();
     }

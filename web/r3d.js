@@ -8,6 +8,10 @@
  *   conv.finish()
  *
  * onHeader(h)           { fps, both, audio, audioRate (mHz), width 400, height 480 / 240 }
+ * new R3D.Converter(cb, { vfr: true }): a frame only when the picture changed, at the time the
+ * recorder captured it: onFrame(rgba, n, picture, timeUs). The console captures 29.92 pictures a
+ * second and its two screens at different moments, so on a 30 a second grid each screen repeats a
+ * frame every few seconds (prep/source/prep.c GRID_HZ: the same rule).
  * onFrame(rgba, index, picture)  one output frame at h.fps (constant rate, as r3dconv emits
  *                       them): RGBA, width x height, top screen above, bottom centred under it
  *                       (a bottom-screen-only recording: 400 x 240, the bottom screen centred).
@@ -21,7 +25,7 @@
   'use strict';
 
   const M = {
-    FILE: 0x42443352, FRAME: 0x46443352, XFRAME: 0x58443352, YFRAME: 0x59443352, HFRAME: 0x48443352, QFRAME: 0x51443352,
+    FILE: 0x42443352, FRAME: 0x46443352, XFRAME: 0x58443352, YFRAME: 0x59443352, HFRAME: 0x48443352, QFRAME: 0x51443352, CFRAME: 0x43443352,
     PAD: 0x50443352, AUDIO: 0x41443352, DSPMEM: 0x4d443352, END: 0x45443352,
   };
   const SCREEN_KEY = 0x40;
@@ -63,6 +67,34 @@
       i += words;
     }
     return pos === len && i === n;
+  }
+
+  /* ------------------------------------------------------------ C420 (codec.c) */
+
+  // A frame on its own at half the bytes (codec_c420_decode): one 32-bit word for 2 x 2 pixels.
+  // Returns false on a wrong size.
+  function c420Decode(inp, frame, cols) {
+    const rows = 240;
+    if (inp.length !== cols * rows || frame.length !== cols * rows) return false;
+    const clamp = (v, max) => (v < 0 ? 0 : v > max ? max : v);
+    const pixel = (y, o, co, cg) => {
+      const s = 4 * y + 2 - o, t = s - 2 * cg;
+      return (clamp((t + 2 * co + 2) >> 2, 31) << 11) | (clamp((s + 2 * cg + 1) >> 1, 63) << 5) |
+        clamp((t - 2 * co + 2) >> 2, 31);
+    };
+    let p = 0;
+    for (let c = 0; c < cols; c += 2) {
+      const a = c * rows, b = a + rows;
+      for (let r = 0; r < rows; r += 2, p += 4) {
+        const lo = inp[p] | (inp[p + 1] << 8) | (inp[p + 2] << 16), hi = inp[p + 3];
+        const co = (((lo >> 20) & 15) | ((hi & 3) << 4)) - 32, cg = (hi >> 2) - 32;
+        frame[a + r] = pixel(lo & 31, 0, co, cg);
+        frame[a + r + 1] = pixel((lo >> 5) & 31, 2, co, cg);
+        frame[b + r] = pixel((lo >> 10) & 31, 2, co, cg);
+        frame[b + r + 1] = pixel((lo >> 15) & 31, 1, co, cg);
+      }
+    }
+    return true;
   }
 
   /* ------------------------------------------------------------ Q565 (codec.c) */
@@ -344,8 +376,11 @@
   /* ------------------------------------------------------------ converter */
 
   class Converter {
-    constructor(cb) {
+    constructor(cb, opt) {
       this.cb = cb;
+      this.vfr = !!(opt && opt.vfr);
+      this.dirty = true;     // vfr: the picture changed since the last frame (time 0: a frame)
+      this.dirtySince = 0;   // ... first at this time (us)
       this.buf = new Uint8Array(1 << 20);
       this.len = 0;   // bytes in buf
       this.pos = 0;   // parsed up to
@@ -392,7 +427,8 @@
           screen: d.getUint8(p + 12), srcFormat: d.getUint8(p + 13), cols: d.getUint16(p + 14, true),
         };
         if (h.magic === M.END) { this.done = true; break; }
-        const delta = h.magic === M.XFRAME || h.magic === M.YFRAME || h.magic === M.HFRAME || h.magic === M.QFRAME;
+        const delta = h.magic === M.XFRAME || h.magic === M.YFRAME || h.magic === M.HFRAME || h.magic === M.QFRAME ||
+          h.magic === M.CFRAME;
         const known = delta || h.magic === M.FRAME || h.magic === M.PAD || h.magic === M.AUDIO || h.magic === M.DSPMEM;
         if (!known) { this.done = true; break; } // the end of a cut-off file
         const stored = delta ? (h.len + 15) & ~15 : h.len;
@@ -446,9 +482,14 @@
       const s = this.scr[sc];
       if (h.cols !== s.cols) return;
       // frames up to this record's time, with the pictures so far
-      while (this.emitted * 1000000 / this.hdr.fps < h.timeUs) {
-        this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture);
-        this.emitted++;
+      if (this.vfr) {
+        // both screens' frames of one refresh pair share a frame: it goes out 600 / fps ms after the first change
+        if (this.dirty && h.timeUs >= this.dirtySince + 600000 / this.hdr.fps) this.emitVfr();
+      } else {
+        while (this.emitted * 1000000 / this.hdr.fps < h.timeUs) {
+          this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture);
+          this.emitted++;
+        }
       }
       this.lastUs = h.timeUs;
       const key = (h.screen & SCREEN_KEY) !== 0;
@@ -464,6 +505,8 @@
         ok = huffXr32Decode(payload, s.px, key);
       } else if (h.magic === M.QFRAME) {
         ok = q565Decode(payload, s.px);
+      } else if (h.magic === M.CFRAME) {
+        ok = c420Decode(payload, s.px, s.px.length / 240);
       } else {
         ok = false; // XOR-RLE: bench recordings only
       }
@@ -471,6 +514,13 @@
       s.needKey = false;
       s.seen = true;
       this.putScreen(s);
+      if (!this.dirty) { this.dirty = true; this.dirtySince = h.timeUs; }
+    }
+
+    emitVfr() {
+      this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture, this.dirtySince);
+      this.emitted++;
+      this.dirty = false;
     }
 
     audio(h, payload) {
@@ -519,6 +569,7 @@
     finish() {
       this.done = true;
       if (!this.hdr) return;
+      if (this.vfr && this.dirty) this.emitVfr();
       if (this.hdr.audio) this.silence(this.placer.padTo(this.lastUs));
       this.cb.onEnd && this.cb.onEnd({ frames: this.emitted, seconds: this.lastUs / 1e6, audioSamples: this.audioSamples });
     }

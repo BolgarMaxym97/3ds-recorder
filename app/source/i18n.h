@@ -118,6 +118,9 @@
     X(S_SETTINGS, "Settings", "Налаштування") \
     X(S_LANGUAGE, "Language · Мова", "Мова · Language") \
     X(S_UNINSTALL_ROW, "Uninstall recorder…", "Видалити рекордер…") \
+    X(S_QUALITY, "Quality", "Якість") \
+    X(S_Q_AUTO, "Auto", "Авто") \
+    X(S_Q_LOSSLESS, "Lossless", "Без втрат") \
     X(S_SOUND, "Sound", "Звук") \
     X(S_LED, "LED", "LED") \
     X(S_LED_PULSE, "Pulse", "Пульс") \
@@ -130,6 +133,7 @@
     X(S_BOTTOM_BOX, "bottom 320×240", "нижній 320×240") \
     X(S_CODEC, "Codec", "Кодек") \
     X(S_CODEC_VAL, "XR32 · lossless", "XR32 · без втрат") \
+    X(S_CODEC_AUTO, "XR32 + C420", "XR32 + C420") \
     X(S_STREAM, "To the SD card", "Потік на SD") \
     X(S_PER_MIN, "One minute", "Хвилина запису") \
     X(S_FITS, "Fits on the SD card", "Влізе на SD") \

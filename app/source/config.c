@@ -14,6 +14,8 @@ static const char DEFAULTS[] = "; 3DS Recorder settings (read when the recorder 
                                "fps=30\n"
                                "; screens: both, top or bottom\n"
                                "screens=both\n"
+                               "; quality: auto or lossless\n"
+                               "quality=auto\n"
                                "; led: pulse, solid or off\n"
                                "led=pulse\n"
                                "; audio: on or off\n"
@@ -36,6 +38,7 @@ void config_load(Config *c)
 {
     c->fps = 30;
     c->screens = SCREENS_BOTH;
+    c->lossless = false;
     c->audio = true;
     c->led = 2;
     snprintf(c->hotkey, sizeof(c->hotkey), "R+SELECT");
@@ -64,6 +67,8 @@ void config_load(Config *c)
             c->screens = strcasecmp(v, "top") == 0      ? SCREENS_TOP
                          : strcasecmp(v, "bottom") == 0 ? SCREENS_BOTTOM
                                                         : SCREENS_BOTH;
+        else if (strcasecmp(line, "quality") == 0)
+            c->lossless = strcasecmp(v, "lossless") == 0;
         else if (strcasecmp(line, "audio") == 0)
             c->audio = strcasecmp(v, "off") != 0;
         else if (strcasecmp(line, "led") == 0)

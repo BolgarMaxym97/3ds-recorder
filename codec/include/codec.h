@@ -114,6 +114,57 @@ int codec_q565_decode(const uint8_t *in, size_t in_size, uint16_t *frame, size_t
 uint32_t codec_changed_pct(const uint16_t *prev, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride);
 
 /*
+ * C420 (R3DC records): one frame on its own at a fixed half of its RGB565 size, for pictures that
+ * change all over (3D with a moving camera), where the lossless codecs cannot keep up with the SD
+ * card on an Old 3DS: XR32 kept 98% of Mario Kart 7's top screen in a race, and the codecs that pack
+ * such frames (Q565, Huffman) cost more processor time than the game leaves (O3DS, 2026-11-09).
+ * Lossy the way video is (4:2:0): brightness for every pixel, one colour for a 2x2 block. No
+ * reference frame, no tables, no branches on the data.
+ *
+ * Per block of 2 columns x 2 rows (columns c, c + 1; rows r, r + 1), one little-endian 32-bit word,
+ * column pairs in order, row pairs in order within them:
+ *   bits  0-4   y of (c, r)        bits  5-9   y of (c, r + 1)
+ *   bits 10-14  y of (c + 1, r)    bits 15-19  y of (c + 1, r + 1)
+ *   bits 20-25  co + 32            bits 26-31  cg + 32
+ * With r5, g6, b5 the pixel's channels and s = r5 + g6 + b5:
+ *   y  = (s + o) >> 2, o = 0, 2, 2, 1 for the four pixels in the order above (ordered dither; y <= 31)
+ *   co = (sum of (r5 - b5) over the block + 2) >> 2          (-31..31)
+ *   cg = (sum of (2 * g6 - s) over the block + 3) >> 3        (-31..31)
+ * Decoding: s' = 4 * y + 2 - o, t = s' - 2 * cg,
+ *   r5 = clamp((t + 2 * co + 2) >> 2), b5 = clamp((t - 2 * co + 2) >> 2), g6 = clamp((s' + 2 * cg + 1) >> 1).
+ * cols and rows are even. Size: cols * rows bytes.
+ */
+static inline size_t codec_c420_size(uint32_t cols, uint32_t rows) { return (size_t)cols * rows; }
+/* RGB565 source: column c at src + c * stride bytes (4-byte aligned, stride a multiple of 4);
+   out 4-byte aligned. Returns the size. */
+size_t codec_c420_encode(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out);
+/* Another source format: columns converted two at a time into the cache (conv as in
+   codec_xr32_encode_conv). rows <= 256. Returns the size, 0 if conv fails. */
+size_t codec_c420_encode_conv(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint32_t fmt,
+                              int (*conv)(uint16_t *dst, const uint8_t *src, uint32_t fmt, uint32_t rows),
+                              uint8_t *out);
+/* A source of 8 bits a channel, straight from its bytes (no RGB565 on the way: faster, and the
+   brightness and colour come from all 8 bits): bpp 3 = BGR8 (bytes B, G, R), bpp 4 = RGBA8 (bytes
+   A, B, G, R). HOME Menu and many games draw in BGR8. Returns the size. */
+size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint32_t bpp,
+                             uint8_t *out);
+/* Decodes into `frame` (cols x rows words, packed column by column). 0, or -1 on a wrong size. */
+int codec_c420_decode(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows);
+/* The same with column c at frame + c * stride words (the player's textures: no copy). */
+int codec_c420_decode_strided(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows,
+                              uint32_t stride);
+
+/*
+ * How much of the picture changed since the last call, in percent, from a sample (one pixel in 8
+ * rows of one column in 4, `bpp` bytes each, any format): the recorder's choice between XR32 and
+ * C420 without a reference frame. `samples` holds CODEC_SAMPLES(cols, rows) words between calls
+ * and is updated. 100 when `first` is set.
+ */
+#define CODEC_SAMPLES(cols, rows) ((((cols) + 3u) / 4u) * (((rows) + 4u) / 8u))
+uint32_t codec_sample_changed(uint32_t *samples, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride,
+                              uint32_t bpp, int first);
+
+/*
  * Dirty tiles: the frame is `cols` columns of `rows` words (rows and cols
  * multiples of 8). Output: bitmap of changed 8x8 tiles, then the raw words of
  * each changed tile in bitmap order.

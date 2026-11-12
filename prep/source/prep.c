@@ -32,6 +32,25 @@
 #define MINIH264_IMPLEMENTATION
 #include "minih264e.h"
 
+/* The video's bit rate and quantizer range. 1500 kbit/s with QP 20-34 gave 32.1 dB against the
+   recording's own pictures in a Mario Kart 7 race and looked soft on a phone; 3500 with QP 18-32
+   gives 34.6 dB for 1.6x the bytes and ~11% more encoder time (host, 2026-11-11). */
+#ifndef PREP_VIDEO_KBPS
+#define PREP_VIDEO_KBPS 3500
+#define PREP_QP_MIN 18
+#define PREP_QP_MAX 32
+#endif
+/*
+ * The video's clock: milliseconds, and a frame's time is when the recorder captured it. Before,
+ * frames sat on a grid of the recording's rate (30 a second), but the console captures every
+ * second refresh of 59.83 Hz (29.92 a second) and the two screens at different moments, so on the
+ * grid each screen repeated a frame every few seconds: the bottom screen looked short of frames
+ * in the MP4 though the recording had them all (O3DS 0.12.1, 2026-11-11). A picture goes out
+ * once COALESCE_MS have passed since the first screen changed, so both screens' frames of one
+ * refresh pair share a picture (one video frame for the two, as before).
+ */
+#define GRID_HZ 1000u
+#define COALESCE_MS(fps) (600u / (uint32_t)(fps))   /* 20 ms at 30 frames a second */
 #define TOP_N (400 * 240)
 #define BOT_N (320 * 240)
 #define AAC_FRAME 1024              /* samples per channel in one AAC frame */
@@ -40,7 +59,7 @@
 #define OUT_RATE 32000              /* AAC sample rate (index 5) */
 #define AAC_DELAY 1600              /* vo-aacenc: 1024 + 576 block-switch look-ahead (measured on host) */
 #define SLOT_MAGIC 0x50455250u      /* "PREP" */
-#define SLOT_VERSION 3u
+#define SLOT_VERSION 4u              /* 4: the video's clock in ms (GRID_HZ), State.dirtySince */
 #define FTYP_SIZE 32u
 #define MDAT_START (FTYP_SIZE + 8u) /* first sample byte */
 #define TBL_AUDIO 0x80000000u
@@ -57,7 +76,8 @@
 typedef struct {
     uint32_t magic, version, seq, crc;
     uint64_t srcSize, srcOffset;        /* [P] srcOffset: the record to read next */
-    uint64_t emitted;                   /* [P] fps grid ticks done */
+    uint64_t emitted;                   /* [P] clock ticks (GRID_HZ) done */
+    uint64_t dirtySince;                /* [P] the tick the picture first changed at since the last frame */
     uint64_t pendTick;                  /* [C] tick of the last video frame (its length is not known yet) */
     uint32_t partSize, tblCount;        /* [C] */
     uint32_t pendOffset, pendSize, pendKey, havePending; /* [C] */
@@ -646,8 +666,8 @@ static int produce_picture(PrepJob *j, uint64_t tick, uint64_t recStart)
 static int video_until(PrepJob *j, uint32_t timeUs, uint64_t recStart)
 {
     State *s = &j->s;
-    while (s->emitted * 1000000ull / (uint64_t)j->fps < timeUs) {
-        if (s->dirty && produce_picture(j, s->emitted, recStart))
+    while (s->emitted * (1000000ull / GRID_HZ) < timeUs) {
+        if (s->dirty && s->emitted >= s->dirtySince + COALESCE_MS(j->fps) && produce_picture(j, s->dirtySince, recStart))
             return PREP_ERROR;
         s->emitted++;
     }
@@ -660,7 +680,7 @@ static int produce_end(PrepJob *j)
     State *s = &j->s;
     if (!j->haveEnd)
         j->endUs = s->lastUs;
-    if (video_until(j, j->endUs, s->srcOffset))
+    if (video_until(j, j->endUs, s->srcOffset) || (s->dirty && produce_picture(j, s->dirtySince, s->srcOffset)))
         return PREP_ERROR;
     if (j->audio) {
         if (audio_push(j, NULL, (uint32_t)audio_pad_to(&s->ap, j->endUs)))
@@ -671,7 +691,7 @@ static int produce_end(PrepJob *j)
             if (aac_emit(j, 0.f, 0.f))
                 return PREP_ERROR;
     }
-    const Item it = {IT_END, 0, 0, ((uint64_t)j->endUs * (uint64_t)j->fps + 999999) / 1000000, NULL};
+    const Item it = {IT_END, 0, 0, ((uint64_t)j->endUs * GRID_HZ + 999999) / 1000000, NULL};
     if (push(j, &it))
         return PREP_ERROR;
     j->producerDone = 1;
@@ -758,7 +778,7 @@ static int produce(PrepJob *j)
             continue;
         }
         const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
-                          rh.magic == R3D_MAGIC_QFRAME;
+                          rh.magic == R3D_MAGIC_QFRAME || rh.magic == R3D_MAGIC_CFRAME;
         const uint32_t sc = rh.screen & 0x3F;
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(TOP_N) + 16)
             return produce_end(j);   /* end of valid data */
@@ -785,6 +805,8 @@ static int produce(PrepJob *j)
             bad = codec_xr32_decode(j->payload, rh.len, j->px[sc], n, key);
         else if (rh.magic == R3D_MAGIC_QFRAME)
             bad = codec_q565_decode(j->payload, rh.len, j->px[sc], n);
+        else if (rh.magic == R3D_MAGIC_CFRAME)
+            bad = codec_c420_decode(j->payload, rh.len, j->px[sc], cols, 240);
         else if (rh.magic == R3D_MAGIC_HFRAME) {
             static HuffTables tables;   /* one conversion at a time */
             bad = huff_xr32_decode(j->payload, rh.len, j->px[sc], n, key, &tables);
@@ -798,6 +820,8 @@ static int produce(PrepJob *j)
         }
         s->needKey[sc] = 0;
         s->seen[sc] = 1;
+        if (!s->dirty)
+            s->dirtySince = s->emitted;
         s->dirty |= 1u << sc;
     }
     return PREP_ERROR;
@@ -830,9 +854,9 @@ static int video_open(PrepJob *j)
         return fail(j, "H.264 encoder init failed");
     memset(&j->run, 0, sizeof(j->run));
     j->run.encode_speed = 10;  /* 9 without the deblocking filter: 17% faster, SSIM -0.003 (Mac, 2026-11-06) */
-    j->run.qp_min = 20;
-    j->run.qp_max = 34;
-    j->run.desired_frame_bytes = (j->opt.videoKbps ? j->opt.videoKbps : 1500) * 1000 / 8 / j->fps;
+    j->run.qp_min = PREP_QP_MIN;
+    j->run.qp_max = PREP_QP_MAX;
+    j->run.desired_frame_bytes = (j->opt.videoKbps ? j->opt.videoKbps : PREP_VIDEO_KBPS) * 1000 / 8 / j->fps;
     return 0;
 }
 
@@ -1124,7 +1148,7 @@ static int write_moov(PrepJob *j)
         }
     }
     free(all);
-    const uint32_t durMs = (uint32_t)((uint64_t)vTicks * 1000 / j->fps);
+    const uint32_t durMs = (uint32_t)((uint64_t)vTicks * 1000 / GRID_HZ);
     const uint32_t aDur = (uint32_t)((uint64_t)j->endUs * OUT_RATE / 1000000);
     Buf b = {0};
     const size_t moov = box(&b, "moov");
@@ -1140,7 +1164,7 @@ static int write_moov(PrepJob *j)
     const size_t trak = box(&b, "trak");
     w_tkhd(&b, 1, durMs, 0, 400, (uint32_t)j->H);
     size_t mdia = box(&b, "mdia");
-    w_mdhd_hdlr(&b, (uint32_t)j->fps, vTicks, 0);
+    w_mdhd_hdlr(&b, GRID_HZ, vTicks, 0);
     size_t minf = box(&b, "minf");
     at = fullbox(&b, "vmhd", 1);
     b_zero(&b, 8);

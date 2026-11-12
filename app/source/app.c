@@ -40,8 +40,8 @@ static const Rect BACK_BTN = {12, 10, 22, 22};
 static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: 8 rows under a short navbar */
-enum { ROW_FPS, ROW_SCREENS, ROW_SOUND, ROW_LED, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
-static Rect set_row(int i) { return (Rect){10, 33 + i * 25.5f, 300, 23}; }
+enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
+static Rect set_row(int i) { return (Rect){10, 32 + i * 25.5f, 300, 23}; }   /* 8 rows: down to y 233.5 */
 static const Rect SET_BACK = {10, 6, 21, 21};
 /* Hotkey screen buttons */
 static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200, 92, 28}};
@@ -532,6 +532,9 @@ static bool row_seg(const App *a, int row, Seg *g)
     case ROW_SCREENS:
         *g = (Seg){{T(S_BOTH), T(S_TOP), T(S_BOTTOM)}, 3, a->cfg.screens, -1};
         return true;
+    case ROW_QUALITY:
+        *g = (Seg){{T(S_Q_AUTO), T(S_Q_LOSSLESS), NULL}, 2, a->cfg.lossless ? 1 : 0, -1};
+        return true;
     case ROW_LED:
         *g = (Seg){{T(S_LED_PULSE), T(S_LED_SOLID), T(S_LED_OFF)}, 3, a->cfg.led == 2 ? 0 : a->cfg.led == 1 ? 1 : 2, -1};
         return true;
@@ -557,6 +560,10 @@ static void choose(App *a, int row, int opt)
             static const char *const V[3] = {"both", "top", "bottom"};
             apply_setting(a, "screens", V[opt]);
         }
+        break;
+    case ROW_QUALITY:
+        if ((opt == 1) != a->cfg.lossless)
+            apply_setting(a, "quality", opt == 1 ? "lossless" : "auto");
         break;
     case ROW_LED: {
         static const char *const V[3] = {"pulse", "solid", "off"};
@@ -1557,7 +1564,7 @@ static void draw_settings_top(App *a)
     snprintf(s1, sizeof(s1), "≈ %lu.%lu MB/s", (unsigned long)(perMin / 60), (unsigned long)(perMin % 60 * 10 / 60));
     snprintf(s2, sizeof(s2), "≈ %lu MB", (unsigned long)perMin);
     snprintf(s3, sizeof(s3), T(S_MINUTES), (unsigned)(perMin ? a->sdFreeMb / perMin : 0));
-    stat_card(132, 40, w, T(S_CODEC), T(S_CODEC_VAL), NULL);
+    stat_card(132, 40, w, T(S_CODEC), T(a->cfg.lossless ? S_CODEC_VAL : S_CODEC_AUTO), NULL);
     stat_card(138 + w, 40, w, T(S_STREAM), s1, NULL);
     stat_card(132, 96, w, T(S_PER_MIN), s2, NULL);
     stat_card(138 + w, 96, w, T(S_FITS), s3, NULL);
@@ -1944,7 +1951,7 @@ static void draw_settings_bottom(App *a)
     ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
     ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
     ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_SETTINGS));
-    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_SOUND, S_LED, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
+    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
     for (int r = 0; r < SET_ROWS; r++) {
         const Rect row = set_row(r);
         if (r != ROW_UNINSTALL)

@@ -314,7 +314,7 @@
     });
     let error = null;
     const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { error = e; } });
-    venc.configure({ codec, width: 400, height: hdr.height, bitrate: 1500000, framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
+    venc.configure({ codec, width: 400, height: hdr.height, bitrate: 3500000, framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
     let aenc = null, rs = null, aOut = 0, pend = [], pendN = 0;
     if (hdr.audio) {
       aenc = new AudioEncoder({
@@ -340,14 +340,17 @@
       ad.close();
     };
     return {
-      frame(rgba, index, pic) {
+      frame(rgba, index, pic, timeUs) {
         if (error) throw error;
         if (pic !== picture || !base) { // a new picture; repeats share its memory
           if (base) base.close();
           base = new VideoFrame(rgba, { format: 'RGBA', codedWidth: 400, codedHeight: hdr.height, timestamp: 0 });
           picture = pic;
         }
-        const f = new VideoFrame(base, { timestamp: Math.round(index * usPerFrame), duration: Math.round(usPerFrame) });
+        // timeUs: the picture's capture time (R3D.Converter vfr); without it the frame sits on the fps grid
+        const f = timeUs === undefined
+          ? new VideoFrame(base, { timestamp: Math.round(index * usPerFrame), duration: Math.round(usPerFrame) })
+          : new VideoFrame(base, { timestamp: Math.round(timeUs), duration: Math.round(usPerFrame) });
         venc.encode(f, { keyFrame: index % (hdr.fps * 2) === 0 });
         f.close();
       },
@@ -554,16 +557,16 @@
     let enc = null, hdr = null, firstErr = null;
     const conv = new R3D.Converter({
       onHeader: (h) => { hdr = h; },
-      onFrame: (rgba, i, pic) => {
+      onFrame: (rgba, i, pic, timeUs) => {
         if (!enc) return;
-        enc.frame(rgba, i, pic);
+        enc.frame(rgba, i, pic, timeUs);
         if (mode.fast && i % 15 === 0) { // live mode reports its own clock
-          const sec = i / hdr.fps;
+          const sec = timeUs === undefined ? i / hdr.fps : timeUs / 1e6;
           step(2, 'on', totalSec ? (sec / totalSec) * 100 : 0, clock(sec));
         }
       },
       onAudio: (s) => { if (enc) enc.audio(s); },
-    });
+    }, { vfr: !!mode.fast }); // the fast way stamps frames itself; the live one draws on its own clock
     const totalSec = info.ms / 1000;
     step(1, 'on', 0, '0%');
     step(2, 'on', 0, '', mode.label);

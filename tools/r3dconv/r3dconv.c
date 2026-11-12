@@ -233,7 +233,7 @@ int main(int argc, char **argv)
             continue;
         }
         const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
-                          rh.magic == R3D_MAGIC_QFRAME;
+                          rh.magic == R3D_MAGIC_QFRAME || rh.magic == R3D_MAGIC_CFRAME;
         const uint32_t sc = rh.screen & 0x3F;
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(400 * 240) + 16) {
             break;   /* end of valid data */
@@ -273,6 +273,8 @@ int main(int argc, char **argv)
             bad = codec_xr32_decode(payload, rh.len, s->px, s->n, key);
         } else if (rh.magic == R3D_MAGIC_QFRAME) {
             bad = codec_q565_decode(payload, rh.len, s->px, s->n);
+        } else if (rh.magic == R3D_MAGIC_CFRAME) {
+            bad = codec_c420_decode(payload, rh.len, s->px, (uint32_t)(s->n / 240), 240);
         } else if (rh.magic == R3D_MAGIC_HFRAME) {
             static HuffTables tables;
             bad = huff_xr32_decode(payload, rh.len, s->px, s->n, key, &tables);
