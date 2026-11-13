@@ -15,6 +15,8 @@ CFLAGS   := -g -Wall -Wextra -O2 -mword-relocations -ffunction-sections -fno-str
 CFLAGS   += $(INCLUDE) -D__3DS__
 # test builds: make REC_MAX_FILE_MB=200 (a recording goes on in a new file at that size)
 CFLAGS   += $(if $(REC_MAX_FILE_MB),-DREC_MAX_FILE_MB=$(REC_MAX_FILE_MB))
+# New 3DS test build: make REC_TESTBUILD=1 (n3ds_test on by default: benches at start-up, a codec / core variant per recording)
+CFLAGS   += $(if $(REC_TESTBUILD),-DREC_TESTBUILD=1)
 ASFLAGS  := -g $(ARCH)
 LDFLAGS   = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 LIBS     := -lctru -lm

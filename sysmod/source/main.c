@@ -150,13 +150,22 @@ typedef struct {
        auto: frames of a picture that changes all over are stored as C420 (codec.h). */
     bool lossless;
     s8 c420;         /* c420=on / off (not in the app): overrides the console's default, -1: default */
+    /* n3ds_test=on (a test build has it on: make REC_TESTBUILD=1), New 3DS only: benches at start-up
+       (per core, at both processor speeds), an idle probe of every core around each recording, and
+       each recording takes the next of TEST_VARS (codec, cores). One session of a tester's gives
+       what the New 3DS defaults need. */
+    bool n3dsTest;
     u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
 } Config;
 
 static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
-                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false };
+                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false,
+#ifdef REC_TESTBUILD
+                        .n3dsTest = true,
+#endif
+                      };
 
 static const char *ScreensName(void)
 {
@@ -521,6 +530,8 @@ static void LoadConfig(void)
             g_cfg.lossless = strcasecmp(v, "lossless") == 0;
         else if (strcasecmp(p, "c420") == 0)
             g_cfg.c420 = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
+        else if (strcasecmp(p, "n3ds_test") == 0)
+            g_cfg.n3dsTest = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "sd_limit_kb") == 0)
             g_cfg.sdLimitKb = (u32)atoi(v);
         else if (strcasecmp(p, "codec_bench") == 0)
@@ -706,6 +717,7 @@ static u64    g_codecUs[2][2];
 static u32    g_codecN[2][2];
 static u32    g_lastCodec;               /* the codec of the frame EncodeFrame just made */
 static u64    g_waitUs[2];               /* capture start to encode start, summed: the converter's lag */
+static u32    g_waitN[2];                /* frames in g_waitUs */
 static u32    g_waitMaxUs[2];
 static bool   g_paced;                   /* the pacer (PaceUpdate) instead of the throttle steps */
 static u32    g_abNext, g_abVariant;
@@ -1565,6 +1577,14 @@ static void DrainAudioImpl(void)
 }
 
 static volatile bool g_boosted;
+/* The converter and the packer can each have more than one thread, on different cores (New 3DS
+   test: cores 2 and 3); only the active one works, the others sleep. Switched between recordings. */
+#define CONV_MAX 3u
+#define PACK_MAX 2u
+static Thread g_convThreads[CONV_MAX], g_packThreads[PACK_MAX];
+static s32    g_convCores[CONV_MAX], g_packCores[PACK_MAX];
+static u32    g_convCount, g_packCount;
+static volatile u32 g_convActive, g_packActive;
 static volatile u64 g_appSwapUs;   /* recording time of the last new FCRAM frame on the top screen */
 static volatile bool g_appSwapSeen; /* g_appSwapUs is set (in this recording) */
 
@@ -1605,89 +1625,118 @@ static void ReapDmas(void)
     }
 }
 
+/* One round of the converter: a wait, or one frame encoded. */
+static void ConverterStep(void)
+{
+    if (g_convHold)
+    {
+        svcSleepThread(2 * 1000 * 1000);
+        return;
+    }
+    if (!PackerOn())
+        DrainAudio();
+    g_convInSlot = true;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (g_convHold)
+    {
+        g_convInSlot = false;
+        return;
+    }
+    Slot *next = NULL;
+    bool running = false;
+    for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+    {
+        Slot *s = &g_slots[i];
+        running |= s->state == 1;
+        if (s->state == 2 && (!next || s->screen < next->screen ||
+                              (s->screen == next->screen && s->startTick < next->startTick)))
+            next = s;
+    }
+    if (!next)
+    {
+        g_convInSlot = false;
+        if (running)
+            svcSleepThread(300 * 1000);
+        else
+            LightEvent_WaitTimeout(&g_convEvent, 100ull * 1000 * 1000);
+        return;
+    }
+    if (PackerOn() && g_stHead - g_stTail >= g_stageN)
+    {
+        /* every staging buffer full: wait for the packer (it leaves Huffman out meanwhile) */
+        g_convInSlot = false;
+        g_convWaiting = true;
+        LightEvent_Signal(&g_packEvent);
+        svcSleepThread(1000 * 1000);
+        return;
+    }
+    g_convWaiting = false;
+    /* on this core, where the frame is read: the DMA wrote around the cache */
+    svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, (u32)next->buf, next->size);
+    u32 waiting = 0;   /* other frames DMA'd or on their way */
+    for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+        waiting += g_slots[i].state != 0 && &g_slots[i] != next;
+    const u64 t0 = Ticks();
+    const u32 waited = TicksToUs(t0 - next->startTick);
+    g_waitUs[next->screen] += waited;
+    g_waitN[next->screen]++;
+    if (waited > g_waitMaxUs[next->screen])
+        g_waitMaxUs[next->screen] = waited;
+    g_lastCodec = 2;   /* nothing encoded (frame dropped: ring full) */
+    EncodeSlot(next, waiting >= 2);
+    const u32 us = TicksToUs(Ticks() - t0);
+    if (g_lastCodec < 2)
+    {
+        g_codecUs[g_lastCodec][next->screen] += us;
+        g_codecN[g_lastCodec][next->screen]++;
+    }
+    if (us > g_encodeMaxUs[next->screen])
+        g_encodeMaxUs[next->screen] = us;
+    g_encodeSlow[next->screen] += us > 1000000u / 30u;
+    g_encodeSumUs[next->screen] += us;
+    __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
+    g_convInSlot = false;
+    if (g_boosted)
+        svcSleepThread(BOOST_YIELD_US * 1000ull);
+}
+
+/* Only one converter thread works at a time (g_convOwner): the active one can change while a
+   frame is being encoded (a New 3DS program that keeps core 2 busy: main loop). */
+static volatile u32 g_convOwner;
+
 static void ConverterMain(void *arg)
 {
-    (void)arg;
+    const u32 id = (u32)arg;
     for (;;)
     {
-        if (g_convHold)
+        if (g_convActive != id)
         {
-            svcSleepThread(2 * 1000 * 1000);
+            svcSleepThread(20 * 1000 * 1000);
             continue;
         }
-        if (!PackerOn())
-            DrainAudio();
-        g_convInSlot = true;
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        if (g_convHold)
+        u32 nobody = 0;
+        if (!__atomic_compare_exchange_n(&g_convOwner, &nobody, id + 1u, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
         {
-            g_convInSlot = false;
+            svcSleepThread(1000 * 1000);   /* the other thread finishes its round */
             continue;
         }
-        Slot *next = NULL;
-        bool running = false;
-        for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
-        {
-            Slot *s = &g_slots[i];
-            running |= s->state == 1;
-            if (s->state == 2 && (!next || s->screen < next->screen ||
-                                  (s->screen == next->screen && s->startTick < next->startTick)))
-                next = s;
-        }
-        if (!next)
-        {
-            g_convInSlot = false;
-            if (running)
-                svcSleepThread(300 * 1000);
-            else
-                LightEvent_WaitTimeout(&g_convEvent, 100ull * 1000 * 1000);
-            continue;
-        }
-        if (PackerOn() && g_stHead - g_stTail >= g_stageN)
-        {
-            /* every staging buffer full: wait for the packer (it leaves Huffman out meanwhile) */
-            g_convInSlot = false;
-            g_convWaiting = true;
-            LightEvent_Signal(&g_packEvent);
-            svcSleepThread(1000 * 1000);
-            continue;
-        }
-        g_convWaiting = false;
-        /* on this core, where the frame is read: the DMA wrote around the cache */
-        svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, (u32)next->buf, next->size);
-        u32 waiting = 0;   /* other frames DMA'd or on their way */
-        for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
-            waiting += g_slots[i].state != 0 && &g_slots[i] != next;
-        const u64 t0 = Ticks();
-        const u32 waited = TicksToUs(t0 - next->startTick);
-        g_waitUs[next->screen] += waited;
-        if (waited > g_waitMaxUs[next->screen])
-            g_waitMaxUs[next->screen] = waited;
-        g_lastCodec = 2;   /* nothing encoded (frame dropped: ring full) */
-        EncodeSlot(next, waiting >= 2);
-        const u32 us = TicksToUs(Ticks() - t0);
-        if (g_lastCodec < 2)
-        {
-            g_codecUs[g_lastCodec][next->screen] += us;
-            g_codecN[g_lastCodec][next->screen]++;
-        }
-        if (us > g_encodeMaxUs[next->screen])
-            g_encodeMaxUs[next->screen] = us;
-        g_encodeSlow[next->screen] += us > 1000000u / 30u;
-        g_encodeSumUs[next->screen] += us;
-        __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
-        g_convInSlot = false;
-        if (g_boosted)
-            svcSleepThread(BOOST_YIELD_US * 1000ull);
+        if (g_convActive == id)
+            ConverterStep();
+        __atomic_store_n(&g_convOwner, 0u, __ATOMIC_SEQ_CST);
     }
 }
 
 /* Packer thread (system core, lowest priority): staged frames and queued audio into the ring. */
 static void PackerMain(void *arg)
 {
-    (void)arg;
+    const u32 id = (u32)arg;
     for (;;)
     {
+        if (g_packActive != id)
+        {
+            svcSleepThread(20 * 1000 * 1000);
+            continue;
+        }
         if (!PackerOn())
         {
             LightEvent_WaitTimeout(&g_packEvent, 100ull * 1000 * 1000);
@@ -1979,6 +2028,9 @@ typedef struct {
     bool vram;
     bool hasCap;
     u8 throttleN;               /* capture slots while throttled */
+    bool pend;                  /* a swap since the last capture slot that was not captured */
+    bool precise;               /* that swap was seen within a poll of happening (lastNewUs is its time) */
+    u64 swapGapUs;              /* time between the last two swaps */
 } Track;
 static Track g_track[2];
 
@@ -1991,6 +2043,11 @@ static bool IsVram(u32 pa) { return pa >= VRAM_PA && pa < VRAM_PA + VRAM_SIZE; }
    A kernel panic (rec3ds, core 1) hit right as Mario Kart 7 moved its top screen to a new VRAM
    buffer with a new stride after a launch from HOME while recording (O3DS 0.11.0, 2026-11-09). */
 #define MODE_SETTLE_US    200000u
+#define VBLANK_US         16713u      /* a screen refresh (59.83 Hz) */
+#define LATE_AFTER_US     3000u       /* a late capture: this long after a refresh (a swap there has been seen by then) */
+#define LATE_BEFORE_US    6000u       /* and this long before the next (the DMA's time and a poll) */
+#define FAST_SWAP_US      30000u      /* swaps closer than this: the game draws faster than the recording */
+static u64 g_lastPollUs;
 
 /*
  * The pacer: when the SD card is behind, each screen keeps an even share of its frames, set from
@@ -2081,7 +2138,10 @@ static u32 PollScreens(void)
                 g_torn[sc]++;
             t->lastAddr = cur;
             t->lastSel = sel;
+            t->swapGapUs = nowUs - t->lastNewUs;
             t->lastNewUs = nowUs;
+            t->pend = true;
+            t->precise = nowUs - g_lastPollUs <= POLL_REC_US * 3u / 2u;
             if (sc == 0 && !IsVram(cur))
             {
                 g_appSwapUs = nowUs;
@@ -2098,12 +2158,23 @@ static u32 PollScreens(void)
            2026-11-03). A still FCRAM picture just stays the last frame in the video. */
         const bool isStatic = !isNew && IsVram(cur) && (!t->hasCap || nowUs - t->lastCapUs >= STATIC_GAP_US) &&
                               nowUs - t->lastNewUs >= STATIC_GAP_US;
-        if (!(due && (isNew || isStatic)))
+        /* A game drawing faster than the recording but slower than 60 (Monster Hunter 4 on a New
+           3DS, ~45 a second): every other swap came under gapUs after a capture and was let go, and
+           the one after it was waited for, so the recording had 22-27 pictures a second with nothing
+           dropped (New 3DS 0.12.5, 2026-11-12). Such a swap's picture is still on the screen: it is
+           taken once a whole frame time has passed since the last capture. Games swap at a screen
+           refresh, so it is taken only in the middle between two refreshes (counted from the swap):
+           a DMA started just before the next swap would read a buffer the game draws into again. */
+        const u32 phase = (u32)((nowUs - t->lastNewUs) % VBLANK_US);
+        const bool late = !isNew && t->pend && t->precise && t->hasCap && nowUs - t->lastCapUs >= 1000000u / g_cfg.fps &&
+                          phase >= LATE_AFTER_US && phase <= VBLANK_US - LATE_BEFORE_US;
+        if (!(due && (isNew || isStatic || late)))
             continue;
         if (t->hasCap && nowUs - t->modeUs < MODE_SETTLE_US)
             continue;   /* the screen's mode just changed: let it settle */
         t->lastCapUs = nowUs;
         t->hasCap = true;
+        t->pend = false;
         if (g_paced)
         {
             if (!PaceTake(sc))
@@ -2137,6 +2208,11 @@ static u32 PollScreens(void)
         t->lastRealUs = nowUs;
         Capture(sc, cur, fmt, stride, (u32)nowUs, isStatic);
     }
+    g_lastPollUs = nowUs;
+    /* a game faster than the recording: every poll, so its swaps' times are known (late captures) */
+    for (int sc = 0; sc < 2; sc++)
+        if ((sc == 0 ? g_cfg.top : g_cfg.bottom) && g_track[sc].hasCap && g_track[sc].swapGapUs < FAST_SWAP_US)
+            return POLL_REC_US;
     const u64 after = TicksToUs(Ticks() - g_recStartTick);
     return wakeUs > after + POLL_REC_US ? (u32)(wakeUs - after) : POLL_REC_US;
 }
@@ -2145,6 +2221,9 @@ static u32 PollScreens(void)
    game taking the processor, on a synthetic 3D-like frame (smooth shading with noise) against
    itself panned by one column. Checks the ARM Q565 encoder against the C one. config codec_bench=on.
    O3DS 2026-11-09 (at boot, the system core busy too): XR32 35 ms, Q565 C 90 ms, ARM 76 ms. */
+static const char *CpuState(void);
+static const char *g_benchWhat = "start-up";
+
 static void CodecBench(void)
 {
     const u32 cols = 400, rows = 240, words = cols * rows;
@@ -2200,12 +2279,173 @@ static void CodecBench(void)
         if (TicksToUs(t1 - t0) < best[3]) best[3] = TicksToUs(t1 - t0);
     }
     const bool same = lenA == lenC && memcmp(outA, outB, lenA) == 0;
+    {
+        /* the Huffman stage over this frame's XR32 bytes (the packer's work) */
+        memcpy(prev, ref, words * 2);
+        const u32 lx = (u32)codec_xr32_encode_strided_v(prev, (const u8 *)src, cols, rows, rows * 2, 1, 0, 1, outA);
+        const u64 t0 = Ticks();
+        const u32 lh = (u32)huff_encode(outA, lx, (u8 *)ref, words * 2);
+        Log("codec bench, %s, %s: Huffman over XR32 %lu us, %lu -> %lu KB", g_benchWhat, CpuState(), TicksToUs(Ticks() - t0),
+            lx / KB, lh / KB);
+    }
     Log("codec bench (no game, synthetic panned frame, %lu%% changed): XR32 %lu us %lu KB; Q565 C %lu us, ARM %lu us, "
         "%lu KB (%s); C420 %lu us, from BGR8 %lu us (scaled to 400 columns); change check %lu us", pct, best[0], lenX / KB, best[1], best[2], lenA / KB,
         same ? "ARM = C" : "ARM DIFFERS FROM C", best[4], best[5], best[3]);
     if (!same)
         g_q565ArmBad = true;
     BigFreeAll();
+}
+
+/* ------------------------------------------------------------------ New 3DS test */
+
+typedef struct {
+    const char *name;
+    u8 intra, c420, huff, convExtra, packExtra;
+} TestVar;
+/* the most telling first: a tester may make fewer recordings than there are variants */
+static const TestVar TEST_VARS[] = {
+    { "Q565, converter on the system core (the default so far)", 1, 0, 0, 0, 0 },
+    { "Q565, converter on an extra core", 1, 0, 0, 1, 0 },
+    { "Q565 + Huffman, converter and packer on extra cores", 1, 0, 1, 1, 1 },
+    { "C420, converter on the system core", 0, 1, 0, 0, 0 },
+    { "C420, converter on an extra core", 0, 1, 0, 1, 0 },
+    { "XR32 only, converter on the system core", 0, 0, 0, 0, 0 },
+    { "Q565 + Huffman, converter and packer on the system core", 1, 0, 1, 0, 0 },
+};
+#define TEST_VAR_COUNT (sizeof(TEST_VARS) / sizeof(TEST_VARS[0]))
+static u32 g_testNext;
+static const TestVar *g_testVar;   /* this recording's, NULL: not a test */
+static bool g_isNew3ds;
+/* A step of the test that may take the console down (threads on cores 2 and 3, the benches) leaves
+   a marker file while it runs; a marker found at start-up means that step did so last time, and it
+   is left out from then on: the console starts normally again after one bad start. Deleting the
+   markers (or the whole /3ds/recorder folder's dot files) lets the steps run again. */
+#define TEST_THREADS_FS DIR_FS "/.n3ds_test_threads"
+#define TEST_BENCH_FS   DIR_FS "/.n3ds_test_bench"
+static bool g_testExtraCores;   /* threads may be made on cores 2 and 3 */
+static bool g_core2Behind;      /* New 3DS: frames were lost with the converter on core 2: the system core from then on */
+
+static bool TestMarkerFound(const char *path)
+{
+    Handle f = 0;
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, path), FS_OPEN_READ, 0)))
+        return false;
+    FSFILE_Close(f);
+    return true;
+}
+
+static void TestMarker(const char *path, bool on)
+{
+    const FS_Path p = fsMakePath(PATH_ASCII, path);
+    FSUSER_DeleteFile(g_sd, p);
+    Handle f = 0;
+    if (!on || R_FAILED(FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+        return;
+    u32 done = 0;
+    FSFILE_Write(f, &done, 0, "x", 1, FS_WRITE_FLUSH);
+    FSFILE_Close(f);
+}
+
+/* How much of each core is free: a thread at the lowest priority on every core counts loops for
+   PROBE_MS; the counts (raw, with the processor's state) are compared between a quiet console and
+   a running game. "-": no thread on that core. */
+#define PROBE_MS 100u
+static volatile bool g_probeStop;
+static volatile u32 g_probeCount[4];
+
+static void ProbeMain(void *arg)
+{
+    const u32 core = (u32)arg;
+    u32 n = 0;
+    while (!g_probeStop)
+    {
+        for (volatile u32 i = 0; i < 2000u; i++)
+            ;
+        n++;
+    }
+    g_probeCount[core] = n;
+}
+
+static void IdleProbe(const char *when)
+{
+    Thread t[4] = { NULL, NULL, NULL, NULL };
+    const u32 cores = g_isNew3ds && g_testExtraCores ? 4u : 2u;
+    g_probeStop = false;
+    for (u32 c = 0; c < cores; c++)
+    {
+        g_probeCount[c] = 0;
+        t[c] = threadCreate(ProbeMain, (void *)c, 2 * KB, 0x3F, (s32)c, false);
+    }
+    svcSleepThread((s64)PROBE_MS * 1000 * 1000);
+    g_probeStop = true;
+    char line[96];
+    u32 n = 0;
+    for (u32 c = 0; c < cores; c++)
+    {
+        if (t[c])
+        {
+            threadJoin(t[c], 2000ull * 1000 * 1000);
+            threadFree(t[c]);
+            n += (u32)snprintf(line + n, sizeof(line) - n, " core %lu: %lu,", c, g_probeCount[c]);
+        }
+        else
+            n += (u32)snprintf(line + n, sizeof(line) - n, " core %lu: -,", c);
+    }
+    Log("idle probe (%s, %u ms, loops at the lowest priority):%s %s", when, PROBE_MS, line, CpuState());
+}
+
+static void BenchThread(void *arg)
+{
+    (void)arg;
+    CodecBench();
+}
+
+/* The codec bench on one core (a thread there), or a line saying no thread could be made. */
+static void BenchOnCore(s32 core, const char *what)
+{
+    g_benchWhat = what;
+    Thread t = threadCreate(BenchThread, NULL, 16 * KB, 0x30, core, false);
+    if (!t)
+    {
+        Log("codec bench, %s: no thread on core %ld", what, core);
+        return;
+    }
+    threadJoin(t, 20000ull * 1000 * 1000);
+    threadFree(t);
+}
+
+static bool g_ptmSysm;
+
+/* Start-up, New 3DS test: every core as the console boots (HOME Menu's processor state), then at
+   804 MHz with the L2 cache, as recordings run (CpuBoost). */
+static void TestBenches(void)
+{
+    IdleProbe("start-up");
+    BenchOnCore(1, "core 1");
+    if (g_testExtraCores)
+    {
+        BenchOnCore(2, "core 2");
+        BenchOnCore(3, "core 3");
+    }
+    s64 mhz = 0, l2 = 0;
+    if (!g_ptmSysm || R_FAILED(svcGetSystemInfo(&mhz, 0x10001, 0)) || R_FAILED(svcGetSystemInfo(&l2, 0x10001, 2)))
+    {
+        Log("test benches: the processor's speed cannot be changed (ptm:sysm %s)", g_ptmSysm ? "ok" : "missing");
+        return;
+    }
+    const u8 before = (u8)((mhz > 300 ? 1 : 0) | (l2 ? 2 : 0));
+    const Result rc = PTMSYSM_ConfigureNew3DSCPU(3);
+    Log("test benches: 804 MHz + L2 asked for (rc %08lX): %s", (u32)rc, CpuState());
+    IdleProbe("start-up, fast");
+    BenchOnCore(1, "core 1, fast");
+    if (g_testExtraCores)
+    {
+        BenchOnCore(2, "core 2, fast");
+        BenchOnCore(3, "core 3, fast");
+    }
+    PTMSYSM_ConfigureNew3DSCPU(before);
+    Log("test benches: the processor is back: %s", CpuState());
+    g_benchWhat = "start-up";
 }
 
 /* ------------------------------------------------------------------ start / stop */
@@ -2903,6 +3143,30 @@ static bool StartRecording(void)
     g_intraOn = (g_cfg.intra || isN3ds) && !g_c420On;   /* New 3DS: the processor has the time (804 MHz, L2: CpuBoost) */
     /* In the launcher plugin's 2 MB every frame is C420: no reference frames (346 KB), which go to
        a third top-screen frame and a longer audio queue (ARENA_CAP_PLG_C420, AUDIO_QUEUE_PLG_C420). */
+    /* New 3DS test: this recording's variant decides the codecs and the cores */
+    g_testVar = NULL;
+    if (g_cfg.n3dsTest && isN3ds)
+    {
+        for (u32 i = 0; i < TEST_VAR_COUNT && !g_testVar; i++)
+        {
+            const TestVar *v = &TEST_VARS[g_testNext++ % TEST_VAR_COUNT];
+            if ((!v->convExtra || g_convCount > 1) && (!v->packExtra || g_packCount > 1 || g_convCount > 1))
+                g_testVar = v;   /* a variant for extra cores is left out where there are none */
+        }
+    }
+    /* New 3DS: the converter on core 2 when there is one, unless it fell behind there before */
+    g_convActive = g_convCount > 1 && !g_core2Behind ? 1u : 0u;
+    g_packActive = 0;
+    if (g_testVar)
+    {
+        g_intraOn = g_testVar->intra;
+        g_c420On = g_testVar->c420;
+        g_paced = true;
+        g_convActive = g_testVar->convExtra ? 1u : 0u;
+        g_packActive = g_testVar->packExtra && g_packCount > 1 ? 1u : 0u;
+    }
+    g_convThread = g_convThreads[g_convActive];
+    g_packThread = g_packThreads[g_packActive];
     g_c420Always = g_inPlg && g_c420On;
     if (g_c420Always)
         g_aqCap = AUDIO_QUEUE_PLG_C420;
@@ -2911,6 +3175,7 @@ static bool StartRecording(void)
         g_c420Mode[sc] = g_sampled[sc] = false;
         g_c420Hot[sc] = g_c420Calm[sc] = g_c420Frames[sc] = 0;
         g_waitUs[sc] = 0;
+        g_waitN[sc] = 0;
         g_waitMaxUs[sc] = 0;
         g_codecUs[0][sc] = g_codecUs[1][sc] = 0;
         g_codecN[0][sc] = g_codecN[1][sc] = 0;
@@ -2934,7 +3199,7 @@ static bool StartRecording(void)
     const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
     /* staging buffers for the packer (Huffman on): three in the normal profile, one in the light
        ones (no memory to spare there: the ring gets less) */
-    u32 stages = g_cfg.huff ? (lite ? 1u : STAGES_MAX) : 0u;
+    u32 stages = (g_testVar ? g_testVar->huff != 0 : g_cfg.huff) ? (lite ? 1u : STAGES_MAX) : 0u;
     for (u32 i = 0; i < stages; i++)
         if (!(g_stage[i].buf = BigAlloc(recMax)))
             stages = i;
@@ -2986,6 +3251,7 @@ static bool StartRecording(void)
     }
     memset(g_slots, 0, sizeof(g_slots));
     memset(g_track, 0, sizeof(g_track));
+    g_lastPollUs = 0;
     g_aq = !g_cfg.audio ? NULL : g_inPlg ? plgAq : BigAlloc(g_aqCap * sizeof(AudioItem));
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
@@ -3065,6 +3331,12 @@ static bool StartRecording(void)
         g_shared.sysFreeKb, sdFree,
         CpuState());
     LogMemory("recording started");
+    if (g_testVar)
+    {
+        Log("test variant %lu of %u: %s; converter on core %ld, packer on core %ld", (g_testNext - 1) % TEST_VAR_COUNT + 1,
+            (unsigned)TEST_VAR_COUNT, g_testVar->name, g_convCores[g_convActive], g_packCores[g_packActive]);
+        IdleProbe("recording starts");
+    }
     return true;
 }
 
@@ -3073,7 +3345,6 @@ static bool StartRecording(void)
    way while a game runs); what was set before comes back when the recording stops. A game in
    legacy mode runs at 268 MHz without L2, and the converter shares the system core there.
    ptm:sysm (rec3ds.rsf). */
-static bool g_ptmSysm;
 static s32  g_cpuBefore = -1;   /* PTMSYSM_ConfigureNew3DSCPU value to restore, -1: nothing changed */
 
 static void CpuBoost(bool on)
@@ -3277,6 +3548,8 @@ static void StopRecording(const char *why, bool releaseFirst)
     const Result rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
     CloseInfo();   /* saved: nothing to recover */
     const u32 seconds = TicksToUs(Ticks() - g_recStartTick) / 1000000u;
+    if (g_testVar)
+        IdleProbe("recording ends");
     Log("recording saved: %s, %lu s, %llu KB, frames %lu + %lu, dropped %lu, throttled %lu, ring max %lu KB, "
         "file grown %lu times (max %lu ms), audio frames %lu (ring full %lu, queue full %lu, still-writing polls %lu, both-changed %lu, poll gap max %lu us, gaps > 4 ms %lu), "
         "DSP snapshots %lu, DSP off polls %lu, DSP cache rc %08lX, write rc %08lX, rename rc %08lX, reason: %s",
@@ -3308,7 +3581,7 @@ static void StopRecording(const char *why, bool releaseFirst)
             g_c420On ? "on" : "off", g_c420Frames[0], g_c420Frames[1], g_c420Switches,
             AVG(g_codecUs[0][0], g_codecN[0][0]), AVG(g_codecUs[0][1], g_codecN[0][1]), g_codecN[0][0], g_codecN[0][1],
             AVG(g_codecUs[1][0], g_codecN[1][0]), AVG(g_codecUs[1][1], g_codecN[1][1]),
-            AVG(g_waitUs[0], g_codecN[0][0] + g_codecN[1][0]) / 1000u, AVG(g_waitUs[1], g_codecN[0][1] + g_codecN[1][1]) / 1000u,
+            AVG(g_waitUs[0], g_waitN[0]) / 1000u, AVG(g_waitUs[1], g_waitN[1]) / 1000u,
             g_waitMaxUs[0] / 1000u, g_waitMaxUs[1] / 1000u);
         if (g_paced)
             Log("pacer: frames kept at the end %lu%% / %lu%% (top / bottom), cut %lu on average, most %lu of %u",
@@ -3383,15 +3656,62 @@ int main(void)
     s64 isNew3ds = 0;
     svcGetSystemInfo(&isNew3ds, 0x10000, 0x201);
     Thread conv = NULL;
-    if (!isNew3ds && (conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 0, false)) != NULL)
+    g_isNew3ds = isNew3ds != 0;
+    if (!isNew3ds && (conv = threadCreate(ConverterMain, (void *)0, 8 * KB, CONVERTER_PRIO, 0, false)) != NULL)
         g_convOnGameCore = true;
     if (!conv)
-        conv = threadCreate(ConverterMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
+        conv = threadCreate(ConverterMain, (void *)0, 8 * KB, CONVERTER_PRIO, 1, false);
     g_writerThread = writer;
     g_convThread = conv;
+    g_convThreads[0] = conv;
+    g_convCores[0] = g_convOnGameCore ? 0 : 1;
+    g_convCount = 1;
     /* the packer on the system core at the converter's priority (the writer stays above it) */
-    Thread pack = threadCreate(PackerMain, NULL, 8 * KB, CONVERTER_PRIO, 1, false);
+    Thread pack = threadCreate(PackerMain, (void *)0, 8 * KB, CONVERTER_PRIO, 1, false);
     g_packThread = pack;
+    g_packThreads[0] = pack;
+    g_packCores[0] = 1;
+    g_packCount = 1;
+    char extra[96] = "";
+    const bool threadsFailed = isNew3ds && TestMarkerFound(TEST_THREADS_FS);
+    if (threadsFailed)
+        snprintf(extra, sizeof(extra), " left out: the console went down making them last time (" TEST_THREADS_FS ")");
+    if (isNew3ds && !threadsFailed)
+    {
+        TestMarker(TEST_THREADS_FS, true);
+        /* New 3DS: a second converter on core 2, which games leave idle (rsf CanAccessCore2); recordings
+           use it (StartRecording). There Q565 took 4.7-5.9 ms a top-screen frame against 7.7-8.7 ms on
+           the system core, which a game's own system calls keep ~40% busy (New 3DS XL 0.12.5,
+           2026-11-12: 21 recordings in three programs, nothing dropped on either core). The test
+           (n3ds_test) also tries core 3, and a second packer on core 3 (else 2). */
+        u32 n = 0;
+        for (s32 core = 2; core <= (g_cfg.n3dsTest ? 3 : 2) && g_convCount < 2; core++)
+        {
+            Thread t = threadCreate(ConverterMain, (void *)1, 8 * KB, CONVERTER_PRIO, core, false);
+            n += (u32)snprintf(extra + n, sizeof(extra) - n, " converter core %ld %s;", core, t ? "ok" : "refused");
+            if (t)
+            {
+                g_convThreads[1] = t;
+                g_convCores[1] = core;
+                g_convCount = 2;
+            }
+        }
+        for (s32 core = 3; g_cfg.n3dsTest && core >= 2 && g_packCount < 2; core--)
+        {
+            Thread t = threadCreate(PackerMain, (void *)1, 8 * KB, CONVERTER_PRIO, core, false);
+            n += (u32)snprintf(extra + n, sizeof(extra) - n, " packer core %ld %s;", core, t ? "ok" : "refused");
+            if (t)
+            {
+                g_packThreads[1] = t;
+                g_packCores[1] = core;
+                g_packCount = 2;
+            }
+        }
+        svcSleepThread(100 * 1000 * 1000);   /* the new threads have run by now */
+        TestMarker(TEST_THREADS_FS, false);
+        g_testExtraCores = true;
+        g_convActive = g_convCount > 1 ? 1u : 0u;   /* from the start: no switch with a frame on its way */
+    }
     /* highest non-privileged priority: a poll late by more than ~6 ms loses a frame
        (v5: ~1 per second at 0x20); it only reads 1.3 KB per ms */
     Thread audio = threadCreate(AudioMain, NULL, 4 * KB, 0x18, 1, false);
@@ -3421,11 +3741,23 @@ int main(void)
         n3ds ? "New 3DS" : "Old 3DS", (u32)(luma >> 24) & 0xFF, (u32)(luma >> 16) & 0xFF, (u32)(luma >> 8) & 0xFF,
         GET_VERSION_MAJOR(kv), GET_VERSION_MINOR(kv), GET_VERSION_REVISION(kv), g_cfg.hotkey, g_cfg.fps,
         ScreensName(), g_cfg.audio ? "on" : "off", g_cfg.maxFileMb, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
-        SdFreeMb(), g_convOnGameCore ? 0 : 1, (s32)g_fsPrioOld, (s32)g_fsPrioNew, g_cfg.huff ? "" : ", Huffman off",
+        SdFreeMb(), (int)g_convCores[g_convActive], (s32)g_fsPrioOld, (s32)g_fsPrioNew, g_cfg.huff ? "" : ", Huffman off",
         g_cfg.abTest ? ", A/B test" : "");
     if (n3ds)
         g_ptmSysm = R_SUCCEEDED(ptmSysmInit());
-    if (g_cfg.bench)
+    if (n3ds && g_cfg.n3dsTest)
+    {
+        Log("New 3DS test build: extra threads:%s", extra[0] ? extra : " none");
+        if (TestMarkerFound(TEST_BENCH_FS))
+            Log("test benches left out: the console went down in them last time (" TEST_BENCH_FS ")");
+        else
+        {
+            TestMarker(TEST_BENCH_FS, true);
+            TestBenches();
+            TestMarker(TEST_BENCH_FS, false);
+        }
+    }
+    else if (g_cfg.bench)
         CodecBench();
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
@@ -3610,6 +3942,17 @@ int main(void)
             if (DmasRunning())
                 sleepUs = POLL_REC_US;   /* close them soon after they finish */
             UpdateBoost();
+            /* New 3DS: a program that keeps core 2 busy itself starves the converter there (lowest
+               priority) and frames find no free slot: back to the system core, as before 0.12.6,
+               for the rest of this recording and the next ones */
+            if (g_convActive == 1 && !g_testVar && g_drops[DROP_NO_SLOT] + g_drops[DROP_DMA_LIMIT] >= 8u)
+            {
+                g_core2Behind = true;
+                g_convActive = 0;
+                g_convThread = g_convThreads[0];
+                svcSetThreadPriority(threadGetHandle(g_convThread), g_boosted ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+                Log("converter on core %ld fell behind: the system core from now on", g_convCores[1]);
+            }
             const u64 now = Ticks();
             g_shared.recSeconds = TicksToUs(now - g_recStartTick) / 1000000u;
             g_shared.recKb = (u32)(g_written / KB);

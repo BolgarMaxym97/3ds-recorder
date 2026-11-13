@@ -32,6 +32,7 @@ AccessControlInfo:
   PermitMainFunctionArgument    : false
   CanShareDeviceMemory          : false
   RunnableOnSleep               : true
+  CanAccessCore2                : true   # New 3DS: the converter's thread on core 2 (ignored on an Old 3DS)
   SpecialMemoryArrange          : false
   ResourceLimitCategory         : Other
 

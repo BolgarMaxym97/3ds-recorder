@@ -24,6 +24,13 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 *Recorded on an Old 3DS with 3DS Recorder itself: Mario Kart 7, both screens with sound. This is the MP4 the console
 made, as it is (400 × 480), only cut shorter.*
 
+More recordings, as they came out:
+
+- [Old 3DS — HOME Menu and a Mario Kart 7 race](https://github.com/BolgarMaxym97/3ds-recorder/releases/download/v1.0.0/demo-old3ds-mk7.mp4) (2 min 19 s, 32 MB): the full
+  video the clip above is cut from.
+- [New 3DS XL — Resident Evil Revelations](https://github.com/BolgarMaxym97/3ds-recorder/releases/download/v1.0.0/demo-new3ds-re-revelations.mp4) (55 s, 11 MB): sent in
+  by a tester; the recording was turned into MP4 on a computer with `tools/r3d2mp4.sh`.
+
 ---
 
 <a id="english"></a>
@@ -38,12 +45,6 @@ the game sound. Press a button combination to start, press it again to stop — 
 You do not need a PC or a capture card. The console turns each recording into a small MP4 video by itself, and you can
 send it to your phone over Wi-Fi by scanning a QR code.
 
-> [!WARNING]
-> **This is a beta (0.12.4).** It has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every
-> console, game and SD card, so bugs are possible. If something goes wrong, please
-> [open an issue](../../issues/new) and attach the log (see [Problems and feedback](#problems-and-feedback)) —
-> every report helps make the release better.
-
 ### What you need
 
 - A Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL or New 2DS XL with **Luma3DS** custom firmware.
@@ -53,12 +54,20 @@ send it to your phone over Wi-Fi by scanning a QR code.
 
 ### Install
 
-1. Download `3ds-recorder.cia` (or `3ds-recorder.3dsx`) from [Releases](../../releases).
-2. Copy it to the SD card and install the `.cia` with FBI (the `.3dsx` goes to `/3ds/`).
+The newest version is always on the [Releases page](https://github.com/BolgarMaxym97/3ds-recorder/releases/latest): each release has `3ds-recorder.cia` and
+`3ds-recorder.3dsx` under **Assets**. You need only one of them: the `.cia` puts an icon in the HOME Menu, the `.3dsx`
+runs from the Homebrew Launcher.
+
+1. Download `3ds-recorder.cia` (or `3ds-recorder.3dsx`) from the [latest release](https://github.com/BolgarMaxym97/3ds-recorder/releases/latest).
+2. Copy it to the SD card. Install the `.cia` with FBI: SD → the file → **Install CIA**. The `.3dsx` needs no
+   install: put it in the `/3ds/` folder.
 3. Turn the console on while holding **SELECT** to open the Luma menu. Turn on
    **Enable loading external FIRMs and modules** and save with **START**.
 4. Open **3DS Recorder**, choose your language and read the short guide. The recorder starts by itself: the
    notification LED glows blue for a moment.
+
+**To update,** install the new `.cia` over the old one (or replace the `.3dsx`) and open the app: it updates the
+recorder by itself. Settings and recordings stay.
 
 ### How to use
 
@@ -114,7 +123,8 @@ stay unless you tick the box. Luma settings are not changed.
 
 ### Problems and feedback
 
-This is a beta: every report helps. Please open an [issue](../../issues/new), say what you did and what happened
+3DS Recorder has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every console, game and SD
+card. If something goes wrong, please open an [issue](../../issues/new), say what you did and what happened
 (console model, game), and attach the log: on the phone page (the QR code) tap
 **Log for the developer** at the bottom, or copy `/3ds/recorder/app.log` and `recorder.log` from the SD card.
 
@@ -172,6 +182,13 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 *Записано на Old 3DS самим 3DS Recorder: Mario Kart 7, обидва екрани зі звуком. Це MP4, який зробила сама консоль,
 як є (400 × 480), лише обрізаний.*
 
+Ще записи, як вони вийшли:
+
+- [Old 3DS — меню HOME і заїзд у Mario Kart 7](https://github.com/BolgarMaxym97/3ds-recorder/releases/download/v1.0.0/demo-old3ds-mk7.mp4) (2 хв 19 с, 32 MB): повне
+  відео, з якого вирізано кліп вище.
+- [New 3DS XL — Resident Evil Revelations](https://github.com/BolgarMaxym97/3ds-recorder/releases/download/v1.0.0/demo-new3ds-re-revelations.mp4) (55 с, 11 MB): надіслав
+  тестувальник; запис перетворено на MP4 на комп'ютері через `tools/r3d2mp4.sh`.
+
 ### Що це
 
 3DS Recorder записує всю консоль: усе, що на екранах, у будь-якій грі, меню HOME чи системній програмі, разом зі
@@ -179,11 +196,6 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 Не потрібні ні комп'ютер, ні карта захоплення. Консоль сама перетворює кожен запис на невелике відео MP4, а забрати
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
-
-> [!WARNING]
-> **Це бета-версія (0.12.4).** Її перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі
-> й SD-картці, тож можливі баги. Якщо щось пішло не так, будь ласка, [створіть issue](../../issues/new) і додайте
-> журнал (див. [Проблеми і відгуки](#проблеми-і-відгуки)) — кожен звіт допомагає зробити реліз кращим.
 
 ### Що потрібно
 
@@ -194,12 +206,20 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 ### Встановлення
 
-1. Завантажте `3ds-recorder.cia` (або `3ds-recorder.3dsx`) з [Releases](../../releases).
-2. Скопіюйте на SD-картку і встановіть `.cia` через FBI (`.3dsx` кладеться в `/3ds/`).
+Найновіша версія завжди лежить на [сторінці Releases](https://github.com/BolgarMaxym97/3ds-recorder/releases/latest): у кожному релізі в розділі **Assets** є
+`3ds-recorder.cia` і `3ds-recorder.3dsx`. Потрібен лише один із них: `.cia` додає іконку в меню HOME, `.3dsx`
+запускається з Homebrew Launcher.
+
+1. Завантажте `3ds-recorder.cia` (або `3ds-recorder.3dsx`) з [останнього релізу](https://github.com/BolgarMaxym97/3ds-recorder/releases/latest).
+2. Скопіюйте файл на SD-картку. `.cia` встановіть через FBI: SD → файл → **Install CIA**. `.3dsx` встановлювати
+   не треба: покладіть його в теку `/3ds/`.
 3. Увімкніть консоль із затиснутою **SELECT** — відкриється меню Luma. Увімкніть
    **Enable loading external FIRMs and modules** і збережіть кнопкою **START**.
 4. Відкрийте **3DS Recorder**, виберіть мову і прочитайте короткий гайд. Рекордер запуститься сам: індикатор LED
    на мить засвітиться синім.
+
+**Щоб оновити,** встановіть новий `.cia` поверх старого (або замініть `.3dsx`) і відкрийте додаток: рекордер він
+оновить сам. Налаштування і записи лишаються.
 
 ### Як користуватися
 
@@ -254,7 +274,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 ### Проблеми і відгуки
 
-Це бета: кожен звіт допомагає. Будь ласка, створіть [issue](../../issues/new), напишіть, що робили і що сталося
+3DS Recorder перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі й SD-картці. Якщо щось
+пішло не так, будь ласка, створіть [issue](../../issues/new), напишіть, що робили і що сталося
 (модель консолі, гра), і додайте журнал: на сторінці в телефоні (через QR-код) унизу натисніть
 **Журнал для розробника**, або скопіюйте з SD-картки `/3ds/recorder/app.log` і `recorder.log`.
 

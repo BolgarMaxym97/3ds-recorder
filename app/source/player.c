@@ -100,6 +100,48 @@ static volatile u32 g_seekShowUs;
 
 /* ------------------------------------------------------------------ reading */
 
+/* The next piece of the file is read by a thread of its own while this one decodes. With both in
+   one thread a recording at 29 + 28 pictures a second (4.7 MB/s) had 1258 of its pictures shown in
+   31 s, 87 late and 406 thinned out: the card took about half of the thread's time (O3DS 0.12.6,
+   2026-11-13). g_preState: 0 nothing, 1 being read, 2 read (g_preLen bytes from g_preOff). Only
+   fill() asks for a piece and only it takes one; a seek's own reads wait for the thread first. */
+static Thread g_preThread;
+static LightEvent g_preWake;
+static u8 *g_pre;
+static u64 g_preOff;
+static volatile u32 g_preLen, g_preState;
+
+static void pre_main(void *arg)
+{
+    (void)arg;
+    while (!g_quit) {
+        if (__atomic_load_n(&g_preState, __ATOMIC_ACQUIRE) != 1) {
+            LightEvent_WaitTimeout(&g_preWake, 50 * 1000 * 1000);
+            continue;
+        }
+        u32 got = 0;
+        const u64 left = g_size - g_preOff;
+        if (R_FAILED(FSFILE_Read(g_file, &got, g_preOff, g_pre, (u32)(left < READ_BUF ? left : READ_BUF))))
+            got = 0;
+        g_preLen = got;
+        __atomic_store_n(&g_preState, 2, __ATOMIC_RELEASE);
+    }
+}
+
+/* Waits for a read under way; true when a piece is there. */
+static bool pre_wait(void)
+{
+    while (__atomic_load_n(&g_preState, __ATOMIC_ACQUIRE) == 1 && g_preThread)
+        svcSleepThread(500 * 1000);
+    return __atomic_load_n(&g_preState, __ATOMIC_ACQUIRE) == 2;
+}
+
+static void pre_drop(void)
+{
+    pre_wait();
+    __atomic_store_n(&g_preState, 0, __ATOMIC_RELEASE);
+}
+
 static bool fill(u32 need)
 {
     if (g_bufLen - g_pos >= need)
@@ -109,18 +151,39 @@ static bool fill(u32 need)
     g_bufLen -= g_pos;
     g_pos = 0;
     while (g_bufLen < need && g_bufOff + g_bufLen < g_size) {
-        u32 got = 0;
-        const u64 left = g_size - (g_bufOff + g_bufLen);
+        const u64 end = g_bufOff + g_bufLen;
+        const u64 left = g_size - end;
         const u32 want = (u32)(left < READ_BUF - g_bufLen ? left : READ_BUF - g_bufLen);
-        if (R_FAILED(FSFILE_Read(g_file, &got, g_bufOff + g_bufLen, g_buf + g_bufLen, want)) || !got)
+        if (g_preState && g_preOff == end && pre_wait() && g_preLen) {
+            /* the piece read meanwhile; what does not fit stays for the next time */
+            const u32 n = g_preLen < want ? g_preLen : want;
+            memcpy(g_buf + g_bufLen, g_pre, n);
+            g_bufLen += n;
+            if (n < g_preLen) {
+                memmove(g_pre, g_pre + n, g_preLen - n);
+                g_preOff += n;
+                g_preLen -= n;
+            } else
+                __atomic_store_n(&g_preState, 0, __ATOMIC_RELEASE);
+            continue;
+        }
+        pre_drop();   /* another place in the file, or nothing read */
+        u32 got = 0;
+        if (R_FAILED(FSFILE_Read(g_file, &got, end, g_buf + g_bufLen, want)) || !got)
             break;
         g_bufLen += got;
+    }
+    if (!g_preState && g_preThread && g_bufOff + g_bufLen < g_size) {
+        g_preOff = g_bufOff + g_bufLen;
+        __atomic_store_n(&g_preState, 1, __ATOMIC_RELEASE);
+        LightEvent_Signal(&g_preWake);
     }
     return g_bufLen - g_pos >= need;
 }
 
 static void reposition(u64 off)
 {
+    pre_drop();   /* a seek reads the file itself */
     g_bufOff = off;
     g_bufLen = g_pos = 0;
     g_eof = false;
@@ -582,6 +645,7 @@ static bool header_at(u64 off, R3dRecHeader *h)
 
 static void do_seek(u32 targetUs)
 {
+    pre_drop();   /* the reads below are this thread's own */
     clear_slots();
     queue_clear();
     audio_reset(targetUs); /* the old sound stops; the clock holds at the target meanwhile */
@@ -808,6 +872,9 @@ bool player_start(const char *name, u32 durationMs)
     g_lastVideoUs = 0;
     g_seekTo = -1;
     g_buf = malloc(READ_BUF);
+    g_pre = malloc(READ_BUF);
+    g_preState = 0;
+    LightEvent_Init(&g_preWake, RESET_ONESHOT);
     for (int sc = 0; sc < 2; sc++) {
         g_keys[sc] = malloc(KEYS_MAX * sizeof(Key));
         g_nKeys[sc] = 0;
@@ -819,7 +886,7 @@ bool player_start(const char *name, u32 durationMs)
         for (int i = 0; i < SLOTS; i++)
             g_slots[sc][i] = (Slot){linearAlloc(PLAYER_TEX_W * 400 * 2), 0, 0};
     }
-    bool ok = g_buf && g_cur[0] && g_cur[1];
+    bool ok = g_buf && g_pre && g_cur[0] && g_cur[1];
     for (int sc = 0; sc < 2; sc++)
         for (int i = 0; i < SLOTS; i++)
             ok = ok && g_slots[sc][i].px;
@@ -858,6 +925,8 @@ bool player_start(const char *name, u32 durationMs)
 
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    /* above the decoder: it only asks the card for the next piece and sleeps until it is there */
+    g_preThread = threadCreate(pre_main, NULL, 8 * 1024, prio, -2, false);
     g_thread = threadCreate(thread_main, NULL, 32 * 1024, prio + 1, -2, false);
     if (!g_thread) {
         player_stop();
@@ -881,6 +950,13 @@ void player_stop(void)
         threadFree(g_thread);
         g_thread = NULL;
     }
+    if (g_preThread) {
+        g_quit = true;
+        LightEvent_Signal(&g_preWake);
+        threadJoin(g_preThread, U64_MAX);
+        threadFree(g_preThread);
+        g_preThread = NULL;
+    }
     queue_clear();
     if (g_ndspOk) {
         ndspChnWaveBufClear(0);
@@ -902,6 +978,8 @@ void player_stop(void)
     }
     free(g_buf);
     g_buf = NULL;
+    free(g_pre);
+    g_pre = NULL;
     for (int sc = 0; sc < 2; sc++) {
         free(g_keys[sc]);
         g_keys[sc] = NULL;
