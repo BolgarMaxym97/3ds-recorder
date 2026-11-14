@@ -30,6 +30,13 @@ void prepare_first(const char *name);
 PrepareState prepare_state(const char *name, int *permille);
 /* Before a recording is deleted: drops its job and deletes the files made from it. Blocks until done. */
 void prepare_forget(const char *name);
+/* Replay clips the recorder saved (.rpl) that are not recordings yet: how many, and the progress
+   of the one being made into a recording (permille, -1: waiting). Each becomes an ordinary
+   recording (prep/unwrap.h) before anything else is prepared. */
+int prepare_clips(int *permille);
+/* How many clips have become recordings since the app started (the gallery reads its list again
+   when this changes). */
+u32 prepare_clips_done(void);
 /* A recording is being encoded right now (the UI then draws less often: it shares the core). */
 bool prepare_busy(void);
 /* "sdmc:/3ds/recorder/recordings/<stem>.<ext>" */

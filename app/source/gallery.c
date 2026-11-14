@@ -110,6 +110,7 @@ static void read_info(GalItem *it)
         it->both = fh.mode == R3D_MODE_FULL_BOTH;
         it->bottomOnly = fh.mode == R3D_MODE_FULL_BOTTOM;
         it->audio = fh.audioRate != 0;
+        it->clip = (fh.flags & R3D_FILE_CLIP) != 0;
     }
     struct {
         R3dRecHeader h;
@@ -394,6 +395,7 @@ static bool do_next_item(void)
             it->audio = copy.audio;
             it->both = copy.both;
             it->bottomOnly = copy.bottomOnly;
+            it->clip = copy.clip;
             it->fps = copy.fps;
             it->durationMs = copy.durationMs;
             it->dropped = copy.dropped;

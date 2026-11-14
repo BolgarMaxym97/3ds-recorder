@@ -13,9 +13,9 @@ include $(DEVKITARM)/3ds_rules
 TARGET          := 3ds-recorder
 # The CIA's title version: raise it with each build that goes to a console, or the HOME Menu
 # keeps showing the banner it cached for the installed version.
-APP_VERSION := 1.0.0
+APP_VERSION := 1.1.0
 # "beta" for the open beta, empty for a release: shown next to the version on the panel
-APP_CHANNEL     :=
+APP_CHANNEL     := beta
 APP_TITLE       := 3DS Recorder
 APP_DESCRIPTION := Records the whole console
 APP_AUTHOR      := 3ds-screen-recorder

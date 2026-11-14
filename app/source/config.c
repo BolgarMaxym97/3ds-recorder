@@ -45,6 +45,8 @@ void config_load(Config *c)
     c->ukrainian = false;
     c->guideSeen = false;
     c->langSet = false;
+    c->replay = false;
+    snprintf(c->replayHotkey, sizeof(c->replayHotkey), "X+SELECT");   /* the module's default too */
     static char buf[MAX_FILE];
     if (!ReadAll(buf, sizeof(buf)))
         return;
@@ -79,6 +81,10 @@ void config_load(Config *c)
             c->ukrainian = strcasecmp(v, "uk") == 0;
             c->langSet = true;
         }
+        else if (strcasecmp(line, "replay") == 0)
+            c->replay = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(line, "replay_hotkey") == 0 && *v)
+            snprintf(c->replayHotkey, sizeof(c->replayHotkey), "%s", v);
         else if (strcasecmp(line, "guide") == 0)
             c->guideSeen = strcasecmp(v, "done") == 0;
     }

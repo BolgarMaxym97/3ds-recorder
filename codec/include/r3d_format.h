@@ -69,6 +69,8 @@ typedef struct {
     uint32_t reserved;
 } R3dEndInfo;
 
+#define R3D_FILE_CLIP 1u   /* a replay clip (the last 30 seconds), made by r3d_unwrap: galleries label it */
+
 /* mode: what the file holds */
 enum { R3D_MODE_FULL_TOP = 3, R3D_MODE_FULL_BOTH = 4, R3D_MODE_FULL_BOTTOM = 5 };
 
@@ -79,7 +81,7 @@ typedef struct {
     uint8_t  isNew3ds;
     uint8_t  mode;
     uint8_t  fps;          /* target capture rate */
-    uint8_t  reserved0;
+    uint8_t  flags;        /* R3D_FILE_*; 0 in files made before the replay buffer */
     uint32_t audioRate;    /* version 4: audio sample rate in mHz, 0 = no audio */
     uint64_t startTimeMs;  /* osGetTime(): ms since 1900-01-01 */
 } R3dFileHeader;
@@ -93,6 +95,28 @@ typedef struct {
     uint16_t cols;         /* 400 / 320; rows = 240 */
 } R3dRecHeader;
 
+/*
+ * Replay clip (.rpl, "the last 30 seconds"): the recorder keeps its stream in a file of a fixed
+ * size, new blocks over the oldest ones. Stream offset S is at file offset dataOff + S % ringBytes;
+ * the file holds the stream's last ringBytes. When a clip is saved this header goes to the file's
+ * start; r3d_unwrap (prep/) then makes an ordinary .r3d of the records in [start, end). No other
+ * reader opens these files.
+ */
+#define R3D_MAGIC_RING   0x52443352u   /* "R3DR" */
+#define R3D_RING_VERSION 1u
+typedef struct {
+    uint32_t magic;        /* R3D_MAGIC_RING */
+    uint32_t version;      /* R3D_RING_VERSION */
+    uint32_t dataOff;      /* file offset of the ring's data */
+    uint32_t startUs;      /* timeUs of the clip's first record: the clip's time 0 (timeUs wraps: differences count) */
+    uint64_t ringBytes;
+    uint64_t start;        /* stream offset of the clip's first record (a key frame) */
+    uint64_t end;          /* stream offset past its last record */
+    uint32_t endUs;        /* recorder time when the clip was saved */
+    uint32_t reserved;
+    R3dFileHeader file;    /* the .r3d's header (startTimeMs: the clip's start) */
+} R3dRingInfo;
+
 #ifdef __cplusplus
 static_assert(sizeof(R3dFileHeader) == 32, "R3dFileHeader");
 static_assert(sizeof(R3dRecHeader) == 16, "R3dRecHeader");
@@ -101,6 +125,7 @@ _Static_assert(sizeof(R3dFileHeader) == 32, "R3dFileHeader");
 _Static_assert(sizeof(R3dRecHeader) == 16, "R3dRecHeader");
 _Static_assert(sizeof(R3dAudioTrailer) == 16, "R3dAudioTrailer");
 _Static_assert(sizeof(R3dEndInfo) == 16, "R3dEndInfo");
+_Static_assert(sizeof(R3dRingInfo) == 80, "R3dRingInfo");
 #endif
 
 #endif

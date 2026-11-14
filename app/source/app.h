@@ -45,6 +45,7 @@ typedef struct {
     /* hotkey capture: held = buttons down now, cand = the captured combination */
     u32 hkHeld, hkCand, hkSince;
     bool hkReview, hkWaitRelease;
+    int hkStep;             /* 0: the recording hotkey, then 1: the replay hotkey (saves a clip) */
     /* gallery: selected row, first visible row, the list version seen, delete confirmation */
     int galSel, galTop;
     u32 galVersion, galPreviewVersion;
@@ -55,6 +56,9 @@ typedef struct {
     bool galAutoPlay;       /* ... and play it */
     u32 playerShowUntil;    /* frame until which the player's controls stay up */
     char phoneName[32];     /* the recording offered to the phone */
+    bool clipsTold;         /* "clips are being saved" was shown this session */
+    u32 galClipsDone;       /* prepare_clips_done() when the gallery read its list */
+    bool replayWarned;      /* "no room for the replay" was shown this session */
     bool quit;
     char selfPath[256];
 } App;

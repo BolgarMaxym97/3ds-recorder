@@ -104,17 +104,32 @@
     X(S_H1, "How to record", "Як записувати") \
     X(S_H1_BODY, "1. Open this app: the recorder starts by itself, the LED glows blue for a moment.\n2. Go to HOME and start a game. You can close the app: the recorder keeps running.\n3. Press %s: recording starts, the LED breathes red.\n4. The whole console is recorded: game, HOME, other apps, with sound, into one file.\n5. Press %s again: the recording is saved, the LED blinks green twice.", "1. Відкрийте цей додаток — рекордер запуститься сам, LED на мить засвітиться синім.\n2. Вийдіть у HOME і запустіть гру. Додаток можна закрити — рекордер працює далі.\n3. Натисніть %s — почнеться запис, LED «дихає» червоним.\n4. Пишеться вся консоль: гра, HOME, інші програми — в один файл, зі звуком.\n5. Ще раз %s — запис збережено, LED мигне зеленим двічі.") \
     X(S_H2, "What the LED means", "Що означає LED") \
-    X(S_H2_BODY, "Blue for 1.5 s: the recorder started and is ready.\nRed, breathing: recording.\nGreen twice: the recording is saved.\nRed three times: an error, open this app.\nNo light and the hotkey does nothing: the recorder is off, or the console was just turned on (see 3).", "Синій 1.5 с — рекордер запущено, готовий.\nЧервоний «дихає» — іде запис.\nЗелений двічі — запис збережено.\nЧервоний тричі — помилка, відкрийте додаток.\nLED не горить і хоткей не реагує — рекордер вимкнено або консоль щойно ввімкнули (розділ 3).") \
+    X(S_H2_BODY, "Blue for 1.5 s: the recorder started and is ready.\nRed, breathing: recording.\nFaint blue, steady: Replay keeps the last 30 s.\nGreen twice: a recording or a clip is saved.\nRed three times: an error, open this app.\nNo light and the hotkey does nothing: the recorder is off, or the console was just turned on (see 3).", "Синій 1.5 с — рекордер запущено, готовий.\nЧервоний «дихає» — іде запис.\nСлабкий синій, постійно — Повтор тримає останні 30 с.\nЗелений двічі — запис або кліп збережено.\nЧервоний тричі — помилка, відкрийте додаток.\nLED не горить і хоткей не реагує — рекордер вимкнено або консоль щойно ввімкнули (розділ 3).") \
     X(S_H3, "After turning the console on", "Після ввімкнення консолі") \
     X(S_H3_BODY, "The recorder starts when you open this app. After each power-on open the app once: that is all. Leaving the app does not stop it; to stop it until the app is opened again, switch Recorder off on the panel. Leaving System Settings and starting a DS or GBA game restart the console like turning it off: a recording is saved and stops there, and the recorder starts again when you open this app. Closing the lid saves a recording; it goes on in a new file when the lid opens.", "Рекордер запускається, коли ви відкриваєте цей додаток. Після кожного ввімкнення консолі відкрийте додаток один раз — і все. Вихід з додатка його не зупиняє; щоб вимкнути його до наступного відкриття додатка, вимкніть «Рекордер» на пульті. Вихід з Налаштувань консолі й запуск DS- чи GBA-гри перезапускають консоль, як вимкнення: запис там зберігається і зупиняється, а рекордер знову запуститься, коли ви відкриєте додаток. Якщо закрити кришку під час запису, він збережеться, а після відкриття продовжиться новим файлом.") \
     X(S_H4, "Getting a recording off", "Як забрати запис") \
     X(S_H4_BODY, "Watch recordings in the Gallery (A) and download them to a phone over Wi-Fi (Y). While this app is open, the console converts each recording into a small MP4 in the background; it lies next to the recording in /3ds/recorder/recordings, so the SD card in a computer has it too.", "Записи можна дивитися в Галереї (A) і завантажувати на телефон по Wi-Fi (Y). Поки цей додаток відкритий, консоль у фоні конвертує кожен запис у невелике MP4; воно лежить поруч із записом у /3ds/recorder/recordings, тож є й на SD-карті в комп'ютері.") \
-    X(S_H5, "Hotkey and limits", "Хоткей і обмеження") \
-    X(S_H5_BODY, "The hotkey is %s. Change it in Settings → Hotkey. Not allowed: L + R together (opens the Camera in HOME), L + ↓ + SELECT (the Rosalina menu), START and HOME. A long recording goes on in a new file every 4 GB (a 1-2 s gap); Settings shows how many minutes one file holds.", "Хоткей — %s. Змінити: Налаштування → Хоткей. Не можна: L + R разом (у HOME відкриває Камеру), L + ↓ + SELECT (меню Rosalina), START і HOME. Довгий запис продовжується в новому файлі кожні 4 GB (пауза 1–2 с); скільки хвилин уміщає файл, видно в налаштуваннях.") \
+    X(S_H5, "Hotkeys and limits", "Хоткеї і обмеження") \
+    X(S_H5_BODY, "The recording hotkey is %s; Replay has its own for saving a clip (see 8). Change both in Settings → Hotkeys: first the recording one, then the Replay one; START keeps the current one. Not allowed: L + R together (opens the Camera in HOME), L + ↓ + SELECT (the Rosalina menu) or a part of it, START and HOME, and one hotkey holding all the buttons of the other. A long recording goes on in a new file every 4 GB or every hour (a 1-2 s gap); Settings shows how many minutes one file holds.", "Хоткей запису — %s; у Повтору свій, для збереження кліпу (розділ 8). Змінити обидва: Налаштування → Хоткеї — спершу хоткей запису, потім Повтору; START лишає поточний. Не можна: L + R разом (у HOME відкриває Камеру), L + ↓ + SELECT (меню Rosalina) чи її частину, START і HOME, а також хоткей, що містить усі кнопки іншого. Довгий запис продовжується в новому файлі кожні 4 GB або щогодини (пауза 1–2 с); скільки хвилин уміщає файл, видно в налаштуваннях.") \
     X(S_H6, "If something is wrong", "Якщо щось не так") \
     X(S_H6_BODY, "Red three times: the recording did not start or stopped, usually because the SD card is full. Skipped frames: the SD card could not keep up, the video is still fine. A 3D game looks jerky in the video: set Settings → Quality → Auto. Details are in /3ds/recorder/recorder.log.", "Червоний тричі — запис не почався або зупинився, найчастіше через заповнену SD-карту. Пропущені кадри — SD не встигала, відео при цьому ціле. 3D-гра у відео смикається — поставте Налаштування → Якість → Авто. Подробиці — в /3ds/recorder/recorder.log.") \
     X(S_H7, "Games that need extra memory", "Ігри, яким треба більше пам'яті") \
     X(S_H7_BODY, "On Old 3DS some games need more memory: Smash Bros, Pokemon Sun / Moon and Ultra Sun / Ultra Moon, Super Mario Maker, Monster Hunter. The console restarts when they start and when they close. If the recorder runs, it comes back by itself inside the game through a tiny plugin of Luma (if the plugin loader is off, it is on just for that game), and a recording goes on in a new file. The game has 2 MB less memory, and the video is less smooth: the console has less power and memory to spare there. For smoother video there, record only the top screen: Settings → Screens → Top. When such a game closes, the recording is saved; open this app to record again. New 3DS does not restart for these games.", "На Old 3DS деяким іграм треба більше пам'яті: Smash Bros, Pokemon Sun / Moon і Ultra Sun / Ultra Moon, Super Mario Maker, Monster Hunter. Консоль перезапускається, коли вони стартують і коли закриваються. Якщо рекордер працює, він сам повертається в гру через маленький плагін Luma (якщо завантажувач плагінів вимкнено, він вмикається лише на цю гру), а запис продовжується новим файлом. Грі лишається на 2 МБ менше пам'яті, а відео менш плавне: консолі там бракує потужності й пам'яті. Щоб відео було плавнішим, пишіть лише верхній екран: Налаштування → Екрани → Верхній. Коли така гра закривається, запис зберігається; щоб писати далі, відкрийте цей додаток. New 3DS для цих ігор не перезапускається.") \
+    X(S_H8, "Replay: the last 30 seconds", "Повтор: останні 30 секунд") \
+    X(S_H8_BODY, "Switch Replay 30 s on (the panel). While a game or another program runs (not in the HOME Menu alone), the recorder keeps the last 30 seconds all the time, and the LED glows faint blue. Press %s (Settings → Hotkeys changes it) in a game or HOME: the LED blinks green twice and those seconds (a few more at times) become a clip. Open this app: after a short wait the clip is in the Gallery, like any recording.\nThe hotkey for recordings works as before: the replay pauses while a recording runs and while this app is open.\nThe replay writes to the SD card all the time (several GB an hour in a 3D game): the card wears. It keeps 512 MB of the card while it is on. After the console has been turned off, Replay is off again. On Old 3DS it does not run in games that need extra memory.", "Увімкніть «Повтор 30 с» (на панелі). Поки запущено гру чи іншу програму (не в самому меню HOME), рекордер постійно тримає останні 30 секунд, LED слабко світиться синім. Натисніть %s (змінити: Налаштування → Хоткеї) у грі чи HOME: LED двічі мигне зеленим, і ці секунди (часом трохи більше) стануть кліпом. Відкрийте цей додаток: за якийсь час кліп з'явиться в Галереї, як звичайний запис.\nХоткей запису працює як раніше: повтор стає на паузу, поки йде запис і поки відкрито цей додаток.\nПовтор постійно пише на SD-карту (кілька ГБ за годину в 3D-грі): карта зношується. Він займає 512 МБ на карті, поки ввімкнений. Після вимкнення консолі Повтор знову вимкнено. На Old 3DS не працює в іграх, яким треба більше пам'яті.") \
+    X(S_REPLAY, "Replay 30 s", "Повтор 30 с") \
+    X(S_TILE_RECORDER_ON_SHORT, "Hotkey works", "Хоткей працює") \
+    X(S_TILE_RECORDER_OFF_SHORT, "Hotkey does nothing", "Хоткей не працює") \
+    X(S_TILE_REPLAY_ON, "Clip: %s", "Кліп: %s") \
+    X(S_TILE_REPLAY_OFF, "Keeps the last 30 s", "Тримає останні 30 с") \
+    X(S_MSG_REPLAY_ON, "Replay is on. In a game or HOME press %s to save the last 30 seconds.", "Повтор увімкнено. У грі чи HOME натисніть %s, щоб зберегти останні 30 секунд.") \
+    X(S_MSG_REPLAY_OFF, "Replay is off.", "Повтор вимкнено.") \
+    X(S_MSG_REPLAY_SPACE, "Replay needs 700 MB free on the SD card.", "Для повтору треба 700 МБ вільного місця на SD-карті.") \
+    X(S_CLIP_PCT, "Saving clip %d%%", "Зберігаю кліп %d%%") \
+    X(S_GAL_CLIP, "Replay", "Повтор") \
+    X(S_CLIP_WAIT, "Saving clip…", "Зберігаю кліп…") \
+    X(S_CLIP_MORE, "%s · %d more", "%s · ще %d") \
+    X(S_MSG_CLIPS, "Clips are being saved: %d. Each appears in the Gallery when it is ready; keep this app open.", "Зберігаю кліпи: %d. Кожен з'явиться в Галереї, щойно буде готовий; не закривайте додаток.") \
     X(S_SETTINGS, "Settings", "Налаштування") \
     X(S_LANGUAGE, "Language · Мова", "Мова · Language") \
     X(S_UNINSTALL_ROW, "Uninstall recorder…", "Видалити рекордер…") \
@@ -126,7 +141,7 @@
     X(S_LED_PULSE, "Pulse", "Пульс") \
     X(S_LED_SOLID, "Solid", "Постійно") \
     X(S_LED_OFF, "Off", "Вимк.") \
-    X(S_HOTKEY, "Hotkey", "Хоткей") \
+    X(S_HOTKEY, "Hotkeys", "Хоткеї") \
     X(S_FILE_TITLE, "What goes into the file", "Що вийде у файлі") \
     X(S_FRAME_IN_FILE, "Frame in the file", "Кадр у файлі") \
     X(S_TOP_BOX, "top 400×240", "верхній 400×240") \
@@ -137,8 +152,12 @@
     X(S_STREAM, "To the SD card", "Потік на SD") \
     X(S_PER_MIN, "One minute", "Хвилина запису") \
     X(S_FITS, "Fits on the SD card", "Влізе на SD") \
-    X(S_SETTINGS_NOTE, "Frame rate, screens, sound and LED apply from the next recording, the hotkey right away. One file holds up to 4 GB, about %u min.", "Частота, екрани, звук і LED діють з наступного запису, хоткей — одразу. Один файл — до 4 GB, це ≈ %u хв.") \
-    X(S_HK_SCREEN, "Recording hotkey", "Хоткей запису") \
+    X(S_SETTINGS_NOTE, "Frame rate, screens, sound and LED apply from the next recording, the hotkeys right away. One file holds up to 4 GB, about %u min.", "Частота, екрани, звук і LED діють з наступного запису, хоткеї — одразу. Один файл — до 4 GB, це ≈ %u хв.") \
+    X(S_HK_SCREEN, "1 of 2 · Start and stop a recording", "1 з 2 · Почати і зупинити запис") \
+    X(S_HK_SCREEN2, "2 of 2 · Save the last 30 s (Replay)", "2 з 2 · Зберегти останні 30 с (Повтор)") \
+    X(S_HK_ERR_OTHER, "It shares all its buttons with the recording hotkey: both would fire.", "Усі її кнопки є в хоткеї запису: спрацювали б обидва.") \
+    X(S_HK_KEEP, "Keep", "Залишити") \
+    X(S_HK_SAVED2, "Replay hotkey saved: %s. It works right away.", "Хоткей повтору збережено: %s. Він уже діє.") \
     X(S_HK_HOLD_TITLE, "Hold the new combination", "Затисніть нову комбінацію") \
     X(S_HK_HOLD_HINT, "Hold for 1 s to set it · 2–3 buttons", "Тримайте 1 с, щоб зафіксувати · 2–3 кнопки") \
     X(S_HK_TOO_MANY, "At most 3 buttons", "Не більше 3 кнопок") \
@@ -149,9 +168,9 @@
     X(S_HK_ERR_FACE, "Only A / B / X / Y is too easy to press in a game. Add SELECT, L or R.", "Лише A / B / X / Y легко натиснути в грі. Додайте SELECT, L або R.") \
     X(S_HK_OK, "This combination can be used.", "Цю комбінацію можна використати.") \
     X(S_HK_RULES, "Not allowed: L + R together (Camera in HOME), L + ↓ + SELECT (Rosalina), START.", "Не можна: L + R разом (Камера в HOME), L + ↓ + SELECT (Rosalina), START.") \
-    X(S_HK_KEYS_CAPTURE, "START: cancel", "START: скасувати") \
-    X(S_HK_KEYS_RETRY, "B: again · START: cancel", "B: ще раз · START: скасувати") \
-    X(S_HK_KEYS_REVIEW, "A: save · B: again · START: cancel", "A: зберегти · B: ще раз · START: скасувати") \
+    X(S_HK_KEYS_CAPTURE, "START: keep the current one", "START: залишити поточний") \
+    X(S_HK_KEYS_RETRY, "B: again · START: keep the current one", "B: ще раз · START: залишити поточний") \
+    X(S_HK_KEYS_REVIEW, "A: save · B: again · START: keep", "A: зберегти · B: ще раз · START: залишити") \
     X(S_RESET, "Reset", "Скинути") \
     X(S_SAVE, "Save", "Зберегти") \
     X(S_HK_SAVED, "Hotkey saved: %s. It works right away.", "Хоткей збережено: %s. Він уже діє.") \

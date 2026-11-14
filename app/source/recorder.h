@@ -36,6 +36,9 @@ typedef struct {
     u32 recSeconds, recKb, framesTop, framesBot, dropped, files;
     Result lastError;
     char lastFile[48];
+    bool replayOn;           /* the module has the replay buffer on */
+    s32 replayError;         /* REC_REPLAY_*: why it does not run though it is on */
+    u32 clips;               /* clips saved since the module started */
 } RecStatus;
 
 typedef struct {
@@ -51,6 +54,10 @@ bool recorder_luma_modules_on(void);   /* Luma option "load external FIRMs and m
 u32 recorder_luma_version(void);        /* major << 16 | minor << 8 | build, 0 unknown */
 ModuleFile recorder_module_file(void);
 void recorder_status(RecStatus *out);
+/* The same from the UI's loop, which also tells the module that the app is on the screen (the
+   replay buffer pauses meanwhile: shared.h appBeat). Not from background threads: they run while
+   the app is suspended too. */
+void recorder_poll(RecStatus *out);
 /* Recordings the module rebuilt at start-up from ones cut off by power loss / a crash: their
    number (0: none) and the last one's name; reported once. */
 int recorder_take_recovered(char *name, size_t cap);

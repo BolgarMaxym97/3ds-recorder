@@ -34,6 +34,9 @@ static void focus_ring(Rect r, float radius) { ui_frame(r.x - 1, r.y - 1, r.w + 
 static const Rect TILE[4] = {{12, 12, 144, 94}, {164, 12, 144, 94}, {12, 114, 144, 94}, {164, 114, 144, 94}};
 /* hint row, right side: the language flag (help is a tile now) */
 static Rect flag_btn(void) { return (Rect){281, 213, 27, 19}; }
+/* The first tile holds two switches, one under the other: the recorder, and its replay buffer */
+static const Rect TILE_REC = {12, 12, 144, 46}, TILE_REPLAY = {12, 60, 144, 46};
+#define REPLAY_NEED_MB 700u   /* the replay's two files (2 x 256.5 MB) and the recorder's reserve */
 /* Common */
 static const Rect BACK_BTN = {12, 10, 22, 22};
 /* First run */
@@ -49,8 +52,8 @@ static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200,
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 /* Help topics */
-#define HELP_TOPICS 7
-static Rect help_row(int i) { return (Rect){12, 40 + i * 28.0f, 296, 25}; }   /* 7 topics: down to y 233 */
+#define HELP_TOPICS 8
+static Rect help_row(int i) { return (Rect){12, 38 + i * 24.5f, 296, 22}; }   /* 8 topics: down to y 232 */
 
 /* A 3D game at 30 fps fills what the SD card takes: ~5.4 MB/s while writing, both screens or the top
    one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
@@ -161,7 +164,17 @@ static void format_name(char *buf, size_t cap, const char *name);
 
 static void refresh(App *a, bool files)
 {
-    recorder_status(&a->st);
+    recorder_poll(&a->st);   /* also tells the module the app is on the screen */
+    if (!a->clipsTold && a->cfg.guideSeen && prepare_clips(NULL) > 0) {
+        char msg[256];
+        a->clipsTold = true;
+        snprintf(msg, sizeof(msg), T(S_MSG_CLIPS), prepare_clips(NULL));
+        say(a, msg);
+    }
+    if (a->st.replayOn && a->st.replayError == REC_REPLAY_NO_SPACE && !a->replayWarned) {
+        a->replayWarned = true;
+        say(a, T(S_MSG_REPLAY_SPACE));
+    }
     char rec[32];
     if (a->st.running && recorder_take_recovered(rec, sizeof(rec))) {
         char when[48], msg[512];
@@ -268,7 +281,8 @@ void app_init(App *a, const char *selfPath)
        screen come up, to say what to change. */
     /* After an app update the running module is the older one: it is restarted with the new one
        (only when idle: a recording is never cut for it). */
-    const bool outdated = a->st.running && a->moduleFile == MODULE_DIFFERENT && a->st.state == REC_STATE_IDLE;
+    const bool outdated = a->st.running && a->moduleFile == MODULE_DIFFERENT &&
+                          (a->st.state == REC_STATE_IDLE || a->st.state == REC_STATE_REPLAY);
     const bool autoStart = (!a->st.running || outdated) && a->lumaModules;
     if (a->cfg.guideSeen) /* else after the first run's language and guide (in its language) */
         tell_system_stop(a);
@@ -280,6 +294,14 @@ void app_init(App *a, const char *selfPath)
             a->lumaModules ? "on" : "OFF", (unsigned long)a->sdFreeMb, (unsigned long)a->files.count,
             (unsigned long long)(a->files.bytes >> 20), outdated ? ", outdated module: restarting it" : "");
     if (autoStart) {
+        /* The recorder was not running: the console has been turned on (or restarted) since it last
+           did. The replay buffer starts each such session switched off: it is turned on for a play
+           session, not left writing to the card for good. An update of a running recorder keeps it. */
+        if (!a->st.running && a->cfg.replay) {
+            app_log("setting: replay=off (the recorder starts after a power-on)");
+            config_set("replay", "off");
+            config_load(&a->cfg);
+        }
         a->pending = ACT_START;
         a->busy = T(S_STATE_STARTING);
     }
@@ -411,6 +433,7 @@ static const struct {
 #define HK_COUNT (int)(sizeof(HK_KEYS) / sizeof(HK_KEYS[0]))
 #define HK_ALLOWED (KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A | KEY_B | KEY_X | KEY_Y | KEY_SELECT)
 #define HK_DEFAULT "R+SELECT"
+#define HK_REPLAY_DEFAULT "X+SELECT"
 
 static u32 hk_mask(const char *text)
 {
@@ -460,6 +483,22 @@ static Str hk_problem(u32 m)
     if (!(m & ~(KEY_A | KEY_B | KEY_X | KEY_Y)))
         return S_HK_ERR_FACE;
     return S_COUNT;
+}
+
+/* Two hotkeys that would fire together: one holds every button of the other. */
+static bool hk_overlap(u32 a, u32 b)
+{
+    return a && b && ((a & b) == a || (a & b) == b);
+}
+
+/* The replay hotkey's default, or the next one that does not overlap the recording hotkey. */
+static u32 hk_replay_default(u32 rec)
+{
+    static const char *const tries[] = {HK_REPLAY_DEFAULT, "Y+SELECT", "L+X", "R+Y"};
+    for (int i = 0; i < 4; i++)
+        if (!hk_overlap(hk_mask(tries[i]), rec))
+            return hk_mask(tries[i]);
+    return hk_mask(HK_REPLAY_DEFAULT);
 }
 
 static float hk_chips_width(u32 m)
@@ -580,6 +619,7 @@ static void choose(App *a, int row, int opt)
 
 static void open_hotkey(App *a)
 {
+    a->hkStep = 0;
     a->hkHeld = a->hkCand = 0;
     a->hkReview = false;
     a->hkWaitRelease = true; /* the A that opened this screen is still down */
@@ -635,25 +675,49 @@ static void open_help(App *a, Screen back)
     go(a, SCR_HELP, 0);
 }
 
-/* Panel focus: 0-3 the tiles (2 x 2), 4 the language flag (the hint row under the tiles). */
-enum { FOCUS_FLAG = 4 };
+/* Panel focus: 0-3 the tiles (2 x 2; 0 is the recorder's switch, the first tile's upper half), 5 the
+   replay switch under it in the same tile, 4 the language flag (the hint row under the tiles).
+   While a recording runs the first tile is one button (Stop): 5 counts as 0 then. */
+enum { FOCUS_FLAG = 4, FOCUS_REPLAY = 5 };
+
+static void toggle_replay(App *a)
+{
+    if (!a->cfg.replay && a->sdFreeMb < REPLAY_NEED_MB) {
+        say(a, T(S_MSG_REPLAY_SPACE));
+        return;
+    }
+    apply_setting(a, "replay", a->cfg.replay ? "off" : "on");
+    a->replayWarned = false;
+    if (a->cfg.replay) {
+        char hk[48], msg[256];
+        hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
+        snprintf(msg, sizeof(msg), T(S_MSG_REPLAY_ON), hk);
+        say(a, msg);
+    } else
+        say(a, T(S_MSG_REPLAY_OFF));
+}
 
 static void update_panel(App *a, const Input *in)
 {
     const u32 d = in->down;
+    const bool split = !(a->st.running && a->st.state == REC_STATE_RECORDING);   /* the first tile shows both switches */
     int f = a->focus;
+    if (f == FOCUS_REPLAY && !split)
+        f = 0;
     if (d & KEY_DLEFT)
         f = f < 4 && f % 2 == 1 ? f - 1 : f;
     if (d & KEY_DRIGHT)
-        f = f < 4 && f % 2 == 0 ? f + 1 : f;
+        f = f == FOCUS_REPLAY ? 1 : f < 4 && f % 2 == 0 ? f + 1 : f;
     if (d & KEY_DUP)
-        f = f == FOCUS_FLAG ? 3 : f >= 2 ? f - 2 : f;
+        f = f == FOCUS_FLAG ? 3 : f == FOCUS_REPLAY ? 0 : f == 2 && split ? FOCUS_REPLAY : f >= 2 ? f - 2 : f;
     if (d & KEY_DDOWN)
-        f = f < 2 ? f + 2 : FOCUS_FLAG;
+        f = f == 0 && split ? FOCUS_REPLAY : f == FOCUS_REPLAY ? 2 : f < 2 ? f + 2 : FOCUS_FLAG;
     a->focus = f;
     if (d & KEY_A) {
         if (f == FOCUS_FLAG)
             set_language(a, !a->cfg.ukrainian);
+        else if (f == FOCUS_REPLAY)
+            toggle_replay(a);
         else
             panel_activate(a, f);
     }
@@ -668,13 +732,17 @@ static void update_panel(App *a, const Input *in)
     if (d & KEY_START)
         a->quit = true;
     for (int i = 0; i < 4; i++)
-        if (hit(TILE[i], in)) {
+        if (hit(i == 0 && split ? TILE_REC : TILE[i], in)) {
             a->focus = i;
             panel_activate(a, i);
         }
     if (hit(flag_btn(), in)) {
         a->focus = FOCUS_FLAG;
         set_language(a, !a->cfg.ukrainian);
+    }
+    if (split && hit(TILE_REPLAY, in)) {
+        a->focus = FOCUS_REPLAY;
+        toggle_replay(a);
     }
 }
 
@@ -829,15 +897,47 @@ static void update_settings(App *a, const Input *in)
         go(a, SCR_PANEL, 3);
 }
 
-static void hotkey_save(App *a, u32 m)
+/* The hotkey screen's two steps: the recording hotkey, then the replay one. */
+static u32 hk_step_now(const App *a) { return hk_mask(a->hkStep ? a->cfg.replayHotkey : a->cfg.hotkey); }
+
+static Str hk_step_problem(const App *a, u32 m)
 {
-    char cfg[48], label[64], msg[128];
+    const Str p = hk_problem(m);
+    return p == S_COUNT && a->hkStep == 1 && hk_overlap(m, hk_mask(a->cfg.hotkey)) ? S_HK_ERR_OTHER : p;
+}
+
+static void hotkey_set(App *a, u32 m, bool tell)
+{
+    char cfg[48], label[64], msg[160];
     hk_text(m, cfg, sizeof(cfg));
     hk_label(m, label, sizeof(label));
-    apply_setting(a, "hotkey", cfg);
-    snprintf(msg, sizeof(msg), T(S_HK_SAVED), label);
-    say(a, msg);
+    apply_setting(a, a->hkStep ? "replay_hotkey" : "hotkey", cfg);
+    if (tell) {
+        snprintf(msg, sizeof(msg), T(a->hkStep ? S_HK_SAVED2 : S_HK_SAVED), label);
+        say(a, msg);
+    }
+}
+
+/* This step is done (saved or kept): on to the replay hotkey, then back to Settings. */
+static void hotkey_next(App *a)
+{
+    if (a->hkStep == 0) {
+        a->hkStep = 1;
+        a->hkHeld = a->hkCand = 0;
+        a->hkReview = false;
+        a->hkWaitRelease = true;
+        return;
+    }
+    /* kept as it was, but the recording hotkey chosen a step ago now holds it (or the other way) */
+    if (hk_overlap(hk_step_now(a), hk_mask(a->cfg.hotkey)))
+        hotkey_set(a, hk_replay_default(hk_mask(a->cfg.hotkey)), true);
     go(a, SCR_SETTINGS, ROW_HOTKEY);
+}
+
+static void hotkey_save(App *a, u32 m)
+{
+    hotkey_set(a, m, true);
+    hotkey_next(a);
 }
 
 /* Capture: the held buttons are the candidate; 1 s steady with 2-3 buttons sets it. Every button
@@ -846,15 +946,15 @@ static void hotkey_save(App *a, u32 m)
 static void update_hotkey(App *a, const Input *in)
 {
     const u32 held = in->held & HK_ALLOWED;
-    if ((in->down & KEY_START) || hit(HK_BTN[1], in)) {
-        go(a, SCR_SETTINGS, ROW_HOTKEY);
+    if ((in->down & KEY_START) || hit(HK_BTN[1], in)) {   /* keep this one */
+        hotkey_next(a);
         return;
     }
     if (hit(HK_BTN[0], in)) {
-        hotkey_save(a, hk_mask(HK_DEFAULT));
+        hotkey_save(a, a->hkStep ? hk_replay_default(hk_mask(a->cfg.hotkey)) : hk_mask(HK_DEFAULT));
         return;
     }
-    if (hit(HK_BTN[2], in) && a->hkReview && hk_problem(a->hkCand) == S_COUNT) {
+    if (hit(HK_BTN[2], in) && a->hkReview && hk_step_problem(a, a->hkCand) == S_COUNT) {
         hotkey_save(a, a->hkCand);
         return;
     }
@@ -864,7 +964,7 @@ static void update_hotkey(App *a, const Input *in)
         return;
     }
     if (a->hkReview) {
-        if ((in->down & KEY_A) && hk_problem(a->hkCand) == S_COUNT)
+        if ((in->down & KEY_A) && hk_step_problem(a, a->hkCand) == S_COUNT)
             hotkey_save(a, a->hkCand);
         else if (in->down & KEY_B) {
             a->hkReview = false;
@@ -948,6 +1048,7 @@ static void open_gallery(App *a, const char *select)
     a->galConfirm = false;
     snprintf(a->galOpen, sizeof(a->galOpen), "%s", select ? select : "");
     a->galAutoPlay = false;
+    a->galClipsDone = prepare_clips_done();
     gal_start();
     go(a, SCR_GALLERY, 0);
 }
@@ -984,6 +1085,21 @@ static void update_gallery(App *a, const Input *in)
     if (gal_take_deleted(&ok)) {
         a->galDeleting = false;
         say(a, T(ok ? S_DELETED : S_DEL_FAILED));
+        refresh(a, true);
+    }
+    /* a replay clip became a recording: the list is read again, the selection stays on its recording */
+    if (prepare_clips_done() != a->galClipsDone && !a->galConfirm && !a->galDeleting) {
+        a->galClipsDone = prepare_clips_done();
+        gal_lock();
+        const GalList *old = gal_list();
+        if (old->loaded && a->galSel < old->count)
+            snprintf(a->galOpen, sizeof(a->galOpen), "%s", old->items[a->galSel].name);
+        gal_unlock();
+        gal_stop();
+        for (int i = 0; i < GAL_ROWS; i++)
+            g_thumbSrc[i] = NULL;
+        a->galVersion = a->galPreviewVersion = 0;
+        gal_start();
         refresh(a, true);
     }
     gal_lock();
@@ -1317,6 +1433,25 @@ static bool draw_last_thumb(const char *newest, float x, float y)
     return true;
 }
 
+/* "Saving clip 42% · 2 more" while replay clips are made into recordings (prepare.c); false: none. */
+static bool clips_text(char *buf, size_t cap)
+{
+    int pm = -1;
+    const int n = prepare_clips(&pm);
+    if (n <= 0)
+        return false;
+    char one[64];
+    if (pm >= 0)
+        snprintf(one, sizeof(one), T(S_CLIP_PCT), pm / 10);
+    else
+        snprintf(one, sizeof(one), "%s", T(S_CLIP_WAIT));
+    if (n > 1)
+        snprintf(buf, cap, T(S_CLIP_MORE), one, n - 1);
+    else
+        snprintf(buf, cap, "%s", one);
+    return true;
+}
+
 static void draw_panel_top(App *a)
 {
     char buf[96], v[48], s[48];
@@ -1399,6 +1534,8 @@ static void draw_panel_top(App *a)
             snprintf(hint, sizeof(hint), T(S_NO_RECORDINGS_HINT), hk);
             ui_text(28, 168, 9, FONT_REG, COL_MUTED, hint);
         }
+        if (clips_text(buf, sizeof(buf)))   /* replay clips on their way to being recordings */
+            ui_text_right(376, 204, 9, FONT_REG, COL_SOFT, buf);
     }
 }
 
@@ -1422,8 +1559,8 @@ static void draw_firstrun_top(App *a)
     check_row(182, a->sdFreeMb > 256, a->sdFreeMb <= 256, T(S_FR_SD), val);
 }
 
-static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7};
-static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY};
+static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8};
+static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY};
 
 /* The author's Telegram channel (news, questions), opposite "Y How to use". */
 static void help_channel(void)
@@ -1438,10 +1575,10 @@ static void draw_help_top(App *a)
     ui_text(14, 13, 9, FONT_REG, COL_MUTED, buf);
     ui_text(14, 25, 15, FONT_BOLD, COL_TEXT, T(HELP_TITLE[a->helpTopic]));
     if (a->helpTopic == 1) { /* the LED: coloured lamps next to the lines */
-        static const u32 lamp[4] = {COL_LED_BLUE, COL_ACCENT, COL_LED_GREEN, COL_ACCENT};
+        static const u32 lamp[5] = {COL_LED_BLUE, COL_ACCENT, COL_LED_BLUE_FAINT, COL_LED_GREEN, COL_ACCENT};
         const char *p = T(S_H2_BODY);
-        float y = 54;
-        for (int i = 0; i < 5 && *p; i++) {
+        float y = 50;
+        for (int i = 0; i < 6 && *p; i++) {
             const char *e = strchr(p, '\n');
             char line[200];
             size_t n = e ? (size_t)(e - p) : strlen(p);
@@ -1449,7 +1586,7 @@ static void draw_help_top(App *a)
                 n = sizeof(line) - 1;
             memcpy(line, p, n);
             line[n] = 0;
-            if (i < 4)
+            if (i < 5)
                 ui_circle(22, y + 7, 5, lamp[i]);
             else
                 ui_circle(22, y + 7, 5, COL_SURFACE2);
@@ -1462,7 +1599,8 @@ static void draw_help_top(App *a)
     }
     /* the "how to record" topic names the configured hotkey */
     char hk[48], body[2048];
-    hk_label(hk_mask(a->cfg.hotkey), hk, sizeof(hk));
+    /* (the replay topic: the hotkey that saves a clip) */
+    hk_label(hk_mask(HELP_BODY[a->helpTopic] == S_H8_BODY ? a->cfg.replayHotkey : a->cfg.hotkey), hk, sizeof(hk));
     snprintf(body, sizeof(body), T(HELP_BODY[a->helpTopic]), hk, hk);
     ui_text_wrap(14, 54, 372, 10, FONT_REG, COL_SOFT, body);
     ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
@@ -1735,7 +1873,7 @@ static void draw_gallery_top(App *a)
     if (it->info && it->readable) {
         char dur[24], prof[32], drop[16];
         format_duration(dur, sizeof(dur), it);
-        snprintf(prof, sizeof(prof), "%s · %u", T(S_PROFILE_STD), (unsigned)it->fps);
+        snprintf(prof, sizeof(prof), "%s · %u", T(it->clip ? S_GAL_CLIP : S_PROFILE_STD), (unsigned)it->fps);
         if (it->ended)
             snprintf(drop, sizeof(drop), "%lu", (unsigned long)it->dropped);
         else
@@ -1878,11 +2016,20 @@ static void draw_panel_bottom(App *a)
         ui_circle(t.x + t.w - 16, t.y + 16, 4, COL_ACCENT);
         ui_text_wrap_lines(t.x + 10, t.y + t.h - 32, t.w - 20, 9, FONT_REG, COL_MUTED, T(S_TILE_STOP_SUB), 2);
     } else {
+        /* two switches in one card: the recorder, and under a hairline its replay buffer */
         ui_card(t.x, t.y, t.w, t.h, 10, COL_SURFACE);
-        ui_text(t.x + 10, t.y + 11, 11, FONT_BOLD, COL_TEXT, T(S_TILE_RECORDER));
-        ui_toggle(t.x + t.w - 42, t.y + 10, a->st.running);
-        ui_text_wrap_lines(t.x + 10, t.y + t.h - 32, t.w - 20, 9, FONT_REG, COL_MUTED,
-                           T(a->st.running ? S_TILE_RECORDER_ON : S_TILE_RECORDER_OFF), 2);
+        ui_text(t.x + 10, t.y + 9, 11, FONT_BOLD, COL_TEXT, T(S_TILE_RECORDER));
+        ui_toggle(t.x + t.w - 42, t.y + 8, a->st.running);
+        ui_text(t.x + 10, t.y + 27, 9, FONT_REG, COL_MUTED,
+                T(a->st.running ? S_TILE_RECORDER_ON_SHORT : S_TILE_RECORDER_OFF_SHORT));
+        ui_rect(t.x + 10, t.y + 46.5f, t.w - 20, 1, COL_SURFACE2);
+        const Rect r = TILE_REPLAY;
+        char hk[48];
+        hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
+        snprintf(buf, sizeof(buf), T(S_TILE_REPLAY_ON), hk);
+        ui_text(r.x + 10, r.y + 9, 11, FONT_BOLD, COL_TEXT, T(S_REPLAY));
+        ui_toggle(r.x + r.w - 42, r.y + 8, a->cfg.replay);
+        ui_text(r.x + 10, r.y + 27, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : T(S_TILE_REPLAY_OFF));
     }
     static const Icon icon[4] = {ICON_CHECK, ICON_GRID, ICON_INFO, ICON_SLIDERS};
     const Str title[4] = {S_TILE_RECORDER, S_TILE_GALLERY, S_TILE_HELP, S_TILE_SETTINGS};
@@ -1900,8 +2047,10 @@ static void draw_panel_bottom(App *a)
                                    : T(S_TILE_SETTINGS_SUB);
         ui_text(t.x + 10, t.y + t.h - 18, 9, FONT_REG, COL_MUTED, sub);
     }
-    if (a->focus < 4)
-        focus_ring(TILE[a->focus], 10);
+    if (!recording && (a->focus == 0 || a->focus == FOCUS_REPLAY))
+        focus_ring(a->focus == 0 ? TILE_REC : TILE_REPLAY, 10);
+    else if (a->focus < 4 || a->focus == FOCUS_REPLAY)
+        focus_ring(TILE[a->focus < 4 ? a->focus : 0], 10);
     /* hint row: hotkey, language flag */
     const float x = 12 + ui_text(12, 217, 9, FONT_REG, COL_MUTED, T(S_START_STOP)) + 5;
     hk_chips(x, 216, hk_mask(a->cfg.hotkey), COL_MUTED);
@@ -1938,9 +2087,9 @@ static void draw_help_bottom(App *a)
         snprintf(n, sizeof(n), "%d", i + 1);
         if (i == a->helpTopic)
             ui_rrect(r.x, r.y, r.w, r.h, 7, COL_SURFACE);
-        ui_rrect(r.x + 7, r.y + 4, 17, 17, 4, COL_SURFACE2);
-        ui_text_center(r.x + 15.5f, r.y + 6, 8, FONT_BOLD, COL_SOFT, n);
-        ui_text(r.x + 32, r.y + 5, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
+        ui_rrect(r.x + 7, r.y + 2.5f, 17, 17, 4, COL_SURFACE2);
+        ui_text_center(r.x + 15.5f, r.y + 4.5f, 8, FONT_BOLD, COL_SOFT, n);
+        ui_text(r.x + 32, r.y + 3.5f, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
         if (i == a->helpTopic)
             focus_ring(r, 7);
     }
@@ -1975,8 +2124,13 @@ static void draw_settings_bottom(App *a)
         } else if (r == ROW_SOUND)
             ui_toggle(row.x + row.w - 37, row.y + 2.5f, a->cfg.audio);
         else if (r == ROW_HOTKEY) {
-            const u32 m = hk_mask(a->cfg.hotkey);
-            hk_chips(row.x + row.w - 20 - hk_chips_width(m), row.y + 4.5f, m, COL_MUTED);
+            /* the recording hotkey, then the replay one */
+            const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
+            const float sep = ui_text_width(9, FONT_REG, "·") + 8;
+            float x = row.x + row.w - 20 - hk_chips_width(m) - sep - hk_chips_width(m2);
+            x += hk_chips(x, row.y + 4.5f, m, COL_MUTED) + 1;
+            x += ui_text(x, row.y + 5.5f, 9, FONT_REG, COL_FAINT, "·") + 4;
+            hk_chips(x, row.y + 4.5f, m2, COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
@@ -1988,13 +2142,13 @@ static void draw_settings_bottom(App *a)
 static void draw_hotkey_bottom(App *a)
 {
     char now[64];
-    ui_text(12, 10, 11, FONT_BOLD, COL_TEXT, T(S_HK_SCREEN));
+    ui_text(12, 10, 11, FONT_BOLD, COL_TEXT, T(a->hkStep ? S_HK_SCREEN2 : S_HK_SCREEN));
     ui_card(12, 32, 296, 24, 7, COL_SURFACE);
     ui_text(22, 37, 9.5f, FONT_REG, COL_SOFT, T(S_HK_NOW));
-    hk_label(hk_mask(a->cfg.hotkey), now, sizeof(now));
+    hk_label(hk_step_now(a), now, sizeof(now));
     ui_text_right(298, 37, 9.5f, FONT_BOLD, COL_TEXT, now);
     const bool review = a->hkReview;
-    const Str problem = review ? hk_problem(a->hkCand) : S_COUNT;
+    const Str problem = review ? hk_step_problem(a, a->hkCand) : S_COUNT;
     float y = 64;
     if (review) {
         const bool ok = problem == S_COUNT;
@@ -2008,7 +2162,7 @@ static void draw_hotkey_bottom(App *a)
     ui_text_wrap(12, y, 296, 9, FONT_REG, COL_MUTED, T(S_HK_RULES));
     ui_text(12, 182, 9, FONT_REG, COL_MUTED, T(!review ? S_HK_KEYS_CAPTURE : problem == S_COUNT ? S_HK_KEYS_REVIEW : S_HK_KEYS_RETRY));
     button(HK_BTN[0], T(S_RESET), 0, false);
-    button(HK_BTN[1], T(S_CANCEL), 0, false);
+    button(HK_BTN[1], T(S_HK_KEEP), 0, false);
     button(HK_BTN[2], T(S_SAVE), review && problem == S_COUNT ? 1 : 3, false);
 }
 
@@ -2047,7 +2201,8 @@ static void draw_gallery_bottom(App *a)
     if (l->loaded) {
         format_gb(gb, sizeof(gb), (u32)(l->bytes >> 20));
         char cnt[40];
-        snprintf(buf, sizeof(buf), "%s · %s", i18n_recordings(l->count, cnt, sizeof(cnt)), gb);
+        if (!clips_text(buf, sizeof(buf)))   /* while clips are being saved: that, instead of the totals */
+            snprintf(buf, sizeof(buf), "%s · %s", i18n_recordings(l->count, cnt, sizeof(cnt)), gb);
         ui_text_right(308, 15, 9, FONT_REG, COL_MUTED, buf);
     } else
         ui_spinner(296, 21, 7, COL_FAINT);
@@ -2074,7 +2229,14 @@ static void draw_gallery_bottom(App *a)
             snprintf(buf, sizeof(buf), "%s · %s", T(cut ? S_GAL_CUT : S_PROFILE_STD), gb);
         if (cut)
             ui_icon(ICON_WARN, r.x + 67, r.y + 26, 10, COL_WARN);
-        ui_text(r.x + (cut ? 76 : 62), r.y + 20, 9, cut ? FONT_BOLD : FONT_REG, cut ? COL_WARN : COL_MUTED, buf);
+        if (it->info && it->readable && it->clip && !cut) {
+            /* a replay clip: a tag in the replay LED's blue instead of the profile's name */
+            const float tw = ui_text_width(8, FONT_BOLD, T(S_GAL_CLIP));
+            ui_rrect(r.x + 62, r.y + 19.5f, tw + 10, 13, 4, COL_TAG_BG);
+            ui_text(r.x + 67, r.y + 21, 8, FONT_BOLD, COL_LED_BLUE, T(S_GAL_CLIP));
+            ui_text(r.x + 62 + tw + 15, r.y + 20, 9, FONT_REG, COL_MUTED, gb);
+        } else
+            ui_text(r.x + (cut ? 76 : 62), r.y + 20, 9, cut ? FONT_BOLD : FONT_REG, cut ? COL_WARN : COL_MUTED, buf);
         if (it->info && it->readable) {
             format_duration(buf, sizeof(buf), it);
             ui_text_right(r.x + r.w - 8, r.y + 4, 11, FONT_BOLD, COL_TEXT, buf);

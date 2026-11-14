@@ -89,6 +89,18 @@ static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LIT
 #endif
 #define MAX_FILE       ((u64)g_cfg.maxFileMb * MB)   /* then the recording goes on in a new file */
 #define MIN_SD_FREE_MB 64u
+/* Replay buffer (config replay=on): the stream goes round in a file of a fixed size instead of a
+   growing one, so the card always holds the last half a minute and more; a hotkey makes a clip of
+   the last REPLAY_CLIP_US (r3d_format.h: R3dRingInfo). Two such files: a saved clip takes one away
+   (renamed, nothing copied), the buffer goes on in the other while a new one is made.
+   256 MB: 30 s of both screens at up to 8.5 MB/s (a card takes ~5.4 on an Old 3DS). */
+#define REPLAY_BYTES    (256ull * MB)
+#define REPLAY_DATA_OFF BLOCK          /* the ring's data starts a write block into the file */
+#define REPLAY_CLIP_US  30000000ull
+#define REPLAY_STEP     (16ull * MB)   /* a new file grows in steps this big (32 MB stalled the writer 1-1.5 s) */
+#define REPLAY_RETRY_US 3000000ull     /* between tries to start the buffer */
+#define REPLAY_BEAT_US  4000000ull     /* the app's beat older than this: the app is off the screen */
+#define MAX_REC_US      3600000000ull  /* a recording goes on in a new file after an hour: timeUs (32 bits) wraps at 71.6 min */
 #define KEEP_FREE      (4u * MB)      /* never leave less SYSTEM memory than this */
 #define KEEP_FREE_LITE (1u * MB)      /* the same in an extended-memory game (Old 3DS): no applets open there */
 #define LITE_BELOW     (12u * MB)     /* SYSTEM free under this at start: the light profile (normally ~23 MB) */
@@ -158,10 +170,13 @@ typedef struct {
     u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
+    bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
+    u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
 } Config;
 
 static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
                         .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false,
+                        .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
                         .n3dsTest = true,
 #endif
@@ -176,7 +191,7 @@ static const char *ScreensName(void)
 
 volatile RecShared g_shared __attribute__((aligned(0x1000), used)) = {
     REC_SHARED_MAGIC, REC_SHARED_VERSION, REC_STATE_STARTING, REC_CMD_NONE,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0 }, 0, { 0 },
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0 }, 0, { 0 }, 0, 0, 0, 0, { 0 },
 };
 
 /* ------------------------------------------------------------------ init */
@@ -249,6 +264,9 @@ void __ctru_exit(int rc)
 
 static u64 Ticks(void) { return svcGetSystemTick(); }
 static u32 TicksToUs(u64 t) { return (u32)(t / (SYSCLOCK_ARM11 / 1000000u)); }
+/* Times since a recording's start: 32 bits of microseconds wrap after 71.6 minutes, and the replay
+   buffer runs for hours. Records keep the low 32 bits (timeUs); everything compared is 64 bits. */
+static u64 TicksToUs64(u64 t) { return t / (SYSCLOCK_ARM11 / 1000000u); }
 
 /* The console clock (ms since 1900-01-01, local time) as a civil date and second of the day
    (Howard Hinnant's algorithm, epoch shifted). */
@@ -269,28 +287,83 @@ static void CivilTime(u64 msSince1900, u32 *y, u32 *m, u32 *d, u32 *sod)
 }
 
 static void Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/*
+ * The log. While frames are captured a line stays in memory: the main thread, which polls the
+ * screens every 2 ms, used to open and write the log file itself, behind the writer's 512 KB
+ * blocks on the same card (lines come right when a game loads or HOME opens: screen modes,
+ * the program in front, priorities; frames went missing there uncounted). The writer's thread
+ * puts the kept lines on the card every couple of seconds, between its blocks; the first line
+ * after the capture stops writes them out too. Straight FS calls: any thread's stack will do.
+ */
+#define LOG_BUF (16u * KB)
+static FS_Archive g_sd;
+static volatile bool g_recording;      /* capture on */
+static char g_logBuf[LOG_BUF], g_logOut[LOG_BUF], g_logLine[1536];
+static volatile u32 g_logLen;
+static LightLock g_logLock;
+static bool g_logLockOk;
+
+static void LogWrite(const char *text, u32 len)
+{
+    Handle f = 0;
+    u64 size = 0;
+    u32 done = 0;
+    if (!g_sd || R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, LOG_FS), FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+        return;
+    FSFILE_GetSize(f, &size);
+    FSFILE_Write(f, &done, size, text, len, FS_WRITE_FLUSH);
+    FSFILE_Close(f);
+}
+
+/* The lines kept in memory, onto the card. */
+static void LogFlush(void)
+{
+    if (!g_logLockOk || !g_logLen)
+        return;
+    /* copied out first: the main thread's next line must not wait for the card behind this lock */
+    LightLock_Lock(&g_logLock);
+    const u32 n = g_logLen;
+    memcpy(g_logOut, g_logBuf, n);
+    g_logLen = 0;
+    LightLock_Unlock(&g_logLock);
+    if (n)
+        LogWrite(g_logOut, n);
+}
+
 static void Log(const char *fmt, ...)
 {
     static u32 lines;
-    if (++lines > 2000)   /* a runaway loop must not fill the SD */
+    if (++lines > 4000)   /* a runaway loop must not fill the SD */
         return;
-    FILE *f = fopen(LOG_SD, "a");
-    if (!f)
-        return;
+    if (g_logLockOk)
+        LightLock_Lock(&g_logLock);
     const u64 ms = osGetTime();
     u32 y, m, d, sod;
     CivilTime(ms, &y, &m, &d, &sod);
-    fprintf(f, "[%04lu-%02lu-%02lu %02lu:%02lu:%02lu.%03lu] ", y, m, d, sod / 3600, sod / 60 % 60, sod % 60,
-            (u32)(ms % 1000u));
+    int n = snprintf(g_logLine, sizeof(g_logLine), "[%04lu-%02lu-%02lu %02lu:%02lu:%02lu.%03lu] ", y, m, d, sod / 3600,
+                     sod / 60 % 60, sod % 60, (u32)(ms % 1000u));
+    const int room = (int)sizeof(g_logLine) - n - 1;   /* the line's end keeps a byte */
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(f, fmt, ap);
+    int t = vsnprintf(g_logLine + n, (size_t)room, fmt, ap);
     va_end(ap);
-    fputc('\n', f);
-    fclose(f);
+    n += t < 0 ? 0 : t >= room ? room - 1 : t;
+    g_logLine[n++] = '\n';
+    if (g_recording && g_logLockOk && g_logLen + (u32)n <= LOG_BUF)
+    {
+        memcpy(g_logBuf + g_logLen, g_logLine, (size_t)n);
+        g_logLen += (u32)n;
+    }
+    else
+    {
+        if (g_logLen)
+            LogWrite(g_logBuf, g_logLen);
+        g_logLen = 0;
+        LogWrite(g_logLine, (u32)n);
+    }
+    if (g_logLockOk)
+        LightLock_Unlock(&g_logLock);
 }
-
-static FS_Archive g_sd;
 
 /* The recorder's FS session at a low priority: the ring's constant writes must not get ahead of
    the game's own SD reads (streamed music, levels). Luma3DS-Flashback measured no cost to the
@@ -357,6 +430,30 @@ static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoot
 
 static const u8 ZERO32[32];
 
+/* The battery, for the log: recordings and the replay buffer say what they started and ended
+   with, and a line every ten minutes says it whatever the recorder does, so a play session with
+   the buffer on can be put next to one with it off. Percent and voltage from the MCU (the
+   voltage register counts 20 mV steps and moves sooner than the percent); the charger from ptm:u
+   (a session on the charger says nothing about the drain). */
+static bool g_ptmu;
+typedef struct { u8 pct; u32 mv; bool charger; } Battery;
+
+static Battery BatteryNow(void)
+{
+    Battery b = { 0, 0, false };
+    u8 v = 0;
+    if (R_SUCCEEDED(g_mcuRc))
+    {
+        MCUHWC_GetBatteryLevel(&b.pct);
+        if (R_SUCCEEDED(MCUHWC_GetBatteryVoltage(&v)))
+            b.mv = v * 20u;
+    }
+    if (g_ptmu)
+        PTMU_GetAdapterState(&b.charger);
+    return b;
+}
+static Battery g_batStart;   /* when this recording (or the buffer) started */
+
 /*
  * MCU pattern behaviour measured on O3DS (app LED test, 2026-11-03):
  *   - one-shot patterns (loop delay 0xFF) play far too fast to see, whatever
@@ -402,6 +499,9 @@ static void LedSequence(const LedStep *steps, u32 n)
     LedStepStart();
 }
 
+static bool g_ledReplay;   /* the replay buffer runs: what the LED goes back to after a signal */
+static void LedReplay(void);
+
 /* Called from the main loop (every 2-50 ms). */
 static void LedTick(void)
 {
@@ -413,7 +513,10 @@ static void LedTick(void)
         return;
     }
     g_ledSeqLen = 0;
-    LedOff();
+    if (g_ledReplay)
+        LedReplay();
+    else
+        LedOff();
 }
 
 /* Recording: slow red breathing like a camera's REC light (LED test variant 7). */
@@ -421,6 +524,7 @@ static void LedRecording(void)
 {
     u8 r[32];
     g_ledSeqLen = 0;   /* cancels a running signal */
+    g_ledReplay = false;
     if (g_cfg.led == 0)
     {
         LedOff();
@@ -437,6 +541,18 @@ static void LedRecording(void)
         r[i] = (u8)(8 + t * 247 / 16);
     }
     LedPattern(r, ZERO32, ZERO32, 0x08, 0x40, 0);
+}
+
+/* Replay buffer running: a faint steady blue (the recording's red breath means a file is being made). */
+static void LedReplay(void)
+{
+    g_ledReplay = true;
+    if (g_ledSeqLen)
+        return;   /* a signal is playing (clip saved): LedTick sets it after that */
+    if (g_cfg.led == 0)
+        LedOff();
+    else
+        LedSolid(0, 0, 0x28);
 }
 
 static const LedStep LED_READY[] = { { 0, 0, 0xFF, 1500 } };
@@ -499,14 +615,19 @@ static void LoadConfig(void)
         *eq = 0;
         char *v = eq + 1;
         v[strcspn(v, "\r\n ;#")] = 0;
-        if (strcasecmp(p, "hotkey") == 0)
+        if (strcasecmp(p, "hotkey") == 0 || strcasecmp(p, "replay_hotkey") == 0)
         {
+            const bool save = strcasecmp(p, "replay_hotkey") == 0;
             u32 mask = 0;
             for (char *tok = strtok(v, "+"); tok; tok = strtok(NULL, "+"))
                 mask |= KeyByName(tok);
-            if (mask)
+            if (mask && save)
+                g_cfg.saveKey = mask;
+            else if (mask)
                 g_cfg.hotkey = mask;
         }
+        else if (strcasecmp(p, "replay") == 0)
+            g_cfg.replay = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "fps") == 0)
         {
             const u32 fps = (u32)atoi(v);
@@ -744,7 +865,30 @@ static u64    g_recStartTick, g_recStartMs;
 static volatile u64 g_bound[BOUNDS];
 static volatile u32 g_boundN;
 static Handle g_infoFile;
-static volatile bool g_recording;      /* capture on */
+/* Replay buffer: this recording goes round in a replay file (REPLAY_BYTES) and is never a file of
+   its own unless a clip is saved. */
+static bool   g_replay;
+/* Where a clip can start: key frames of the last minute or so (stream offset, time, screen), at most
+   one per screen in KEYMARK_GAP_US. Written by the ring's producer, read by the main thread once
+   the producer is idle. */
+typedef struct { u64 at, us; u32 timeUs; u8 screen; } KeyMark;
+#define KEYMARKS        256u
+#define KEYMARK_GAP_US  500000ull
+/* In the replay buffer a screen gets a key frame at least this often, by time: XR32's come every
+   KEYFRAME_EVERY frames, minutes apart on a screen that changes now and then, and a screen that
+   does not change at all gets no frame (a clip must start at a key frame of each screen). */
+#define REPLAY_KEY_US   4000000ull
+static KeyMark g_keys[KEYMARKS];
+static u32    g_keyN;
+static u64    g_keyMarkUs[2];            /* time of the screen's last mark */
+static bool   g_keyMarked[2];
+static u64    g_keyUs[2], g_storedUs[2]; /* time of the screen's last key frame / last frame in the ring */
+static bool   g_hasFrame[2];             /* the screen has a frame in the ring (g_storedUs is set) */
+static bool   g_lastC420[2];             /* its last frame was C420: g_prev does not hold it, g_c420Keep does */
+static u8    *g_c420Keep[2];             /* the last C420 frame's bytes (replay: stored again when the screen is still) */
+static u8    *g_againBuf;                /* a copy of a reference frame while it is stored again (replay) */
+static u8     g_lastFmt[2];              /* srcFormat of the screen's last record */
+static u32    g_replayAgain;             /* key frames stored again for a still screen */
 static u32    g_dropped, g_throttled, g_ringMax;
 
 /* Lost video frames by reason (diagnostics, 2026-11-03: v7 dropped 170 frames
@@ -842,14 +986,140 @@ static void PrepMain(void *arg)
 
 static bool g_shutdownSeen;        /* the system is powering off / rebooting */
 
+/* ------------------------------------------------------------------ replay buffer's files */
+
+#define REPLAY_FILE_BYTES (REPLAY_DATA_OFF + REPLAY_BYTES)
+static const char *const REPLAY_FS[2] = { REC_DIR_FS "/.replay0.tmp", REC_DIR_FS "/.replay1.tmp" };
+static volatile bool g_rpReady[2];     /* the file is there at its full size */
+static u32    g_rpCur;                 /* the one the buffer uses (next) */
+static Thread g_rpThread;
+static volatile bool g_rpStop, g_rpDone;
+static volatile bool g_rpNoSpace;      /* the card has no room for them */
+static u64    g_rpRetryTick;
+
+static u32 RingFill(void);
+
+static bool ReplayFileWhole(u32 i)
+{
+    Handle h = 0;
+    u64 size = 0;
+    if (R_FAILED(FSUSER_OpenFile(&h, g_sd, fsMakePath(PATH_ASCII, REPLAY_FS[i]), FS_OPEN_READ, 0)))
+        return false;
+    FSFILE_GetSize(h, &size);
+    FSFILE_Close(h);
+    return size == REPLAY_FILE_BYTES;
+}
+
+/* Megabytes the replay files still need on the card (0: both are there, or the buffer is off). */
+static u32 ReplayMissingMb(void)
+{
+    u32 mb = 0;
+    for (u32 i = 0; i < 2 && g_cfg.replay; i++)
+        if (!g_rpReady[i])
+            mb += (u32)(REPLAY_FILE_BYTES / MB) + 1u;
+    return mb;
+}
+
+/* Makes the missing replay files, lowest priority. One may be made while the buffer records into
+   the other (after a clip took a file away): in small steps, and only while the ring in memory is
+   nearly empty, as each step keeps the card busy. */
+static void ReplayPrepMain(void *arg)
+{
+    (void)arg;
+    for (u32 i = 0; i < 2 && !g_rpStop; i++)
+    {
+        if (g_rpReady[i])
+            continue;
+        if (ReplayFileWhole(i))
+        {
+            g_rpReady[i] = true;
+            continue;
+        }
+        const FS_Path p = fsMakePath(PATH_ASCII, REPLAY_FS[i]);
+        FSUSER_DeleteFile(g_sd, p);
+        if (SdFreeMb() < (u32)(REPLAY_FILE_BYTES / MB) + 2 * MIN_SD_FREE_MB)
+        {
+            g_rpNoSpace = true;
+            break;
+        }
+        Handle h = 0;
+        if (R_FAILED(FSUSER_OpenFile(&h, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+            break;
+        u64 size = 0;
+        while (size < REPLAY_FILE_BYTES && !g_rpStop)
+        {
+            if (g_recording && g_ringSize && RingFill() > g_ringSize / 4u)
+            {
+                svcSleepThread(50 * 1000 * 1000);
+                continue;
+            }
+            const u64 next = size + REPLAY_STEP < REPLAY_FILE_BYTES ? size + REPLAY_STEP : REPLAY_FILE_BYTES;
+            if (R_FAILED(FSFILE_SetSize(h, next)))
+            {
+                g_rpNoSpace = true;
+                break;
+            }
+            size = next;
+            svcSleepThread(20 * 1000 * 1000);
+        }
+        FSFILE_Close(h);
+        if (size == REPLAY_FILE_BYTES)
+            g_rpReady[i] = true;
+        else
+            FSUSER_DeleteFile(g_sd, p);
+    }
+    g_rpDone = true;
+}
+
+/* Main loop: starts the thread above when a file is missing; reaps it when it is done. */
+static void ReplayPrepare(void)
+{
+    if (g_rpThread)
+    {
+        if (!g_rpDone)
+            return;
+        threadJoin(g_rpThread, U64_MAX);
+        threadFree(g_rpThread);
+        g_rpThread = NULL;
+    }
+    if (!g_cfg.replay || !g_sd || g_shutdownSeen || (g_rpReady[0] && g_rpReady[1]))
+        return;
+    if (g_rpNoSpace && Ticks() - g_rpRetryTick < 30ull * SYSCLOCK_ARM11)
+        return;   /* a full card: looked at again now and then (recordings get deleted) */
+    g_rpRetryTick = Ticks();
+    g_rpNoSpace = false;
+    g_rpDone = false;
+    g_rpStop = false;
+    g_rpThread = threadCreate(ReplayPrepMain, NULL, 8 * KB, 0x3F, 1, false);
+}
+
+/* The buffer was turned off (or the recorder is removed): its files go, the card gets 512 MB back. */
+static void ReplayRemoveFiles(void)
+{
+    if (g_rpThread)
+    {
+        g_rpStop = true;
+        threadJoin(g_rpThread, U64_MAX);
+        threadFree(g_rpThread);
+        g_rpThread = NULL;
+    }
+    for (u32 i = 0; i < 2; i++)
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REPLAY_FS[i]));
+        g_rpReady[i] = false;
+    }
+    g_rpNoSpace = false;
+}
+
 static void PrepareNext(void)
 {
     if (g_prepThread || g_prepFile || !g_sd || g_shutdownSeen)
         return;
     const u32 freeMb = SdFreeMb();
-    if (freeMb < (u32)(FIRST_ALLOC / MB) + 4 * MIN_SD_FREE_MB)
+    const u32 keep = 4 * MIN_SD_FREE_MB + ReplayMissingMb();   /* and room for the replay buffer's files */
+    if (freeMb < (u32)(FIRST_ALLOC / MB) + keep)
         return;   /* nearly full card: do not reserve space in advance */
-    u64 size = ((u64)(freeMb - 4 * MIN_SD_FREE_MB) * MB) & ~(32ull * MB - 1);   /* leave 256 MB free */
+    u64 size = ((u64)(freeMb - keep) * MB) & ~(32ull * MB - 1);   /* leave 256 MB free */
     g_prepSize = size < PREP_ALLOC ? size : PREP_ALLOC;
     g_prepDone = false;
     g_prepStop = false;
@@ -874,10 +1144,17 @@ static Handle TakePrepared(void)
 
 static void WriteInfo(void);
 
+/* Where the stream's byte `at` goes in the file. The replay buffer's file is a ring of REPLAY_BYTES
+   (a multiple of every write block, and writes start at multiples of the block: none crosses its end). */
+static u64 FileOffset(u64 at)
+{
+    return g_replay ? REPLAY_DATA_OFF + at % REPLAY_BYTES : at;
+}
+
 static void WriterMain(void *arg)
 {
     (void)arg;
-    u64 lastInfo = 0;
+    u64 lastInfo = 0, lastLog = 0;
     for (;;)
     {
         g_writerBusy = true;
@@ -897,7 +1174,7 @@ static void WriterMain(void *arg)
         }
         if (R_SUCCEEDED(g_writeRc))
         {
-            if (g_written + g_block > g_allocated)
+            if (!g_replay && g_written + g_block > g_allocated)
             {
                 const u64 t0 = osGetTime();
                 g_allocated += CHUNK_ALLOC;
@@ -909,7 +1186,7 @@ static void WriterMain(void *arg)
             }
             u32 done = 0;
             const u64 w0 = Ticks();
-            g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), g_block, g_writeFlags);
+            g_writeRc = FSFILE_Write(g_file, &done, FileOffset(g_written), g_ring + (g_r % g_ringSize), g_block, g_writeFlags);
             g_written += done;
             if (g_cfg.sdLimitKb)
             {
@@ -924,6 +1201,10 @@ static void WriterMain(void *arg)
             const u32 wms = TicksToUs(now - w0) / 1000u;
             if (wms > g_writeMaxMs)
                 g_writeMaxMs = wms;
+            if (g_logLen && now - lastLog > 2ull * SYSCLOCK_ARM11) {   /* lines kept while capturing (Log) */
+                lastLog = now;
+                LogFlush();
+            }
             if (now - lastInfo > (u64)INFO_EVERY_US * (SYSCLOCK_ARM11 / 1000000u)) {
                 lastInfo = now;
                 WriteInfo();
@@ -937,12 +1218,23 @@ static void WriterMain(void *arg)
 /* Final partial block, from the main thread once capture and converter are idle. */
 static void WriterFlushTail(void)
 {
-    const u64 avail = g_w - g_r;
-    if (avail && R_SUCCEEDED(g_writeRc))
+    /* in pieces that end where the ring in memory does (and the replay file's ring): after a card
+       that stood still for long the tail can be more than a block, and one write of it read past
+       the ring's end */
+    while (g_w != g_r && R_SUCCEEDED(g_writeRc))
     {
+        const u32 pos = (u32)(g_r % g_ringSize);
+        u64 n = g_w - g_r;
+        if (n > g_ringSize - pos)
+            n = g_ringSize - pos;
+        if (g_replay && n > REPLAY_BYTES - g_written % REPLAY_BYTES)
+            n = REPLAY_BYTES - g_written % REPLAY_BYTES;
         u32 done = 0;
-        g_writeRc = FSFILE_Write(g_file, &done, g_written, g_ring + (g_r % g_ringSize), (u32)avail, FS_WRITE_FLUSH);
+        g_writeRc = FSFILE_Write(g_file, &done, FileOffset(g_written), g_ring + pos, (u32)n, FS_WRITE_FLUSH);
         g_written += done;
+        if (done != n && R_SUCCEEDED(g_writeRc))
+            g_writeRc = (Result)0xE0000006;   /* a short write: the card is full */
+        g_r += n;
     }
     g_r = g_w;
 }
@@ -994,10 +1286,29 @@ static void PutPad(u32 pos, u32 padBytes)
 }
 
 /* Bookkeeping once a video record is in the ring at stream offset `at`. */
-static void VideoStored(int sc, u64 at)
+static void VideoStored(int sc, u64 at, const R3dRecHeader *h)
 {
     g_bound[g_boundN % BOUNDS] = at;
     __atomic_store_n(&g_boundN, g_boundN + 1, __ATOMIC_RELEASE);
+    /* the record's time in 64 bits: it is not later than now, and less than a wrap earlier */
+    const u64 now = TicksToUs64(Ticks() - g_recStartTick);
+    const u64 us = now - (u32)((u32)now - h->timeUs);
+    g_storedUs[sc] = us;
+    g_hasFrame[sc] = true;
+    g_lastFmt[sc] = h->srcFormat;
+    g_lastC420[sc] = h->magic == R3D_MAGIC_CFRAME;
+    if (h->screen & R3D_SCREEN_KEY)
+    {
+        g_keyUs[sc] = us;
+        if (g_replay && (!g_keyMarked[sc] || us - g_keyMarkUs[sc] >= KEYMARK_GAP_US))
+        {
+            const KeyMark k = { at, us, h->timeUs, (u8)sc };
+            g_keys[g_keyN % KEYMARKS] = k;
+            g_keyN++;
+            g_keyMarkUs[sc] = us;
+            g_keyMarked[sc] = true;
+        }
+    }
     if (sc == 0)
         g_shared.framesTop++;
     else
@@ -1100,6 +1411,8 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
                             : (u32)codec_c420_encode_conv(src, cols, rows, stride, fmt, fb_column_to_rgb565, dst);
             if (len)
             {
+                if (g_c420Keep[sc] && len <= cols * rows)
+                    memcpy(g_c420Keep[sc], dst, len);
                 g_codecFrames[sc] = 0;   /* the next XR32 frame is a keyframe */
                 g_codecWords[sc] = words;
                 g_c420Frames[sc]++;
@@ -1120,7 +1433,10 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
         return 0;
     }
     g_lastCodec = 0;
-    *key = !sameSize || g_codecFrames[sc] % KEYFRAME_EVERY == 0;
+    *key = !sameSize || g_codecFrames[sc] % KEYFRAME_EVERY == 0 ||
+           (g_replay && TicksToUs64(Ticks() - g_recStartTick) - g_keyUs[sc] >= REPLAY_KEY_US);
+    if (*key)
+        g_codecFrames[sc] = 0;   /* the next one comes KEYFRAME_EVERY frames from here */
     /* another format (BGR8: HOME Menu and many games): converted a column at a time into the cache
        and encoded from there, not a pass over the whole frame through main memory first */
     u32 len;
@@ -1208,7 +1524,56 @@ static void EncodeSlot(Slot *s, bool busy)
     if (padBytes)
         __atomic_store_n(&g_w, g_w + padBytes, __ATOMIC_RELEASE);
     RingCommit(sizeof(R3dRecHeader) + stored);
-    VideoStored(sc, at);
+    VideoStored(sc, at, &hd);
+}
+
+/* Replay buffer, converter thread with nothing to encode: a screen whose picture has not changed
+   for REPLAY_KEY_US gets its last picture again as a key frame (a still FCRAM framebuffer is never
+   captured again: PollScreens), so a clip finds every screen's picture near its start. From the
+   reference frame (XR32), or the kept bytes when the last frame was C420. */
+static void StoreAgain(int sc)
+{
+    const u32 cols = sc == 0 ? 400 : 320, rows = 240, words = cols * rows;
+    if (g_codecWords[sc] != words || (g_lastC420[sc] ? !g_c420Keep[sc] : !g_prev[sc] || !g_againBuf))
+        return;
+    const u32 maxLen = ((u32)codec_xr32_max_size(words) + 15u) & ~15u;
+    const u32 need = sizeof(R3dRecHeader) + maxLen;
+    u32 pos = (u32)(g_w % g_ringSize);
+    const u32 tail = g_ringSize - pos;
+    const u32 padBytes = tail < need && !g_ringOver ? tail : 0;
+    if (RingFree() < padBytes + need + (g_audioReserve ? g_audioReserveBytes : 0u))
+        return;   /* the card is behind: later */
+    if (padBytes)
+    {
+        PutPad(pos, padBytes);
+        pos = 0;
+    }
+    u8 *payload = g_ring + pos + sizeof(R3dRecHeader);
+    R3dRecHeader hd = { R3D_MAGIC_YFRAME, 0, TicksToUs(Ticks() - g_recStartTick), (u8)(sc | R3D_SCREEN_KEY), g_lastFmt[sc],
+                        (u16)cols };
+    if (g_lastC420[sc])
+    {
+        hd.magic = R3D_MAGIC_CFRAME;
+        hd.len = (u32)codec_c420_size(cols, rows);
+        memcpy(payload, g_c420Keep[sc], hd.len);
+    }
+    else
+    {
+        /* a key frame of the reference's picture; from a copy: the encoder clears the reference
+           first and fills it again from what it encodes */
+        memcpy(g_againBuf, g_prev[sc], words * 2u);
+        hd.len = (u32)codec_xr32_encode_strided_v(g_prev[sc], g_againBuf, cols, rows, rows * 2u, 1, 1, 1, payload);
+        g_codecFrames[sc] = 1;
+    }
+    const u32 stored = (hd.len + 15u) & ~15u;
+    memset(payload + hd.len, 0, stored - hd.len);
+    *(R3dRecHeader *)(g_ring + pos) = hd;
+    const u64 at = g_w + padBytes;
+    if (padBytes)
+        __atomic_store_n(&g_w, g_w + padBytes, __ATOMIC_RELEASE);
+    RingCommit(sizeof(R3dRecHeader) + stored);
+    VideoStored(sc, at, &hd);
+    g_replayAgain++;
 }
 
 /* Packer: the oldest staged frame into the ring, Huffman-coded when that is smaller and the
@@ -1256,7 +1621,7 @@ static void PackStage(void)
         __atomic_store_n(&g_w, g_w + padBytes, __ATOMIC_RELEASE);
     RingCommit(sizeof(R3dRecHeader) + stored);
     __atomic_sub_fetch(&g_reserved, st->reserve, __ATOMIC_SEQ_CST);
-    VideoStored(sc, at);
+    VideoStored(sc, at, &hd);
     g_packTicks += Ticks() - t0;
     __atomic_store_n(&g_stTail, g_stTail + 1, __ATOMIC_RELEASE);
 }
@@ -1648,12 +2013,25 @@ static void ConverterStep(void)
     {
         Slot *s = &g_slots[i];
         running |= s->state == 1;
-        if (s->state == 2 && (!next || s->screen < next->screen ||
-                              (s->screen == next->screen && s->startTick < next->startTick)))
+        /* The oldest frame first, whichever screen it is of. With the top screen's always first, a
+           converter that gets little of the processor (Yo-kai Watch, O3DS 2026-11-14) left bottom
+           frames waiting 0.6-2 s: they went into the file that far behind top frames of the same
+           time, so the console's player took them for late and never showed them, and in the MP4
+           the bottom screen ran behind the top one. The top screen keeps its lead where frames
+           are captured (PollScreens: the bottom one waits behind a busy top screen). */
+        if (s->state == 2 && (!next || s->startTick < next->startTick ||
+                              (s->startTick == next->startTick && s->screen < next->screen)))
             next = s;
     }
     if (!next)
     {
+        if (g_replay && g_recording && !PackerOn())
+        {
+            const u64 now = TicksToUs64(Ticks() - g_recStartTick);
+            for (int sc = 0; sc < 2; sc++)
+                if (g_hasFrame[sc] && now - g_storedUs[sc] >= REPLAY_KEY_US)
+                    StoreAgain(sc);
+        }
         g_convInSlot = false;
         if (running)
             svcSleepThread(300 * 1000);
@@ -2061,6 +2439,7 @@ static u64 g_lastPollUs;
 #define PACE_EVERY_US 100000u
 #define PACE_CUT_MAX  384u
 static u32 g_paceCut, g_paceAcc[2], g_paceFill, g_paceCutMax;
+static u32 g_paceWaiting, g_paceByBacklog;   /* frames waiting for the converter at the last step; steps they decided */
 static u64 g_paceUs, g_paceCutSum;
 static u32 g_paceTicks;
 
@@ -2080,9 +2459,29 @@ static void PaceUpdate(u64 nowUs, u32 fill)
     if (nowUs - g_paceUs < (every < 10000u ? 10000u : every))
         return;
     g_paceUs = nowUs;
-    const u32 pct = fill / (g_ringSize / 100u);
-    const bool rising = fill > g_paceFill + g_ringSize / 64u;
+    u32 pct = fill / (g_ringSize / 100u);
+    bool rising = fill > g_paceFill + g_ringSize / 64u;
     g_paceFill = fill;
+    if (!g_lite)
+    {
+        /* The converter behind (a game that leaves it little of the processor) counts like a card
+           that is behind: frames waiting to be encoded are thinned out evenly, the bottom screen's
+           first, where they used to be lost in runs once every slot was taken ("no free slot": 169
+           in 37 s of Yo-kai Watch with an empty ring, O3DS 2026-11-14). Eight waiting frames are as
+           bad as a full ring. Not in the small-memory profiles (two slots a screen: measured there
+           before it is changed). */
+        u32 waiting = 0;
+        for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+            waiting += g_slots[i].state == 2;
+        const u32 backlog = waiting >= 8u ? 100u : waiting * 100u / 8u;
+        if (backlog > pct)
+        {
+            pct = backlog;
+            rising = waiting > g_paceWaiting;
+            g_paceByBacklog++;
+        }
+        g_paceWaiting = waiting;
+    }
     const s32 step = pct > 80u ? 48 : pct > 65u ? 24 : pct > 45u && rising ? 12 : pct < 30u ? -12 : pct < 50u && !rising ? -4 : 0;
     const s32 cut = (s32)g_paceCut + step;
     g_paceCut = cut < 0 ? 0u : cut > (s32)PACE_CUT_MAX ? PACE_CUT_MAX : (u32)cut;
@@ -2107,7 +2506,7 @@ static bool PaceTake(int sc)
    then on so a swap is caught within ~2 ms (the frame stays put until the game's next swap). */
 static u32 PollScreens(void)
 {
-    const u64 nowUs = TicksToUs(Ticks() - g_recStartTick);
+    const u64 nowUs = TicksToUs64(Ticks() - g_recStartTick);
     const u32 gapUs = 1000000u / g_cfg.fps - 8000u;   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
     const u32 fill = RingFill();
     u64 wakeUs = nowUs + 20000u;
@@ -2128,8 +2527,9 @@ static u32 PollScreens(void)
             t->lastStride = stride;
             t->vram = IsVram(cur);
             t->modeUs = nowUs;
-            Log("%s screen: format %03lX stride %lu at %s pa %08lX, %lu s", sc ? "bottom" : "top", fmt, stride,
-                IsVram(cur) ? "VRAM" : "FCRAM", cur, (u32)(nowUs / 1000000u));
+            if (!g_replay)   /* the buffer runs for hours: the log's lines are for recordings */
+                Log("%s screen: format %03lX stride %lu at %s pa %08lX, %lu s", sc ? "bottom" : "top", fmt, stride,
+                    IsVram(cur) ? "VRAM" : "FCRAM", cur, (u32)(nowUs / 1000000u));
         }
         const bool isNew = cur != t->lastAddr || sel != t->lastSel;
         if (isNew)
@@ -2213,7 +2613,7 @@ static u32 PollScreens(void)
     for (int sc = 0; sc < 2; sc++)
         if ((sc == 0 ? g_cfg.top : g_cfg.bottom) && g_track[sc].hasCap && g_track[sc].swapGapUs < FAST_SWAP_US)
             return POLL_REC_US;
-    const u64 after = TicksToUs(Ticks() - g_recStartTick);
+    const u64 after = TicksToUs64(Ticks() - g_recStartTick);
     return wakeUs > after + POLL_REC_US ? (u32)(wakeUs - after) : POLL_REC_US;
 }
 
@@ -2486,7 +2886,8 @@ static void SetBoost(bool on, const char *why)
             svcSetThreadPriority(threadGetHandle(g_packThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
     }
     svcSetThreadPriority(threadGetHandle(g_writerThread), on ? CONVERTER_PRIO_BOOST - 1 : CONVERTER_PRIO - 1);
-    Log("priority %s (converter %02X): %s", on ? "boosted" : "normal", on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO, why);
+    if (!g_replay)   /* the buffer runs for hours: the log's lines are for recordings */
+        Log("priority %s (converter %02X): %s", on ? "boosted" : "normal", on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO, why);
 }
 
 /* The running application's pid, 0 when none (HOME only, or an app closing / starting). Does
@@ -2518,12 +2919,14 @@ static u32 ApplicationPid(void)
 static const char *CpuState(void);
 static void CpuBoost(bool on);
 
+static u32 g_frontPid;   /* the application that runs now, 0: none (HOME alone); UpdateBoost while recording, the main loop when idle */
+
 static void UpdateBoost(void)
 {
     static u64 lastCheck, since;
     static u32 pid;
     const u64 now = Ticks();
-    const u64 recUs = TicksToUs(now - g_recStartTick);
+    const u64 recUs = TicksToUs64(now - g_recStartTick);
     const bool appDrawing = g_appSwapSeen && recUs - g_appSwapUs < BOOST_APP_IDLE_US;
     if (g_boosted && !appDrawing)
     {
@@ -2534,6 +2937,7 @@ static void UpdateBoost(void)
         return;
     lastCheck = now;
     const u32 p = ApplicationPid();
+    g_frontPid = p;
     if (p != pid)
     {
         /* which program is in front during the recording (drops and speed depend on it) */
@@ -2544,11 +2948,13 @@ static void UpdateBoost(void)
             svcGetProcessInfo(&tid, h, 0x10001);
             svcCloseHandle(h);
         }
-        if (p)
+        if (g_replay)
+            ;
+        else if (p)
             Log("program in front: pid %lu title %016llX at %lu s (%s)", p, (u64)tid,
-                TicksToUs(now - g_recStartTick) / 1000000u, CpuState());
+                (u32)(TicksToUs64(now - g_recStartTick) / 1000000u), CpuState());
         else
-            Log("program in front: none (HOME) at %lu s", TicksToUs(now - g_recStartTick) / 1000000u);
+            Log("program in front: none (HOME) at %lu s", (u32)(TicksToUs64(now - g_recStartTick) / 1000000u));
         pid = p;
         since = now;
         SetBoost(false, "another application or none");
@@ -3101,19 +3507,41 @@ static void UnmapPluginMemory(void)
     Log("launcher plugin memory unmapped (the game closes)");
 }
 
-static bool StartRecording(void)
+static R3dFileHeader g_fileHdr;   /* this recording's file header (a clip's .r3d gets it too) */
+
+/* replay: the replay buffer (the stream goes round in a replay file), else a recording of its own. */
+static bool StartRecordingAs(bool replay)
 {
     if (g_shutdownSeen)   /* powering off / rebooting: nothing new */
         return false;
-    g_shared.lastError = 0;
     const u32 sdFree = SdFreeMb();
-    if (!g_sd || sdFree < MIN_SD_FREE_MB + 16)
+    if (replay)
     {
-        g_shared.lastError = (s32)0xE0000001;   /* SD missing or full */
-        Log("start refused: SD free %lu MB", sdFree);
+        if (!g_rpReady[g_rpCur])
+            g_rpCur ^= 1u;
+        if (!g_sd || !g_rpReady[g_rpCur])
+            return false;   /* its files are being made (ReplayPrepare), or the card has no room */
+    }
+    else
+    {
+        g_shared.lastError = 0;
+        if (!g_sd || sdFree < MIN_SD_FREE_MB + 16)
+        {
+            g_shared.lastError = (s32)0xE0000001;   /* SD missing or full */
+            Log("start refused: SD free %lu MB", sdFree);
+            return false;
+        }
+    }
+    const u32 memMode = OS_KernelConfig->app_memtype;
+    if (replay && ((memMode != 0 && memMode < 6) || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW))
+    {
+        /* A game that needs extra memory (Old 3DS): a ring of 1 MB or less, and HOME Menu wants the
+           memory back the moment HOME is pressed. A recording there is the user's choice; the
+           buffer, on all the time, stays out (and does not touch the launcher plugin's memory). */
+        g_shared.replayError = REC_REPLAY_NO_MEMORY;
         return false;
     }
-    g_inPlg = MapPluginMemory();
+    g_inPlg = !replay && MapPluginMemory();
     g_plgTop = 0;
     const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW;
     g_lite = lite;
@@ -3130,6 +3558,7 @@ static bool StartRecording(void)
     g_bottomKeep = 2u;
     g_paced = ab == AB_DEFAULT || ab == AB_LOSSLESS;
     g_paceCut = g_paceCutMax = g_paceFill = g_paceTicks = 0;
+    g_paceWaiting = g_paceByBacklog = 0;
     g_paceAcc[0] = g_paceAcc[1] = PACE_FULL - 1u;   /* the first capture is kept */
     g_paceUs = g_paceCutSum = 0;
     g_intraFrames[0] = g_intraFrames[1] = g_intraMiss = g_intraBusy = 0;
@@ -3190,16 +3619,19 @@ static bool StartRecording(void)
         g_arenaCap[sc] = g_c420Always ? ARENA_CAP_PLG_C420[sc] : g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
         g_arena[sc] = BigAlloc(g_arenaCap[sc]);
         g_prev[sc] = g_c420Always ? NULL : BigAlloc((sc == 0 ? 400u : 320u) * 240u * 2u);
+        g_c420Keep[sc] = replay && g_c420On ? BigAlloc((u32)codec_c420_size(sc == 0 ? 400u : 320u, 240u)) : NULL;
         g_slotCount[sc] = g_slotSize[sc] = 0;
         g_codecFrames[sc] = 0;
         g_codecWords[sc] = 0;
     }
+    g_againBuf = replay ? BigAlloc(400u * 240u * 2u) : NULL;
     const bool prevOk = g_c420Always || (g_prev[0] && g_prev[1]);
     /* before the ring: given back with the encoder's memory (ReleaseEncoderMemory) */
     const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
     /* staging buffers for the packer (Huffman on): three in the normal profile, one in the light
        ones (no memory to spare there: the ring gets less) */
-    u32 stages = (g_testVar ? g_testVar->huff != 0 : g_cfg.huff) ? (lite ? 1u : STAGES_MAX) : 0u;
+    /* not in the replay buffer: the converter is the ring's producer there (StoreAgain) */
+    u32 stages = !replay && (g_testVar ? g_testVar->huff != 0 : g_cfg.huff) ? (lite ? 1u : STAGES_MAX) : 0u;
     for (u32 i = 0; i < stages; i++)
         if (!(g_stage[i].buf = BigAlloc(recMax)))
             stages = i;
@@ -3245,8 +3677,12 @@ static bool StartRecording(void)
     if (!g_ring)
     {
         BigFreeAll();
-        g_shared.lastError = (s32)0xE0000002;   /* not enough SYSTEM memory */
-        Log("start refused: SYSTEM free %lu KB", osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
+        if (replay)
+            g_shared.replayError = REC_REPLAY_NO_MEMORY;
+        else
+            g_shared.lastError = (s32)0xE0000002;   /* not enough SYSTEM memory */
+        if (!replay)   /* the buffer tries again every few seconds: no line each time */
+            Log("start refused: SYSTEM free %lu KB", osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
         return false;
     }
     memset(g_slots, 0, sizeof(g_slots));
@@ -3265,9 +3701,19 @@ static bool StartRecording(void)
     g_audioUnstable = g_audioBoth = g_audioMaxGapUs = g_audioGapsOver4ms = g_audioGapSinceFrame = 0;
     g_audioLastPollTick = 0;
 
-    g_file = TakePrepared();
+    g_file = replay ? 0 : TakePrepared();
     const bool prepared = g_file != 0;
-    if (!g_file)
+    if (replay)
+    {
+        if (R_FAILED(FSUSER_OpenFile(&g_file, g_sd, fsMakePath(PATH_ASCII, REPLAY_FS[g_rpCur]), FS_OPEN_WRITE, 0)))
+        {
+            g_file = 0;
+            g_rpReady[g_rpCur] = false;   /* gone (the card was changed, the file deleted): made again */
+            BigFreeAll();
+            return false;
+        }
+    }
+    else if (!g_file)
     {
         const FS_Path p = fsMakePath(PATH_ASCII, NEXT_FS);
         FSUSER_DeleteFile(g_sd, p);
@@ -3281,7 +3727,14 @@ static bool StartRecording(void)
         }
         FSFILE_SetSize(g_file, FIRST_ALLOC);
     }
-    g_allocated = prepared ? g_prepReached : FIRST_ALLOC;
+    g_allocated = replay ? REPLAY_FILE_BYTES : prepared ? g_prepReached : FIRST_ALLOC;
+    g_replay = replay;
+    g_keyN = g_replayAgain = 0;
+    for (int sc = 0; sc < 2; sc++)
+    {
+        g_keyMarked[sc] = g_hasFrame[sc] = g_lastC420[sc] = false;
+        g_keyUs[sc] = g_storedUs[sc] = 0;
+    }
     g_growCount = g_growMaxMs = 0;
     g_writeTicks = 0;
     g_writeMaxMs = 0;
@@ -3310,27 +3763,37 @@ static bool StartRecording(void)
     fh->audioRate = g_aq ? R3D_AUDIO_RATE_MHZ : 0;
     g_recStartMs = osGetTime();
     fh->startTimeMs = g_recStartMs;
+    g_fileHdr = *fh;
     g_w = sizeof(*fh);
-    OpenInfo();
+    if (!replay)   /* a buffer cut off by power loss is not a recording to recover */
+        OpenInfo();
 
     CpuBoost(true);
+    g_batStart = BatteryNow();
     g_recStartTick = Ticks();
     g_stageN = stages;   /* the packer takes over the ring (audio too) */
     g_writerActive = true;
     g_recording = true;
     g_shared.ringKb = g_ringSize / KB;
     g_shared.sysFreeKb = osGetMemRegionFree(MEMREGION_SYSTEM) / KB;
-    g_shared.state = REC_STATE_RECORDING;
-    LedRecording();
-    Log("recording started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, %s memory profile%s, "
+    g_shared.state = replay ? REC_STATE_REPLAY : REC_STATE_RECORDING;
+    if (replay)
+    {
+        g_shared.replayError = REC_REPLAY_OK;
+        LedReplay();
+    }
+    else
+        LedRecording();
+    Log("%s started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, %s memory profile%s, "
         "SYSTEM free %lu KB, SD free %lu MB, %s)",
-        g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
+        replay ? "replay buffer" : "recording", g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
         *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, ScreensName(),
         g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, lite ? "light" : "normal",
         g_inPlg ? " in the launcher plugin's memory" : "",
         g_shared.sysFreeKb, sdFree,
         CpuState());
-    LogMemory("recording started");
+    if (!replay)
+        LogMemory("recording started");
     if (g_testVar)
     {
         Log("test variant %lu of %u: %s; converter on core %ld, packer on core %ld", (g_testNext - 1) % TEST_VAR_COUNT + 1,
@@ -3339,6 +3802,8 @@ static bool StartRecording(void)
     }
     return true;
 }
+
+static bool StartRecording(void) { return StartRecordingAs(false); }
 
 /* New 3DS: the clock and L2 the running program chose (the converter's speed depends on them). */
 /* New 3DS: 804 MHz and the L2 cache while recording (Rosalina's New 3DS menu changes them the same
@@ -3443,10 +3908,94 @@ static void ReleaseEncoderMemory(void *aq)
     memset(g_slots, 0, sizeof(g_slots));
 }
 
+/* Where a clip of the buffer's last REPLAY_CLIP_US starts: for each screen its last key frame not
+   later than that (else its first one the file still holds), and the earlier of the two in the
+   stream, so each screen's picture is known from the clip's start (r3d_unwrap drops what comes
+   before a screen's key frame). false: no key frame in the file yet. */
+static bool ReplayClipStart(u64 end, u64 endUs, KeyMark *out)
+{
+    const u64 low = end > REPLAY_BYTES ? end - REPLAY_BYTES : sizeof(R3dFileHeader);
+    const u64 target = endUs > REPLAY_CLIP_US ? endUs - REPLAY_CLIP_US : 0;
+    const u32 n = g_keyN < KEYMARKS ? g_keyN : KEYMARKS;
+    bool found = false;
+    for (u32 sc = 0; sc < 2; sc++)
+    {
+        const KeyMark *best = NULL;
+        for (u32 i = 0; i < n; i++)
+        {
+            const KeyMark *k = &g_keys[i];
+            if (k->screen != sc || k->at < low || k->at >= end)
+                continue;
+            if (!best || (k->us <= target ? best->us > target || k->us > best->us : best->us > target && k->us < best->us))
+                best = k;
+        }
+        if (best && (!found || best->at < out->at))
+        {
+            *out = *best;
+            found = true;
+        }
+    }
+    return found;
+}
+
+static bool g_saveClip;      /* this stop of the replay buffer saves a clip (else the buffer is just left) */
+static bool g_replayFailed;  /* the card refused the buffer's writes: off until the settings are read again */
+
+/* The replay buffer stops (its tail is on the card). A clip: the ring's header goes to the file's
+   start and the file gets a recording's name with .rpl (the app makes the .r3d: r3d_unwrap); the
+   buffer goes on in the other file. Otherwise the file stays as it is for the next round. */
+static bool CloseReplay(bool save, u64 endUs, char *name, u32 nameSize)
+{
+    bool ok = false;
+    KeyMark k;
+    if (save && R_SUCCEEDED(g_writeRc) && g_w == g_r && ReplayClipStart(g_written, endUs, &k))
+    {
+        R3dRingInfo info;
+        memset(&info, 0, sizeof(info));
+        info.magic = R3D_MAGIC_RING;
+        info.version = R3D_RING_VERSION;
+        info.dataOff = REPLAY_DATA_OFF;
+        info.startUs = k.timeUs;
+        info.ringBytes = REPLAY_BYTES;
+        info.start = k.at;
+        info.end = g_written;
+        info.endUs = (u32)endUs;
+        info.file = g_fileHdr;
+        info.file.startTimeMs = g_recStartMs + k.us / 1000u;
+        u32 done = 0;
+        ok = R_SUCCEEDED(FSFILE_Write(g_file, &done, 0, &info, sizeof(info), FS_WRITE_FLUSH)) && done == sizeof(info);
+        if (ok)
+        {
+            FormatName(name, nameSize, info.file.startTimeMs);
+            const size_t len = strlen(name);
+            if (len > 3)
+                memcpy(name + len - 3, "rpl", 3);   /* .r3d -> .rpl: the app's lists of recordings leave it out */
+        }
+    }
+    FSFILE_Close(g_file);
+    g_file = 0;
+    if (ok)
+    {
+        char path[96];
+        snprintf(path, sizeof(path), REC_DIR_FS "/%s", name);
+        ok = R_SUCCEEDED(FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, REPLAY_FS[g_rpCur]), g_sd, fsMakePath(PATH_ASCII, path)));
+        if (ok)
+        {
+            g_rpReady[g_rpCur] = false;   /* ReplayPrepare makes a new one */
+            g_rpCur ^= 1u;
+        }
+    }
+    return ok;
+}
+
 static void StopRecording(const char *why, bool releaseFirst)
 {
+    const bool replay = g_replay, saveClip = g_replay && g_saveClip;
+    const u64 endUs = TicksToUs64(Ticks() - g_recStartTick);
+    g_saveClip = false;
     g_shared.state = REC_STATE_SAVING;
     g_recording = false;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     /* pending DMAs finish or time out, the converter empties the slots, the packer the stages */
     for (u32 i = 0; i < 400 && (!SlotsIdle() || !StagesIdle()); i++)
     {
@@ -3479,6 +4028,9 @@ static void StopRecording(const char *why, bool releaseFirst)
         Log("stop: converter starved, %lu DMAs stopped, slots cleared%s", stopped,
             g_convInSlot ? " (converter still inside a frame)" : "");
     }
+    /* the replay buffer's converter may be storing a still screen's picture again (StoreAgain) */
+    for (u32 i = 0; i < 2000 && replay && g_convInSlot; i++)
+        svcSleepThread(5 * 1000 * 1000);
     while (g_audioInPoll)   /* the audio thread sees g_recording == false from its next poll */
         svcSleepThread(1 * 1000 * 1000);
     for (u32 i = 0; i < 100 && g_aq && g_aqTail != g_aqHead; i++)   /* queued audio into the ring */
@@ -3528,6 +4080,14 @@ static void StopRecording(const char *why, bool releaseFirst)
         Log("HOME: recording memory given back at once (ring %s), SYSTEM free %lu KB",
             ringDropped ? "dropped" : "still being written", osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
     }
+    if (replay && !saveClip)
+    {
+        /* the buffer is just left: what is still in memory need not reach the card */
+        g_writerActive = false;
+        while (g_writerBusy)
+            svcSleepThread(2 * 1000 * 1000);
+        g_r = g_w;
+    }
     /* writer: whole blocks first, then the tail from here */
     for (u32 i = 0; i < 2000 && !ringDropped && g_w - g_r >= g_block; i++)
         svcSleepThread(5 * 1000 * 1000);
@@ -3536,18 +4096,69 @@ static void StopRecording(const char *why, bool releaseFirst)
         svcSleepThread(5 * 1000 * 1000);
     if (!ringDropped)
         WriterFlushTail();
+    char name[32] = "";
+    Result rn = 0;
+    const u32 seconds = (u32)(endUs / 1000000u);
+    const Battery batEnd = BatteryNow();
+    if (replay)
+    {
+        const bool clip = CloseReplay(saveClip, endUs, name, sizeof(name));
+        Log("replay buffer stopped: %lu s, %llu KB, frames %lu + %lu (%lu stored again), dropped %lu (ring full %lu, "
+            "no free slot %lu, DMA limit %lu, DMA timeout %lu), throttled %lu, ring max %lu KB, slowest block %lu ms, "
+            "encode avg %lu / %lu us, pacer cut %lu on average (most %lu, %lu of %lu steps by the converter's backlog), "
+            "battery %u%% -> %u%% (%lu -> %lu mV%s), write rc %08lX, %s%s, reason: %s",
+            seconds, g_written / KB, g_shared.framesTop, g_shared.framesBot, g_replayAgain, g_dropped, g_drops[DROP_RING],
+            g_drops[DROP_NO_SLOT], g_drops[DROP_DMA_LIMIT], g_drops[DROP_DMA_TIMEOUT], g_throttled,
+            g_ringMax / KB, g_writeMaxMs,
+            g_shared.framesTop ? (u32)(g_encodeSumUs[0] / g_shared.framesTop) : 0u,
+            g_shared.framesBot ? (u32)(g_encodeSumUs[1] / g_shared.framesBot) : 0u,
+            g_paceTicks ? (u32)(g_paceCutSum / g_paceTicks) : 0u, g_paceCutMax, g_paceByBacklog, g_paceTicks,
+            g_batStart.pct, batEnd.pct, g_batStart.mv, batEnd.mv, g_batStart.charger || batEnd.charger ? ", ON THE CHARGER" : "",
+            (u32)g_writeRc, clip ? "clip saved: " : saveClip ? "CLIP NOT SAVED" : "no clip",
+            clip ? name : "", why);
+        if (clip)
+        {
+            snprintf((char *)g_shared.lastClip, sizeof(g_shared.lastClip), "%s", name);
+            g_shared.clips++;
+        }
+        if (R_FAILED(g_writeRc))
+        {
+            g_replayFailed = true;
+            g_shared.replayError = REC_REPLAY_WRITE_ERROR;
+        }
+        g_ledReplay = false;
+        if (saveClip || R_FAILED(g_writeRc))
+        {
+            if (clip)
+                LED_SIGNAL(LED_SAVED);
+            else
+                LED_SIGNAL(LED_ERROR);
+        }
+        else if (!g_ledSeqLen)
+            LedOff();
+        CpuBoost(false);
+        SetBoost(false, "replay buffer stopped");
+        g_replay = false;
+        g_ring = NULL;
+        g_stageN = 0;
+        g_ringOver = 0;
+        g_ringMirror = false;
+        BigFreeAll();
+        g_appPid = g_appBase = 0;
+        g_convHold = false;
+        g_shared.state = REC_STATE_IDLE;
+        return;
+    }
     WriteEnd();
 
-    char name[32];
     FormatName(name, sizeof(name), g_recStartMs);
     char path[96];
     snprintf(path, sizeof(path), REC_DIR_FS "/%s", name);
     FSFILE_SetSize(g_file, g_written);
     FSFILE_Close(g_file);
     g_file = 0;
-    const Result rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
+    rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
     CloseInfo();   /* saved: nothing to recover */
-    const u32 seconds = TicksToUs(Ticks() - g_recStartTick) / 1000000u;
     if (g_testVar)
         IdleProbe("recording ends");
     Log("recording saved: %s, %lu s, %llu KB, frames %lu + %lu, dropped %lu, throttled %lu, ring max %lu KB, "
@@ -3584,14 +4195,17 @@ static void StopRecording(const char *why, bool releaseFirst)
             AVG(g_waitUs[0], g_waitN[0]) / 1000u, AVG(g_waitUs[1], g_waitN[1]) / 1000u,
             g_waitMaxUs[0] / 1000u, g_waitMaxUs[1] / 1000u);
         if (g_paced)
-            Log("pacer: frames kept at the end %lu%% / %lu%% (top / bottom), cut %lu on average, most %lu of %u",
+            Log("pacer: frames kept at the end %lu%% / %lu%% (top / bottom), cut %lu on average, most %lu of %u; "
+                "%lu of %lu steps by the converter's backlog",
                 PaceRate(0) * 100u / PACE_FULL, PaceRate(1) * 100u / PACE_FULL, AVG(g_paceCutSum, g_paceTicks), g_paceCutMax,
-                PACE_CUT_MAX);
+                PACE_CUT_MAX, g_paceByBacklog, g_paceTicks);
         else
             Log("pacer: off (throttle steps at %u%% and %u%%)", THROTTLE_PCT, THROTTLE_HARD_PCT);
 #undef AVG
     }
     LogDrops();
+    Log("battery %u%% -> %u%% (%lu -> %lu mV%s) in %lu s", g_batStart.pct, batEnd.pct, g_batStart.mv, batEnd.mv,
+        g_batStart.charger || batEnd.charger ? ", ON THE CHARGER" : "", seconds);
     LogMemory("recording stopped");
     CpuBoost(false);
     SetBoost(false, "recording stopped");
@@ -3633,12 +4247,34 @@ static void WriteSystemStop(bool gameClosed)
 
 /* ------------------------------------------------------------------ main loop */
 
+/* The app is on the screen: it adds to g_shared.appBeat every second or so while it runs in front.
+   The replay buffer pauses then (the app's player, its MP4 conversion and its Wi-Fi transfer need
+   the card and the processor, and nobody wants a clip of the app). An app that was closed, sent to
+   the background or crashed stops adding. Called every round of the main loop. */
+static bool AppOnScreen(void)
+{
+    static u32 last;
+    static u64 at;
+    static bool seen;
+    const u32 beat = g_shared.appBeat;
+    const u64 now = Ticks();
+    if (beat != last)
+    {
+        last = beat;
+        at = now;
+        seen = true;
+    }
+    return seen && now - at < REPLAY_BEAT_US * (SYSCLOCK_ARM11 / 1000000u);
+}
+
 int main(void)
 {
     svcGetProcessId(&g_ownPid, CUR_PROCESS_HANDLE);
     LightEvent_Init(&g_convEvent, RESET_ONESHOT);
     LightEvent_Init(&g_packEvent, RESET_ONESHOT);
     LightLock_Init(&g_dropLock);
+    LightLock_Init(&g_logLock);
+    g_logLockOk = true;
     InitFs();
     LoadConfig();
     InitLed();
@@ -3761,6 +4397,10 @@ int main(void)
         CodecBench();
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
+    for (u32 i = 0; i < 2 && g_cfg.replay && g_sd; i++)   /* before PrepareNext: it leaves room for missing ones */
+        g_rpReady[i] = ReplayFileWhole(i);
+    if (!g_cfg.replay && g_sd)   /* off (the app turns it off after a power-on): the card gets its 512 MB back */
+        ReplayRemoveFiles();
     g_shared.state = REC_STATE_IDLE;
     LED_SIGNAL(LED_READY);
     PrepareNext();
@@ -3784,6 +4424,7 @@ int main(void)
        froze the whole console (New 3DS, 2026-11-07). Closing the lid saves the recording; it goes
        on in a new file a moment after the lid opens. ptm:u is a second source for the lid state. */
     const bool ptmu = R_SUCCEEDED(ptmuInit());
+    g_ptmu = ptmu;
     bool lidClosed = false, lidResume = false;
     u64 resumeAt = 0, lastLidPoll = 0;
     if (resumeInGame)   /* the game draws its first frames by then; same path as after the lid */
@@ -3793,6 +4434,9 @@ int main(void)
     }
 
     bool comboHeld = true;   /* a combo still held from the launch must not start a recording */
+    bool saveHeld = true;
+    u64 replayAt = 0;        /* no try to start the replay buffer before this tick */
+    u64 lastBattery = 0, lastAppCheck = 0, noAppSince = 0;
     bool homeResume = false, homeSeen = false;   /* a recording saved for HOME goes on after it */
     u32 lastPlg = 0;
     bool reloadPending = false;
@@ -3805,6 +4449,22 @@ int main(void)
         u32 nid = 0;
         if (notif && svcWaitSynchronization(notif, 0) == 0 && R_FAILED(srvReceiveNotification(&nid)))
             nid = 0;
+        const bool appOnScreen = AppOnScreen();
+        if (Ticks() - lastBattery > 600ull * SYSCLOCK_ARM11)   /* every ten minutes, whatever runs */
+        {
+            lastBattery = Ticks();
+            const Battery b = BatteryNow();
+            Log("battery %u%%, %lu mV%s; %s, replay buffer %s", b.pct, b.mv, b.charger ? ", ON THE CHARGER" : "",
+                !g_recording ? "not recording" : g_replay ? "the replay buffer runs" : "a recording runs",
+                g_cfg.replay ? "on" : "off");
+        }
+        if (!g_recording && g_cfg.replay && Ticks() - lastAppCheck > 2ull * SYSCLOCK_ARM11)
+        {
+            lastAppCheck = Ticks();
+            g_frontPid = ApplicationPid();
+        }
+        ReplayPrepare();
+        g_shared.replayOn = g_cfg.replay;
         if ((g_recording || lidClosed) && ptmu && Ticks() - lastLidPoll > SYSCLOCK_ARM11 / 10)   /* every 100 ms */
         {
             lastLidPoll = Ticks();
@@ -3818,8 +4478,9 @@ int main(void)
             Log("lid closed%s", g_recording ? ": recording saved, it goes on when the lid opens" : "");
             if (g_recording)
             {
+                const bool buffer = g_replay;   /* starts again by itself once the lid is open */
                 StopRecording("lid closed (sleep)", false);
-                lidResume = true;
+                lidResume = !buffer;
             }
         }
         else if (nid == 0x213 && lidClosed)
@@ -3827,6 +4488,7 @@ int main(void)
             lidClosed = false;
             if (lidResume)   /* the screens wake up a moment after the lid */
                 resumeAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
+            replayAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
             Log("lid opened%s", lidResume ? ": recording goes on in 1.5 s" : "");
         }
         /* HOME in a game that needs extra memory (Old 3DS): HOME Menu wants SYSTEM memory back when it
@@ -3878,6 +4540,8 @@ int main(void)
         {
             lidResume = false;
             resumeAt = 0;
+            if (g_recording && g_replay)
+                StopRecording("a recording goes on", false);
             if (!g_recording && !StartRecording())
                 LED_SIGNAL(LED_ERROR);
         }
@@ -3885,11 +4549,13 @@ int main(void)
         {
             Log("system notification %03lX: %s", nid, nid == 0x100 ? "the recorder must end" : "power-off or reboot");
             g_shutdownSeen = true;   /* no new recording and no file prepared from now on */
-            const bool wasRecording = g_recording;
+            const bool wasRecording = g_recording && !g_replay;
             const bool gameReboot = nid == 0x100 && !g_powerOffSeen;   /* a game's memory mode, System Settings... */
             if (gameReboot)
                 WriteGameOrder(wasRecording);
-            if (g_recording)
+            if (g_recording && g_replay)
+                StopRecording(nid == 0x100 ? "the system ends the recorder" : "power-off or reboot", false);
+            else if (g_recording)
             {
                 StopRecording(nid == 0x100 ? "the system ends the recorder" : "power-off or reboot", false);
                 WriteSystemStop(nid == 0x100 && !g_powerOffSeen && OS_KernelConfig->app_memtype != 0 &&
@@ -3911,6 +4577,12 @@ int main(void)
         {
             reloadPending = false;
             LoadConfig();
+            g_replayFailed = false;
+            if (!g_cfg.replay)
+            {
+                ReplayRemoveFiles();
+                g_shared.replayError = REC_REPLAY_OK;
+            }
             Log("settings reloaded (hotkey mask %03lX, fps %lu, screens %s, audio %s, led %lu)", g_cfg.hotkey, g_cfg.fps,
                 ScreensName(), g_cfg.audio ? "on" : "off", g_cfg.led);
         }
@@ -3932,6 +4604,16 @@ int main(void)
         }
         else
             comboHeld = false;
+        /* The replay hotkey: the buffer's last 30 s become a clip. At once, as the recording hotkey
+           (with a 0.2 s hold first, short presses did nothing: O3DS 2026-11-14). */
+        bool save = false;
+        if ((pad & g_cfg.saveKey) == g_cfg.saveKey)
+        {
+            save = !saveHeld;
+            saveHeld = true;
+        }
+        else
+            saveHeld = false;
 
         if (g_recording)
         {
@@ -3954,18 +4636,57 @@ int main(void)
                 Log("converter on core %ld fell behind: the system core from now on", g_convCores[1]);
             }
             const u64 now = Ticks();
-            g_shared.recSeconds = TicksToUs(now - g_recStartTick) / 1000000u;
+            g_shared.recSeconds = (u32)(TicksToUs64(now - g_recStartTick) / 1000000u);
             g_shared.recKb = (u32)(g_written / KB);
             g_shared.dropped = g_dropped;
             g_shared.throttled = g_throttled;
+            if (g_replay)
+            {
+                if (toggle || cmd == REC_CMD_START)
+                {
+                    StopRecording("a recording starts", false);
+                    if (!StartRecording())
+                        LED_SIGNAL(LED_ERROR);
+                }
+                else if (save || cmd == REC_CMD_SAVE_CLIP)
+                {
+                    g_saveClip = true;
+                    StopRecording("clip", false);   /* the buffer starts again from the idle part below */
+                }
+                else if (cmd == REC_CMD_EXIT)
+                {
+                    StopRecording("recorder exit", false);
+                    break;
+                }
+                else if (R_FAILED(g_writeRc))
+                    StopRecording("SD write error", false);
+                else if (reloadPending)
+                    StopRecording("settings changed", false);
+                else if (appOnScreen)
+                    StopRecording("the app is on the screen", false);
+                else if (!g_frontPid)
+                {
+                    /* HOME Menu alone: nothing to keep (its banners move all the time, and the card and
+                       the battery would pay for it). A moment's grace: a program closing and the next
+                       one starting, and a clip of a game's last seconds saved right after it closed. */
+                    if (!noAppSince)
+                        noAppSince = now;
+                    else if (now - noAppSince > 15ull * SYSCLOCK_ARM11)
+                        StopRecording("no program is running (HOME Menu alone)", false);
+                }
+                else
+                    noAppSince = 0;
+                svcSleepThread((u64)(g_recording ? sleepUs : POLL_REC_US) * 1000ull);
+                continue;
+            }
             const char *why = NULL;
             bool goOn = false;   /* the file is full: save it and go on in a new one */
             if (toggle || cmd == REC_CMD_STOP)
                 why = "user";
             else if (cmd == REC_CMD_EXIT)
                 why = "recorder exit";
-            else if (g_written + 8ull * MB >= MAX_FILE) {
-                why = "file size limit (FAT32): going on in a new file";
+            else if (g_written + 8ull * MB >= MAX_FILE || TicksToUs64(now - g_recStartTick) >= MAX_REC_US) {
+                why = "file size (FAT32) or length limit: going on in a new file";
                 goOn = true;
             }
             else if (R_FAILED(g_writeRc))
@@ -3996,6 +4717,19 @@ int main(void)
                 LED_SIGNAL(LED_ERROR);
             continue;
         }
+        /* the replay buffer: on whenever the setting is and nothing else records. Not while a
+           recording is about to go on (lid, HOME), nor while the next recording's file is still
+           being made (its steps keep the card busy for seconds). */
+        if (g_cfg.replay && !g_replayFailed && !g_shutdownSeen && !lidResume && !homeResume && !appOnScreen && g_frontPid &&
+            Ticks() >= replayAt && (!g_prepThread || g_prepDone))
+        {
+            noAppSince = 0;
+            if (StartRecordingAs(true))
+                continue;
+            if (g_rpNoSpace)
+                g_shared.replayError = REC_REPLAY_NO_SPACE;
+            replayAt = Ticks() + REPLAY_RETRY_US * (SYSCLOCK_ARM11 / 1000000u);
+        }
         svcSleepThread(POLL_IDLE_US * 1000ull);
     }
 
@@ -4008,6 +4742,8 @@ int main(void)
     }
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS));
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, INFO_FS));
+    if (!systemEnd)   /* a power-off keeps them for the next start; an uninstall or update does not */
+        ReplayRemoveFiles();
     LedOff();
     Log(systemEnd ? "recorder ended by the system (power-off or reboot)" : "recorder exited");
     g_shared.state = REC_STATE_EXITED;

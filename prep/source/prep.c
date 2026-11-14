@@ -11,6 +11,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <sys/types.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -746,7 +747,7 @@ static int produce(PrepJob *j)
         if (fread(&rh, 1, sizeof(rh), j->src) != sizeof(rh))
             return produce_end(j);
         if (rh.magic == R3D_MAGIC_PAD || rh.magic == R3D_MAGIC_DSPMEM) {
-            if (fseek(j->src, (long)rh.len, SEEK_CUR))
+            if (fseeko(j->src, (off_t)rh.len, SEEK_CUR))
                 return produce_end(j);
             s->srcOffset += sizeof(rh) + rh.len;
             j->st.readMs += ms_since(j, t0);
@@ -1421,8 +1422,11 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
         fail(j, "not a recording");
         goto error;
     }
-    fseek(j->src, 0, SEEK_END);
-    const uint64_t srcSize = (uint64_t)ftell(j->src);
+    /* 64-bit offsets: a recording over 2 GB (7 minutes of a 3D game) has no size or place that fits
+       a long on the console; ftell gave -1 there (progress stayed at 0%) and the seek to a resume
+       point past 2 GB failed (the job started over) */
+    fseeko(j->src, 0, SEEK_END);
+    const uint64_t srcSize = (uint64_t)ftello(j->src);
     j->both = j->fh.mode != R3D_MODE_FULL_TOP && j->fh.mode != R3D_MODE_FULL_BOTTOM;
     j->bottomOnly = j->fh.mode == R3D_MODE_FULL_BOTTOM;   /* 400 x 240, the bottom screen centred */
     j->H = j->both ? 480 : 240;
@@ -1467,7 +1471,7 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
             j->aacDiscard = 0;
         }
     }
-    if (fseek(j->src, (long)j->s.srcOffset, SEEK_SET)) {
+    if (fseeko(j->src, (off_t)j->s.srcOffset, SEEK_SET)) {
         fail(j, "cannot read the recording");
         goto error;
     }

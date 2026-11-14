@@ -175,7 +175,12 @@ int recorder_take_recovered(char *name, size_t cap)
     return n;
 }
 
-void recorder_status(RecStatus *out)
+static void Status(RecStatus *out, bool beat);
+
+void recorder_status(RecStatus *out) { Status(out, false); }
+void recorder_poll(RecStatus *out) { Status(out, true); }
+
+static void Status(RecStatus *out, bool beat)
 {
     memset(out, 0, sizeof(*out));
     Handle m = OpenModule();
@@ -194,6 +199,13 @@ void recorder_status(RecStatus *out)
         out->files = s->files;
         out->lastError = s->lastError;
         snprintf(out->lastFile, sizeof(out->lastFile), "%s", (const char *)s->lastFile);
+        if (s->version >= 3) { /* an older module has no replay buffer */
+            out->replayOn = s->replayOn != 0;
+            out->replayError = s->replayError;
+            out->clips = s->clips;
+            if (beat)
+                s->appBeat = s->appBeat + 1;
+        }
         UnmapShared();
     }
     svcCloseHandle(m);

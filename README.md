@@ -41,6 +41,8 @@ More recordings, as they came out:
 
 3DS Recorder records the whole console: whatever is on the screens, in any game, the HOME Menu or a system app, with
 the game sound. Press a button combination to start, press it again to stop — the video is saved to the SD card.
+With **Replay** on, it also keeps the last 30 seconds of what you play all the time, so a moment that has already
+happened can still be saved as a clip.
 
 You do not need a PC or a capture card. The console turns each recording into a small MP4 video by itself, and you can
 send it to your phone over Wi-Fi by scanning a QR code.
@@ -49,7 +51,7 @@ send it to your phone over Wi-Fi by scanning a QR code.
 
 - A Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL or New 2DS XL with **Luma3DS** custom firmware.
 - **FBI** to install the `.cia` (or the Homebrew Launcher for the `.3dsx`).
-- Free space on the SD card: up to **~320 MB per minute** in 3D games (both screens, 30 fps; menus and 2D games take much less). The MP4 made from it is about 25 MB a minute.
+- Free space on the SD card: up to **~320 MB per minute** in 3D games (both screens, 30 fps; menus and 2D games take much less). The MP4 made from it is about 25 MB a minute. Replay needs 700 MB free to switch on.
 - To get videos on your phone: the phone and the console on the same Wi-Fi network (the console uses 2.4 GHz).
 
 ### Install
@@ -73,10 +75,16 @@ recorder by itself. Settings and recordings stay.
 
 - **Start / stop a recording:** **R + SELECT**, anywhere — in a game, in the HOME Menu, in an app.
   You can close 3DS Recorder: the recorder keeps running in the background.
+- **Replay — the last 30 seconds** (from version 1.1): switch **Replay 30 s** on in the Recorder tile. While a
+  game or another program runs, the recorder keeps its last 30 seconds all the time (the LED glows faint blue);
+  press **X + SELECT** and they become a clip. Open 3DS Recorder afterwards: each clip turns up in the Gallery,
+  marked *Replay*, within a minute or so. R + SELECT still starts a normal recording; Replay pauses meanwhile and
+  goes on after it. See [Good to know](#good-to-know) for what it costs.
 - **The LED tells you what is happening:**
   - blue for a moment — the recorder is ready;
   - red, breathing — recording;
-  - green twice — the recording is saved;
+  - faint blue, steady — Replay is keeping the last 30 seconds;
+  - green twice — the recording or the clip is saved;
   - red three times — something went wrong (usually a full SD card); open the app to see why.
 - **After each power-on, open 3DS Recorder once** — that starts the recorder again.
 - **Watch:** open the Gallery and press **A**.
@@ -85,7 +93,8 @@ recorder by itself. Settings and recordings stay.
 - **Or take it from the SD card:** recordings are in `/3ds/recorder/recordings/`. Next to each recording
   (`.r3d`) the console makes an `.mp4` that plays anywhere.
 - **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, quality, sound on or off, the LED,
-  the language and the button combination.
+  the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
+  Replay clip).
 - **Quality:** with **Auto** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
   the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay exact.
   **Lossless** keeps every frame exact; in 3D games the SD card then cannot take every frame and the video is less smooth.
@@ -102,8 +111,21 @@ recorder by itself. Settings and recordings stay.
   recording is saved and stops there; open 3DS Recorder again afterwards. The app tells you what happened.
 - **Closing the lid** saves the recording; it goes on in a new file when you open the lid.
 - **If the power is cut** (battery, crash), the recording is recovered the next time you open the app.
-- **Long recordings** continue in a new file every 4 GB (a 1–2 second gap): the SD card's FAT32 limit.
+- **Long recordings** continue in a new file every 4 GB or every hour (a 1–2 second gap): the SD card's FAT32 limit.
 - **Fast 3D scenes on a slow SD card** may be recorded at a lower frame rate for a moment: the card cannot keep up.
+- **Games that use nearly all of an Old 3DS's processor** (Yo-kai Watch, for one) leave the recorder little time:
+  frames are then thinned out evenly, the bottom screen's first (about 28 frames a second on top and 10 below
+  there), and the game itself is not slowed.
+- **Replay:**
+  - it works while a game or another program is open, not in the HOME Menu alone; it pauses while a normal
+    recording runs, while 3DS Recorder is open and while the lid is closed;
+  - a clip is 30 seconds, a few more at times; it is saved at once, and becomes a recording in the Gallery the next
+    time 3DS Recorder is open (keep the app open until *Saving clip* is gone);
+  - it writes to the SD card all the time, several GB an hour in a 3D game, which wears the card, and keeps
+    512 MB of the card while it is on. In a 30-minute test on an Old 3DS the battery ran down as fast with it as
+    without it;
+  - it is off again after the console has been turned off: switch it on for a play session;
+  - on an Old 3DS it does not run in games that need extra memory (the next point).
 - **DS and GBA games can't be recorded:** they run in a separate mode of the console.
 - **Games that need extra memory on an Old 3DS** (Smash Bros, Pokémon Sun / Moon and Ultra Sun / Ultra Moon,
   Super Mario Maker, Monster Hunter) restart the console when they start and when they close. If the recorder runs,
@@ -124,7 +146,7 @@ stay unless you tick the box. Luma settings are not changed.
 ### Problems and feedback
 
 3DS Recorder has been tested on an Old 3DS and a New 3DS XL with Luma3DS 13.5, but not on every console, game and SD
-card. If something goes wrong, please open an [issue](../../issues/new), say what you did and what happened
+card. Replay has been tested on an Old 3DS only so far. If something goes wrong, please open an [issue](../../issues/new), say what you did and what happened
 (console model, game), and attach the log: on the phone page (the QR code) tap
 **Log for the developer** at the bottom, or copy `/3ds/recorder/app.log` and `recorder.log` from the SD card.
 
@@ -145,7 +167,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 | `sysmod/` | the recorder: reads the screens and the sound, compresses them (XR32, lossless; C420 for pictures in motion) and writes `.r3d` |
 | `app/` | the app: install, settings, gallery, player, the Wi-Fi server for the phone |
 | `plugin/` | the launcher plugin for extended-memory games on an Old 3DS (starts the recorder again inside the game) |
-| `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console |
+| `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console; makes Replay clips into `.r3d` recordings |
 | `web/` | the page the phone opens |
 | `codec/` | the screen codecs and the `.r3d` format |
 | `tools/` | build helpers, `r3dconv` / `r3d2mp4.sh` (`.r3d` → MP4 on a computer) |
@@ -193,6 +215,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 3DS Recorder записує всю консоль: усе, що на екранах, у будь-якій грі, меню HOME чи системній програмі, разом зі
 звуком гри. Натисніть комбінацію кнопок — запис почнеться, ще раз — відео збережеться на SD-картку.
+З увімкненим **Повтором** він ще й постійно тримає останні 30 секунд гри, тож момент, який уже стався, можна
+зберегти кліпом.
 
 Не потрібні ні комп'ютер, ні карта захоплення. Консоль сама перетворює кожен запис на невелике відео MP4, а забрати
 його на телефон можна по Wi-Fi, відсканувавши QR-код.
@@ -201,7 +225,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 - Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL або New 2DS XL з кастомною прошивкою **Luma3DS**.
 - **FBI**, щоб встановити `.cia` (або Homebrew Launcher для `.3dsx`).
-- Вільне місце на SD-картці: до **~320 MB на хвилину** у 3D-іграх (обидва екрани, 30 fps; меню і 2D-ігри займають набагато менше). MP4 з такого запису — близько 25 MB на хвилину.
+- Вільне місце на SD-картці: до **~320 MB на хвилину** у 3D-іграх (обидва екрани, 30 fps; меню і 2D-ігри займають набагато менше). MP4 з такого запису — близько 25 MB на хвилину. Щоб увімкнути Повтор, треба 700 MB вільного місця.
 - Щоб отримати відео на телефон: телефон і консоль в одній Wi-Fi мережі (консоль працює на 2.4 GHz).
 
 ### Встановлення
@@ -225,10 +249,16 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 - **Почати / зупинити запис:** **R + SELECT** будь-де — у грі, в меню HOME, у програмі.
   3DS Recorder можна закрити: рекордер працює далі у фоні.
+- **Повтор — останні 30 секунд** (з версії 1.1): увімкніть **Повтор 30 с** у плитці «Рекордер». Поки запущено
+  гру чи іншу програму, рекордер постійно тримає її останні 30 секунд (LED слабко світиться синім); натисніть
+  **X + SELECT** — і вони стануть кліпом. Потім відкрийте 3DS Recorder: кожен кліп з'явиться в Галереї з
+  позначкою «Повтор» приблизно за хвилину. R + SELECT, як і раніше, починає звичайний запис; Повтор на цей час
+  стає на паузу і продовжується після нього. Чого він коштує — у розділі [Варто знати](#варто-знати).
 - **LED показує, що відбувається:**
   - синій на мить — рекордер готовий;
+  - слабкий синій, постійно — Повтор тримає останні 30 секунд;
   - червоний «дихає» — іде запис;
-  - зелений двічі — запис збережено;
+  - зелений двічі — запис або кліп збережено;
   - червоний тричі — щось пішло не так (найчастіше заповнена SD-картка); відкрийте додаток, щоб дізнатися причину.
 - **Після кожного ввімкнення консолі відкрийте 3DS Recorder один раз** — так рекордер запускається знову.
 - **Переглянути:** відкрийте Галерею і натисніть **A**.
@@ -237,7 +267,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 - **Або забрати з SD-картки:** записи лежать у `/3ds/recorder/recordings/`. Поруч із кожним записом (`.r3d`)
   консоль робить `.mp4`, яке відтворюється будь-де.
 - **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, мова і
-  комбінація кнопок.
+  дві комбінації кнопок (**Хоткеї**: спершу для запису, потім для збереження кліпу Повтору).
 - **Якість:** в режимі **Авто** картинка, яка змінюється вся (3D-гра в русі), зберігається як у відео — колір із половинною
   роздільністю, тому на Old 3DS обидва екрани тримають до 30 кадрів на секунду; меню, 2D-ігри й нерухомі картинки лишаються
   точними. **Без втрат** зберігає кожен кадр точно; у 3D-іграх SD-картка тоді не встигає за всіма кадрами і відео менш плавне.
@@ -253,8 +283,20 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   зберігається і зупиняється; потім знову відкрийте 3DS Recorder. Додаток пояснить, що сталося.
 - **Закрита кришка** зберігає запис, а після відкриття він продовжується новим файлом.
 - **Якщо зникло живлення** (батарея, збій), запис відновиться, коли ви наступного разу відкриєте додаток.
-- **Довгі записи** продовжуються в новому файлі кожні 4 GB (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.
+- **Довгі записи** продовжуються в новому файлі кожні 4 GB або щогодини (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.
 - **Швидкі 3D-сцени на повільній SD-картці** можуть на мить записатися з меншою частотою кадрів: картка не встигає.
+- **Ігри, які займають майже весь процесор Old 3DS** (наприклад, Yo-kai Watch), лишають рекордеру мало часу:
+  кадри тоді проріджуються рівномірно, спершу нижнього екрана (там близько 28 кадрів на секунду зверху і 10
+  знизу), а сама гра не сповільнюється.
+- **Повтор:**
+  - працює, поки відкрито гру чи іншу програму, не в самому меню HOME; стає на паузу, поки йде звичайний запис,
+    поки відкрито 3DS Recorder і поки закрита кришка;
+  - кліп — це 30 секунд, часом на кілька більше; він зберігається одразу, а записом у Галереї стає, коли
+    наступного разу відкрито 3DS Recorder (не закривайте додаток, доки не зникне «Зберігаю кліп»);
+  - постійно пише на SD-картку, кілька ГБ за годину в 3D-грі, і картка від цього зношується; займає на ній
+    512 МБ, поки ввімкнений. У 30-хвилинному тесті на Old 3DS батарея сідала з ним так само, як без нього;
+  - після вимкнення консолі знову вимкнений: вмикайте його на ігрову сесію;
+  - на Old 3DS не працює в іграх, яким треба більше пам'яті (наступний пункт).
 - **DS- і GBA-ігри записати не можна:** вони працюють в окремому режимі консолі.
 - **Ігри, яким на Old 3DS треба більше пам'яті** (Smash Bros, Pokémon Sun / Moon і Ultra Sun / Ultra Moon,
   Super Mario Maker, Monster Hunter), перезапускають консоль, коли стартують і коли закриваються. Якщо рекордер
@@ -274,7 +316,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 
 ### Проблеми і відгуки
 
-3DS Recorder перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі й SD-картці. Якщо щось
+3DS Recorder перевірено на Old 3DS і New 3DS XL з Luma3DS 13.5, але не на кожній консолі, грі й SD-картці. Повтор
+поки що перевірено лише на Old 3DS. Якщо щось
 пішло не так, будь ласка, створіть [issue](../../issues/new), напишіть, що робили і що сталося
 (модель консолі, гра), і додайте журнал: на сторінці в телефоні (через QR-код) унизу натисніть
 **Журнал для розробника**, або скопіюйте з SD-картки `/3ds/recorder/app.log` і `recorder.log`.

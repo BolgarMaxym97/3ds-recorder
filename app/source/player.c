@@ -93,6 +93,11 @@ static u32 g_framesShown, g_framesSkipped; /* pictures published / not (no free 
 static u32 g_audioStarved;
 static bool g_audioFresh = true;           /* no sound queued since the start or a seek */                 /* sound buffers queued with the DSP's queue already empty (a gap heard) */
 static u32 g_lastVideoUs;            /* the latest frame read: the sound is padded to it at the end */
+/* The latest time among the frames queued so far. A frame that comes later in the file with an
+   earlier time (the recorder stored a bottom-screen frame well after top-screen frames taken at
+   the same moment: recordings up to 1.0 of games that left its converter little of the processor)
+   is shown at this time, not dropped as late: the bottom screen stood still in such recordings. */
+static u32 g_orderUs;
 static int g_shown;                  /* screens with a picture in their texture */
 static volatile s64 g_seekTo = -1;   /* requested by the UI, done by the thread */
 static volatile bool g_seekBusy;     /* a seek is pending or running: the time shown is its target */
@@ -506,6 +511,7 @@ static void queue_pop(void)
 
 static void queue_clear(void)
 {
+    g_orderUs = 0;   /* a seek, or another recording: times start over */
     while (g_qCount)
         queue_pop();
     g_qHead = 0;
@@ -800,9 +806,14 @@ static bool read_ahead(u32 now)
     } else {
         if (g_audio)
             audio_pad(h.timeUs);
-        g_lastVideoUs = h.timeUs;
+        if (h.timeUs > g_lastVideoUs)
+            g_lastVideoUs = h.timeUs;
         if (h.magic == R3D_MAGIC_FRAME || (h.screen & R3D_SCREEN_KEY))
             add_key(h.screen & 0x3F, h.timeUs, g_bufOff + g_pos);
+        if (h.timeUs < g_orderUs)
+            h.timeUs = g_orderUs;   /* out of order in the file: due with the frames around it */
+        else
+            g_orderUs = h.timeUs;
         queue_push(&h, payload);
     }
     skip(sizeof(h) + len);
@@ -870,6 +881,7 @@ bool player_start(const char *name, u32 durationMs)
     g_quit = g_paused = g_ended = g_eof = false;
     g_shown = 0;
     g_lastVideoUs = 0;
+    g_orderUs = 0;
     g_seekTo = -1;
     g_buf = malloc(READ_BUF);
     g_pre = malloc(READ_BUF);

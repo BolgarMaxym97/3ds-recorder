@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "prep.h"
+#include "unwrap.h"
 #include "recorder.h"
 #include "../../sysmod/source/shared.h"
 
@@ -211,6 +212,95 @@ static u64 now_us(void)
     return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000);
 }
 
+/* ---- replay clips: the recorder's ring files (.rpl) into ordinary recordings */
+
+static volatile int g_clips, g_clipPermille = -1;
+static volatile u32 g_clipsDone;
+
+u32 prepare_clips_done(void) { return g_clipsDone; }
+static char g_clipFailed[20];   /* not tried again this session */
+static bool held(void);
+
+int prepare_clips(int *permille)
+{
+    if (permille)
+        *permille = g_clipPermille;
+    return g_clips;
+}
+
+/* The oldest clip on the card (they become recordings in the order they were saved). */
+static bool find_clip(char *name)
+{
+    Handle dir = 0;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, recorder_archive(), fsMakePath(PATH_ASCII, REC_FILES_FS))))
+        return false;
+    static FS_DirectoryEntry e[16];
+    u32 got = 0;
+    int n = 0;
+    name[0] = 0;
+    while (R_SUCCEEDED(FSDIR_Read(dir, &got, 16, e)) && got > 0)
+        for (u32 i = 0; i < got; i++) {
+            if ((e[i].attributes & FS_ATTRIBUTE_DIRECTORY) || strcmp(e[i].shortExt, "RPL") != 0)
+                continue;
+            char it[20];
+            u32 k = 0;
+            for (; k + 1 < sizeof(it) && e[i].name[k]; k++)
+                it[k] = (char)e[i].name[k];
+            it[k] = 0;
+            if (k != 19 || e[i].name[k] || strcmp(it, g_clipFailed) == 0)
+                continue;   /* not ours (yyyymmdd_hhmmss.rpl), or could not be read */
+            n++;
+            if (!name[0] || strcmp(it, name) < 0)
+                snprintf(name, 20, "%s", it);
+        }
+    FSDIR_Close(dir);
+    g_clips = n;
+    return n > 0;
+}
+
+/* Waits while the work is held (the player, a transfer, a recording, the app in the background);
+   a recording deleted meanwhile is forgotten from here. Stops only when the app quits. */
+static int clip_progress(void *ctx, uint64_t done, uint64_t total)
+{
+    (void)ctx;
+    g_clipPermille = total ? (int)(done * 1000u / total) : 0;
+    while (!g_quit && held())
+        svcSleepThread(200 * 1000 * 1000);
+    take_forget(NULL);
+    return g_quit;
+}
+
+/* One clip into a recording next to it; true when there was one to work on. */
+static bool unwrap_clip(void)
+{
+    char name[20];
+    if (!find_clip(name))
+        return false;
+    char src[96], part[96], dst[96];
+    prepare_path(src, sizeof(src), name, "rpl");
+    prepare_path(part, sizeof(part), name, "r3d.part");
+    prepare_path(dst, sizeof(dst), name, "r3d");
+    g_clipPermille = 0;
+    const u64 t0 = osGetTime();
+    const int rc = r3d_unwrap(src, part, clip_progress, NULL);
+    if (rc == UNWRAP_OK && rename(part, dst) == 0) {
+        remove(src);
+        g_clipsDone++;
+        app_log("clip %s: a recording now, %llu s", name, (unsigned long long)((osGetTime() - t0) / 1000));
+    } else if (rc == UNWRAP_BAD) {
+        remove(src);   /* no frame to keep in it: nothing to show */
+        app_log("clip %s: nothing to keep in it, removed", name);
+    } else if (rc != UNWRAP_STOPPED) {
+        remove(part);
+        snprintf(g_clipFailed, sizeof(g_clipFailed), "%s", name);   /* the card is full, or cannot be read: next time */
+        app_log("clip %s: could not be made into a recording (%d)", name, rc);
+    }
+    g_clipPermille = -1;
+    if (g_clips > 0)
+        g_clips--;
+    return true;
+}
+
 static void sleep_us(u32 us)
 {
     svcSleepThread((s64)us * 1000);
@@ -340,7 +430,7 @@ static void thread_main(void *arg)
     const PrepOptions opt = {0, 0, now_us, sleep_us};
     PrepJob *job = NULL;
     char name[20] = "";
-    u64 scanned = 0;
+    u64 scanned = 0, clipLook = 0;
     Tune t = {0};
     while (!g_quit) {
         if (take_forget(job ? name : NULL)) { /* its job is open: close it first */
@@ -351,6 +441,13 @@ static void thread_main(void *arg)
             set_busy(false);
             svcSleepThread(200 * 1000 * 1000);
             continue;
+        }
+        if (!job && osGetTime() - clipLook > 5000) { /* clips first: they are recordings only after this */
+            if (unwrap_clip()) {
+                scanned = 0;
+                continue;
+            }
+            clipLook = osGetTime();
         }
         if (osGetTime() - scanned > 5000) { /* new recordings; a directory listing */
             scan();

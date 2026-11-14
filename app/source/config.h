@@ -23,6 +23,8 @@ typedef struct {
     bool ukrainian;   /* lang=uk; English otherwise (the default) */
     bool langSet;     /* config.ini has lang=: the language was chosen (first run asks) */
     bool guideSeen;   /* guide=done: the first-run guide was shown */
+    bool replay;      /* replay=on: the module keeps the last 30 seconds all the time (the replay buffer) */
+    char replayHotkey[48]; /* replay_hotkey: saves them as a clip, e.g. X+SELECT */
 } Config;
 
 void config_load(Config *c);
