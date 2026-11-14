@@ -15,7 +15,7 @@ TARGET          := 3ds-recorder
 # keeps showing the banner it cached for the installed version.
 APP_VERSION := 1.1.0
 # "beta" for the open beta, empty for a release: shown next to the version on the panel
-APP_CHANNEL     := beta
+APP_CHANNEL     :=
 APP_TITLE       := 3DS Recorder
 APP_DESCRIPTION := Records the whole console
 APP_AUTHOR      := 3ds-screen-recorder
