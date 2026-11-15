@@ -5,6 +5,8 @@
  *   sdmc:/3ds/recorder/config.ini, recorder.log  settings and log
  *   sdmc:/3ds/recorder/recordings/                recordings
  *   sdmc:/3ds/recorder/rec3ds-launch.3gx         launcher plugin (sysmod: extended-memory games)
+ *   sdmc:/luma/titles/<ptm>/exheader.bin         launch on startup (written by the module; its path
+ *                                                in /3ds/recorder/.autostart)
  */
 #ifndef RECORDER_H
 #define RECORDER_H
@@ -39,6 +41,7 @@ typedef struct {
     bool replayOn;           /* the module has the replay buffer on */
     s32 replayError;         /* REC_REPLAY_*: why it does not run though it is on */
     u32 clips;               /* clips saved since the module started */
+    u32 autoState;           /* launch on startup: REC_AUTO_* (shared.h) */
 } RecStatus;
 
 typedef struct {
@@ -51,6 +54,7 @@ typedef struct {
 void recorder_init(FS_Archive sd);
 FS_Archive recorder_archive(void); /* the SD card archive opened in main() */
 bool recorder_luma_modules_on(void);   /* Luma option "load external FIRMs and modules" */
+bool recorder_luma_patching_on(void);  /* Luma option "enable game patching" (launch on startup needs it) */
 u32 recorder_luma_version(void);        /* major << 16 | minor << 8 | build, 0 unknown */
 ModuleFile recorder_module_file(void);
 void recorder_status(RecStatus *out);

@@ -59,6 +59,8 @@ typedef struct {
     bool clipsTold;         /* "clips are being saved" was shown this session */
     u32 galClipsDone;       /* prepare_clips_done() when the gallery read its list */
     bool replayWarned;      /* "no room for the replay" was shown this session */
+    u32 autoWait;           /* launch on startup was switched on: the module's answer is awaited until this frame (0: not) */
+    bool autoWarned;        /* "launch on startup needs a Luma option" was shown this session */
     bool quit;
     char selfPath[256];
 } App;

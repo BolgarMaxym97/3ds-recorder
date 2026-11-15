@@ -26,12 +26,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include "codec.h"
 #include "huff.h"
 #include "convert.h"
 #include "r3d_format.h"
 #include "shared.h"
+#include "autostart.h"
+#include "front.h"
 
 /* Luma custom SVCs (csvc.s) */
 Result svcControlMemoryUnsafe(u32 *out, u32 addr0, u32 size, MemOp op, MemPerm perm);
@@ -172,6 +175,7 @@ typedef struct {
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
     bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
     u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
+    bool autostart;  /* autostart=on: the recorder starts with the console (launch on startup, AutoApply) */
 } Config;
 
 static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
@@ -191,7 +195,7 @@ static const char *ScreensName(void)
 
 volatile RecShared g_shared __attribute__((aligned(0x1000), used)) = {
     REC_SHARED_MAGIC, REC_SHARED_VERSION, REC_STATE_STARTING, REC_CMD_NONE,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0 }, 0, { 0 }, 0, 0, 0, 0, { 0 },
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0 }, 0, { 0 }, 0, 0, 0, 0, { 0 }, REC_AUTO_OFF,
 };
 
 /* ------------------------------------------------------------------ init */
@@ -340,7 +344,11 @@ static void Log(const char *fmt, ...)
     const u64 ms = osGetTime();
     u32 y, m, d, sod;
     CivilTime(ms, &y, &m, &d, &sod);
-    int n = snprintf(g_logLine, sizeof(g_logLine), "[%04lu-%02lu-%02lu %02lu:%02lu:%02lu.%03lu] ", y, m, d, sod / 3600,
+    int n;
+    if (y < 2000 || y > 2200)   /* a start with the console: a line before the system's clock is there */
+        n = snprintf(g_logLine, sizeof(g_logLine), "[%lu ms after the kernel] ", (u32)(svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000u)));
+    else
+        n = snprintf(g_logLine, sizeof(g_logLine), "[%04lu-%02lu-%02lu %02lu:%02lu:%02lu.%03lu] ", y, m, d, sod / 3600,
                      sod / 60 % 60, sod % 60, (u32)(ms % 1000u));
     const int room = (int)sizeof(g_logLine) - n - 1;   /* the line's end keeps a byte */
     va_list ap;
@@ -628,6 +636,8 @@ static void LoadConfig(void)
         }
         else if (strcasecmp(p, "replay") == 0)
             g_cfg.replay = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "autostart") == 0)
+            g_cfg.autostart = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "fps") == 0)
         {
             const u32 fps = (u32)atoi(v);
@@ -690,6 +700,7 @@ static u32 g_plgSize;                 /* bytes mapped at PLG_MEM_VA, 0: none */
 static u32 g_plgHeapVa;               /* the plugin heap's address in the game */
 static u32 g_plgTop;                  /* bump offset in it */
 static bool g_inPlg;                  /* this recording's buffers live there */
+static bool g_plgNoGood;              /* the replay buffer found no plugin memory in this game */
 
 static void *BigAlloc(u32 size)
 {
@@ -2921,6 +2932,15 @@ static void CpuBoost(bool on);
 
 static u32 g_frontPid;   /* the application that runs now, 0: none (HOME alone); UpdateBoost while recording, the main loop when idle */
 
+/* A program that has just started is left alone (front.h): no replay buffer and no change of the
+   processor's speed while it loads. */
+static FrontApp g_front;
+
+static bool FrontQuiet(void)
+{
+    return front_quiet(&g_front, Ticks(), LAUNCH_QUIET_US * (SYSCLOCK_ARM11 / 1000000u));
+}
+
 static void UpdateBoost(void)
 {
     static u64 lastCheck, since;
@@ -2938,6 +2958,7 @@ static void UpdateBoost(void)
     lastCheck = now;
     const u32 p = ApplicationPid();
     g_frontPid = p;
+    front_note(&g_front, p, now);
     if (p != pid)
     {
         /* which program is in front during the recording (drops and speed depend on it) */
@@ -2995,6 +3016,9 @@ typedef struct {
 _Static_assert(sizeof(PluginLoadParams) == 392, "PluginLoadParameters layout");
 
 static bool g_powerOffSeen;        /* 0x108 came: a power-off, not a game's reboot */
+static bool g_plgQuiet;            /* PluginLoader: no log line for a port that is not there yet (EarlyLoader) */
+static bool g_bootStart;           /* pm started the recorder with the console (launch on startup), not the app */
+static bool g_orderKept;           /* such a start left the launcher order for Rosalina (AfterPluginUp) */
 
 static const char *MemModeName(u32 mode)
 {
@@ -3021,16 +3045,20 @@ static Handle StealSession(const char *name)
    as the fallback (that failed on O3DS 2026-11-08: no named session). -1 unknown, 0 off, 1 on */
 static int PluginLoader(int set)
 {
+    /* A kernel port of Rosalina's, not a service (rosalina/source/main.c: isGlobalPort): through srv the
+       request never came back, and the recorder hung in it (O3DS 2026-11-14 / 15: no line after the
+       order was written; a start with the console in a game's memory mode stopped right here). One
+       session at a time: loader holds it only while it loads a program. */
     Handle h = 0;
-    srvSetBlockingPolicy(true);   /* the port is full while loader holds its session: no waiting */
-    const Result rc = srvGetServiceHandle(&h, "plg:ldr");
-    srvSetBlockingPolicy(false);
+    Result rc = -1;
+    for (u32 i = 0; i < 10 && R_FAILED(rc = svcConnectToPort(&h, "plg:ldr")); i++)
+        svcSleepThread(20 * 1000 * 1000);
     if (R_FAILED(rc))
-        h = StealSession("plg:ldr");
-    if (!h)
-        Log("plg:ldr: no session (srv rc %08lX)", rc);
-    if (!h)
+    {
+        if (!g_plgQuiet)
+            Log("plg:ldr: no session (rc %08lX)", (u32)rc);
         return -1;
+    }
     u32 *cmd = getThreadCommandBuffer();
     int state = -1;
     if (set < 0)
@@ -3085,9 +3113,12 @@ static bool AfterReboot(void)
     u32 tidLow = 0;
     bool resume = false;
     const int order = ReadUserParam(&tidLow, &resume);
-    if (order > 0)
+    /* started with the console: the game and its plugin come later, AfterPluginUp cleans up */
+    const bool keep = g_bootStart && mode != 0 && mode < 6 && order > 0;
+    g_orderKept = keep;
+    if (order > 0 && !keep)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
-    const bool weTurnedOn = SdFileExists(PLG_BY_US_FS);
+    const bool weTurnedOn = !keep && SdFileExists(PLG_BY_US_FS);
     if (weTurnedOn)
     {
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
@@ -3096,7 +3127,7 @@ static bool AfterReboot(void)
     Log("memory mode %lu (%s): APPLICATION %lu KB, SYSTEM free %lu KB of %lu KB, BASE free %lu KB; launcher order %s%s",
         mode, MemModeName(mode), OS_KernelConfig->memregion_sz[0] / KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
         OS_KernelConfig->memregion_sz[1] / KB, osGetMemRegionFree(MEMREGION_BASE) / KB,
-        order > 0 ? "found (started by the plugin?), removed" : order < 0 ? "of another program, left" : "none",
+        keep ? "found, kept until the plugin is in the game" : order > 0 ? "found (started by the plugin?), removed" : order < 0 ? "of another program, left" : "none",
         weTurnedOn ? "; plugin loader turned off again" : "");
     if (order > 0)
         Log("launcher order was for title %08lX%s", tidLow, resume ? ": the recording goes on in 2 s" : "");
@@ -3200,6 +3231,7 @@ static void LogGameOrder(bool wasRecording)
     }
     Log("reboot into game %016llX: launcher order written%s", g_order.tid,
         wasRecording ? ", the recording goes on there" : "");
+    Log("reboot: asking the plugin loader for its state");
     const int loader = PluginLoader(-1);
     if (loader == 0)
     {
@@ -3214,6 +3246,420 @@ static void LogGameOrder(bool wasRecording)
     }
     else
         Log("reboot: plugin loader %s", loader == 1 ? "on" : "state unknown");
+}
+
+/* ------------------------------------------------------------------ launch on startup */
+
+/* autostart=on (the app's Settings): the recorder starts with the console, and again after a game's
+   reboot into its memory mode. pm starts NS with its dependencies each time (Luma3DS pm/launch.c:
+   autolaunchSysmodules); the recorder goes first into the dependency list of NS's first dependency
+   (ptm on the consoles seen) through Luma's exheader override /luma/titles/<that title>/exheader.bin,
+   which needs "Enable game patching" and "Load external FIRMs and modules". NS's own exheader is
+   left alone (3DS UA keeps one there). The rules are in autostart.h; here the console's side:
+     - the host and its exheader are read from loader on this console (nothing built in), the way pm
+       does (a New 3DS title first there), and the place is taken only when a missing recorder file
+       cannot stop the console's start (auto_safe);
+     - the override is written whole under another name, read back and renamed (loader stops on a
+       file of a wrong size), then asked back from loader: it must show the recorder;
+     - a start with the console that did not get to HOME Menu or a program takes the override away
+       at the next start (BootGuard), so at most one start goes wrong. */
+#define AUTO_NS_DEFAULT 0x0004013000008002ULL
+#define AUTO_PTM_TID    0x0004013000002202ULL
+#define AUTO_REC_FS     DIR_FS "/.autostart"           /* where the override is (its path), for the app's removal too */
+#define BOOT_TRY_FS     DIR_FS "/.boot_try"            /* a start with the console is under way */
+#define AUTO_BLOCK_FS   DIR_FS "/.autostart_failed"    /* such a start failed: no override until the setting is switched again */
+#define BOOT_START_US   15000000ull   /* started this soon after the kernel: with the console (4.3-4.5 s, O3DS 2026-11-15) */
+#define BOOT_OK_US      20000000ull
+#define AUTO_LUMA_MIN   0x0D0000u     /* 13.0: the pm and loader code this relies on was read in 12.0-13.5, tried on 13.5 */
+
+static char g_autoPath[72];
+static bool g_bootTry;        /* BOOT_TRY_FS is there, to be removed */
+static u64  g_startTick, g_bootWaitMs;
+
+/* A title's exheader as loader gives it to pm (overrides applied), registered as pm does
+   (pm/source/info.c registerProgram: on a New 3DS its own build of a system title first). */
+static Result LoaderExheaderOf(Handle h, u64 tid, u8 *out)
+{
+    u32 *cmd = getThreadCommandBuffer();
+    FS_ProgramInfo info;
+    memset(&info, 0, sizeof(info));
+    info.programId = tid;
+    info.mediaType = MEDIATYPE_NAND;
+    cmd[0] = IPC_MakeHeader(2, 8, 0);   /* RegisterProgram */
+    memcpy(&cmd[1], &info, sizeof(info));
+    memcpy(&cmd[5], &info, sizeof(info));
+    Result rc = svcSendSyncRequest(h);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)cmd[1];
+    if (R_FAILED(rc))
+        return rc;
+    u64 prog = 0;
+    memcpy(&prog, &cmd[2], 8);
+    u32 *sb = getThreadStaticBuffers();
+    const u32 sb0 = sb[0], sb1 = sb[1];
+    sb[0] = IPC_Desc_StaticBuffer(AUTO_EXH_SIZE, 0);
+    sb[1] = (u32)out;
+    cmd[0] = IPC_MakeHeader(4, 2, 0);   /* GetProgramInfo */
+    memcpy(&cmd[1], &prog, 8);
+    rc = svcSendSyncRequest(h);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)cmd[1];
+    sb[0] = sb0;
+    sb[1] = sb1;
+    cmd[0] = IPC_MakeHeader(3, 2, 0);   /* UnregisterProgram */
+    memcpy(&cmd[1], &prog, 8);
+    svcSendSyncRequest(h);
+    return rc;
+}
+
+static Result LoaderExheader(u64 tid, u8 *out)
+{
+    /* loader's two sessions belong to pm and Rosalina: a copy of one */
+    const Handle h = StealSession("Loader");
+    if (!h)
+        return (Result)0xE0000010;
+    Result rc = -1;
+    if (g_isNew3ds)
+        rc = LoaderExheaderOf(h, (tid & ~AUTO_N3DS_MASK) | AUTO_N3DS_BIT, out);
+    if (R_FAILED(rc))
+        rc = LoaderExheaderOf(h, tid & ~AUTO_N3DS_MASK, out);
+    svcCloseHandle(h);
+    return rc;
+}
+
+static u32 ReadSmall(const char *path, void *buf, u32 size, bool exact)
+{
+    Handle f = 0;
+    u32 got = 0;
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, path), FS_OPEN_READ, 0)))
+        return 0;
+    u64 fileSize = 0;
+    FSFILE_GetSize(f, &fileSize);
+    if ((exact && fileSize != size) || R_FAILED(FSFILE_Read(f, &got, 0, buf, size)))
+        got = 0;
+    FSFILE_Close(f);
+    return got;
+}
+
+static bool WriteSmall(const char *path, const void *buf, u32 size)
+{
+    Handle f = 0;
+    u32 done = 0;
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, path));
+    if (R_FAILED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, path), FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+        return false;
+    const Result rc = size ? FSFILE_Write(f, &done, 0, buf, size, FS_WRITE_FLUSH) : 0;
+    FSFILE_Close(f);
+    return R_SUCCEEDED(rc) && done == size;
+}
+
+/* The file at `path` is an exheader override that lists the recorder. */
+static bool AutoOurs(const char *path)
+{
+    static u8 exh[AUTO_EXH_SIZE];
+    return ReadSmall(path, exh, AUTO_EXH_SIZE, true) == AUTO_EXH_SIZE && auto_has(exh, REC_TITLE_ID);
+}
+
+/* The recorder's override is on the card (g_autoPath says where): the place AutoInstall wrote
+   down, else ptm's (both builds), in case that note was lost. */
+static bool AutoFind(void)
+{
+    char rec[sizeof(g_autoPath)];
+    const u32 n = ReadSmall(AUTO_REC_FS, rec, sizeof(rec) - 1u, false);
+    rec[n] = 0;
+    if (n > 12 && strncmp(rec, "/luma/titles/", 13) == 0 && AutoOurs(rec))
+    {
+        snprintf(g_autoPath, sizeof(g_autoPath), "%s", rec);
+        return true;
+    }
+    for (u32 i = 0; i < 2; i++)
+    {
+        snprintf(g_autoPath, sizeof(g_autoPath), "/luma/titles/%016llX/exheader.bin", AUTO_PTM_TID | (i ? AUTO_N3DS_BIT : 0));
+        if (AutoOurs(g_autoPath))
+            return true;
+    }
+    return false;
+}
+
+static void AutoRemove(const char *why)
+{
+    while (AutoFind())   /* every one of ours, should there be two */
+    {
+        const Result rc = FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, g_autoPath));
+        char dir[72];
+        snprintf(dir, sizeof(dir), "%s", g_autoPath);
+        *strrchr(dir, '/') = 0;
+        FSUSER_DeleteDirectory(g_sd, fsMakePath(PATH_ASCII, dir));   /* only when nothing else is in it */
+        Log("launch on startup: %s removed (%s), rc %08lX", g_autoPath, why, (u32)rc);
+        if (R_FAILED(rc))
+            break;
+    }
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, AUTO_REC_FS));
+}
+
+static void DepsText(const u64 *deps, u32 n, char *text, u32 cap)
+{
+    u32 len = 0;
+    text[0] = 0;
+    for (u32 i = 0; i < n && len + 10 < cap; i++)
+        len += (u32)snprintf(text + len, cap - len, " %08lX", (u32)deps[i]);
+}
+
+/* Puts the override in place. REC_AUTO_*: what the app tells. */
+static u32 AutoInstall(void)
+{
+    static u8 exh[AUTO_EXH_SIZE], back[AUTO_EXH_SIZE];
+    static u64 nsDeps[AUTO_MAX_DEPS], hostDeps[AUTO_MAX_DEPS];
+    char text[48 * 9 + 8];
+    s64 luma = 0, lumaVer = 0;
+    svcGetSystemInfo(&luma, 0x10000, 3);
+    svcGetSystemInfo(&lumaVer, 0x10000, 0);
+    /* Luma's options: loader reads a system title's exheader.bin only with both */
+    const bool options = ((luma >> 2) & 1) && ((luma >> 1) & 1);
+    if (SdFileExists(AUTO_BLOCK_FS))
+    {
+        Log("launch on startup: left out, the last start with the console did not finish (" AUTO_BLOCK_FS ")");
+        return REC_AUTO_FAILED_START;
+    }
+    if (AutoFind())
+    {
+        Log("launch on startup: %s is there (Luma game patching %s, external modules %s)", g_autoPath, (luma >> 2) & 1 ? "on" : "OFF",
+            (luma >> 1) & 1 ? "on" : "OFF");
+        return options ? REC_AUTO_ON : REC_AUTO_NO_PATCHING;
+    }
+    if (!options)
+    {
+        /* nothing is written that Luma would not show back (the check below) */
+        Log("launch on startup: not set up, Luma game patching %s, external modules %s", (luma >> 2) & 1 ? "on" : "OFF",
+            (luma >> 1) & 1 ? "on" : "OFF");
+        return REC_AUTO_NO_PATCHING;
+    }
+    if (((u32)lumaVer >> 8) < AUTO_LUMA_MIN)
+    {
+        Log("launch on startup: not set up, Luma %lu.%lu is older than 13.0", ((u32)lumaVer >> 24) & 0xFF, ((u32)lumaVer >> 16) & 0xFF);
+        return REC_AUTO_UNSUPPORTED;
+    }
+    const u64 ns = OS_KernelConfig->ns_tid ? OS_KernelConfig->ns_tid : AUTO_NS_DEFAULT;
+    Result rc = LoaderExheader(ns, exh);
+    const u32 nNs = R_SUCCEEDED(rc) ? auto_deps(exh, g_isNew3ds, nsDeps) : 0;
+    DepsText(nsDeps, nNs, text, sizeof(text));
+    Log("launch on startup: NS %016llX (rc %08lX) depends on:%s", ns, (u32)rc, text);
+    if (!nNs)
+        return REC_AUTO_UNSUPPORTED;
+    const u64 host = nsDeps[0];
+    rc = LoaderExheader(host, exh);
+    if (R_FAILED(rc))
+    {
+        Log("launch on startup: no exheader of %016llX (rc %08lX)", host, (u32)rc);
+        return REC_AUTO_UNSUPPORTED;
+    }
+    const u64 tid = auto_title(exh);
+    const u32 nHost = auto_deps(exh, g_isNew3ds, hostDeps);
+    DepsText(hostDeps, nHost, text, sizeof(text));
+    Log("launch on startup: host %016llX (asked as %016llX) depends on:%s", tid, host, text);
+    snprintf(g_autoPath, sizeof(g_autoPath), "/luma/titles/%016llX/exheader.bin", tid);
+    const bool there = SdFileExists(g_autoPath);
+    if ((tid & ~AUTO_N3DS_MASK) != host || auto_has(exh, REC_TITLE_ID) || there ||
+        !auto_safe(nsDeps, nNs, hostDeps, nHost, REC_TITLE_ID) || !auto_insert_first(exh, REC_TITLE_ID))
+    {
+        Log("launch on startup: not set up (the recorder %s the host's dependencies; a file at %s: %s; safe for a missing recorder: %s)",
+            auto_has(exh, REC_TITLE_ID) ? "is among" : "is not among", g_autoPath, there ? "yes, not ours" : "no",
+            auto_safe(nsDeps, nNs, hostDeps, nHost, REC_TITLE_ID) ? "yes" : "NO");
+        return REC_AUTO_UNSUPPORTED;
+    }
+    char dir[72], tmp[96];
+    snprintf(dir, sizeof(dir), "%s", g_autoPath);
+    *strrchr(dir, '/') = 0;
+    snprintf(tmp, sizeof(tmp), "%s/exheader.tmp", dir);
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma/titles"), 0);
+    FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, dir), 0);
+    /* only a file that reads back whole gets the name Luma looks for */
+    const bool whole = WriteSmall(tmp, exh, AUTO_EXH_SIZE) && ReadSmall(tmp, back, AUTO_EXH_SIZE, true) == AUTO_EXH_SIZE &&
+                       memcmp(exh, back, AUTO_EXH_SIZE) == 0;
+    Result rn = -1;
+    if (whole)
+        rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, tmp), g_sd, fsMakePath(PATH_ASCII, g_autoPath));
+    if (R_FAILED(rn))
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, tmp));
+        FSUSER_DeleteDirectory(g_sd, fsMakePath(PATH_ASCII, dir));
+        Log("launch on startup: %s NOT written (whole %d, rename rc %08lX)", g_autoPath, whole, (u32)rn);
+        return REC_AUTO_ERROR;
+    }
+    /* what pm will get: loader must show the recorder first now, else the file means nothing here
+       (another path on this console, an option) and goes again */
+    rc = LoaderExheader(host, back);
+    if (R_FAILED(rc) || auto_dep(back, 0) != REC_TITLE_ID || auto_title(back) != tid)
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, g_autoPath));
+        FSUSER_DeleteDirectory(g_sd, fsMakePath(PATH_ASCII, dir));
+        Log("launch on startup: loader does not show the override (rc %08lX, first dependency %016llX): removed", (u32)rc,
+            R_SUCCEEDED(rc) ? auto_dep(back, 0) : 0ull);
+        return REC_AUTO_UNSUPPORTED;
+    }
+    WriteSmall(AUTO_REC_FS, g_autoPath, (u32)strlen(g_autoPath));
+    Log("launch on startup: %s installed, loader shows it (%lu dependencies of the host follow the recorder)", g_autoPath, nHost);
+    return REC_AUTO_ON;
+}
+
+/* After the settings are read: the override follows autostart=on / off. */
+static void AutoApply(void)
+{
+    if (!g_sd)
+        return;
+    if (g_cfg.autostart)
+        g_shared.autoState = AutoInstall();
+    else
+    {
+        AutoRemove("launch on startup is off");
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, AUTO_BLOCK_FS));
+        g_shared.autoState = REC_AUTO_OFF;
+    }
+}
+
+/* First thing in main(): a start with the console comes before the SD card is there. */
+static void BootWait(void)
+{
+    const u64 t0 = Ticks();
+    g_startTick = t0;
+    g_bootStart = TicksToUs64(t0) < BOOT_START_US;
+    for (u32 i = 0; i < 120; i++)
+    {
+        FS_Archive sd = 0;
+        if (R_SUCCEEDED(FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""))))
+        {
+            FSUSER_CloseArchive(sd);
+            break;
+        }
+        svcSleepThread(250 * 1000 * 1000);
+    }
+    if (access("sdmc:/3ds", F_OK) != 0)
+        archiveMountSdmc();
+}
+
+/* ptm and mcu come up after the recorder when pm starts it with the console (2.6 s, O3DS). */
+static void BootWaitServices(void)
+{
+    for (u32 i = 0; i < 240; i++)
+    {
+        Handle a = 0, b = 0;
+        const bool ok = R_SUCCEEDED(srvGetServiceHandle(&a, "ptm:u")) && R_SUCCEEDED(srvGetServiceHandle(&b, "mcu::HWC"));
+        if (a)
+            svcCloseHandle(a);
+        if (b)
+            svcCloseHandle(b);
+        if (ok)
+            break;
+        svcSleepThread(250 * 1000 * 1000);
+    }
+    g_bootWaitMs = TicksToUs64(Ticks() - g_startTick) / 1000u;
+}
+
+/* A start with the console that did not get as far as HOME Menu or a program (the recorder or the
+   console went down): the override goes, so the next start is a plain one. Before anything else
+   the recorder does at start-up, right after the card is there. */
+static void BootGuard(void)
+{
+    const FS_Path mark = fsMakePath(PATH_ASCII, BOOT_TRY_FS);
+    if (!g_sd)
+        return;
+    if (!AutoFind())
+    {
+        FSUSER_DeleteFile(g_sd, mark);
+        return;
+    }
+    if (SdFileExists(BOOT_TRY_FS))
+    {
+        AutoRemove("the last start with the console did not finish");
+        WriteSmall(AUTO_BLOCK_FS, "", 0);
+        FSUSER_DeleteFile(g_sd, mark);
+        return;
+    }
+    if (g_bootStart)
+    {
+        WriteSmall(BOOT_TRY_FS, "", 0);
+        g_bootTry = true;
+    }
+}
+
+/* HOME Menu, an applet or a program runs: the console came up (system modules alone do not count:
+   with the override wrong they could run behind a black screen). */
+static bool SystemUp(void)
+{
+    u32 pids[64];
+    s32 n = 0;
+    if (R_FAILED(svcGetProcessList(&n, pids, 64)))
+        return false;
+    for (s32 i = 0; i < n; i++)
+    {
+        Handle h = 0;
+        if (pids[i] == g_ownPid || R_FAILED(svcOpenProcess(&h, pids[i])))
+            continue;
+        s64 tid = 0;
+        const bool ok = R_SUCCEEDED(svcGetProcessInfo(&tid, h, 0x10001));
+        svcCloseHandle(h);
+        const u32 high = (u32)((u64)tid >> 32);
+        if (ok && (high == 0x00040000u || high == 0x00040010u || high == 0x00040030u))
+            return true;
+    }
+    return false;
+}
+
+static void BootTryDone(const char *why)
+{
+    if (!g_bootTry)
+        return;
+    g_bootTry = false;
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, BOOT_TRY_FS));
+    if (why)
+        Log("start with the console: %s", why);
+}
+
+/* A start with the console in a game's memory mode (Old 3DS): the game is not there yet. With the
+   plugin loader off the launcher plugin would not get into it (turning it on before the reboot
+   does not last: Rosalina saves its settings from its menu thread, which has stopped by then; O3DS
+   2026-11-15). On now, off again once the plugin is in (AfterPluginUp). Rosalina has read the order
+   at its own start, whatever the loader's state. */
+static void EarlyLoader(void)
+{
+    const u32 mode = OS_KernelConfig->app_memtype;
+    u32 tidLow = 0;
+    bool resume = false;
+    if (!g_bootStart || !g_sd || mode == 0 || mode >= 6 || ReadUserParam(&tidLow, &resume) <= 0)
+        return;
+    /* Rosalina makes its port once mcu is up (its main(): LumaConfig_LoadMcuConfig before the
+       services): not there 5 s after the kernel (rc D88007FA), there at 5.5 s; the game starts
+       ~10 s later (O3DS 2026-11-15). */
+    int was = -1;
+    u32 tries = 0;
+    g_plgQuiet = true;
+    for (; tries < 60 && (was = PluginLoader(-1)) < 0; tries++)
+        svcSleepThread(100 * 1000 * 1000);
+    g_plgQuiet = false;
+    int now = was;
+    if (was == 0 && (now = PluginLoader(1)) == 1)
+        WriteSmall(PLG_BY_US_FS, "", 0);
+    Log("start with the console in memory mode %lu: launcher order for %08lX, plugin loader was %s, now %s, %lu ms after the kernel (%lu tries)",
+        mode, tidLow, was == 1 ? "on" : was == 0 ? "off" : "unknown", now == 1 ? "on" : now == 0 ? "off" : "unknown",
+        (u32)(TicksToUs64(Ticks()) / 1000u), tries);
+}
+
+/* The launcher plugin is in the game (or will not come): the order and the loader's state go back. */
+static void AfterPluginUp(const char *why)
+{
+    if (!g_orderKept)
+        return;
+    g_orderKept = false;
+    const int order = ReadUserParam(NULL, NULL);
+    if (order > 0)
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
+    const bool weTurnedOn = SdFileExists(PLG_BY_US_FS);
+    if (weTurnedOn)
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
+        PluginLoader(0);
+    }
+    Log("launcher order %s (%s)%s", order > 0 ? "removed" : "already gone", why, weTurnedOn ? "; plugin loader turned off again" : "");
 }
 
 /* ------------------------------------------------------------------ cut-off recordings */
@@ -3533,15 +3979,23 @@ static bool StartRecordingAs(bool replay)
         }
     }
     const u32 memMode = OS_KernelConfig->app_memtype;
-    if (replay && ((memMode != 0 && memMode < 6) || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW))
+    /* A game that needs extra memory (Old 3DS): the buffer only in the launcher plugin's memory, while
+       the plugin runs in the game (SYSTEM memory there belongs to HOME Menu). Ultra Moon 12 + 11,
+       Smash 18 + 15 frames a second there, as a recording of its own gets (O3DS 2026-11-15). */
+    const bool extMem = memMode != 0 && memMode < 6;
+    const u32 plgNow = *(const volatile u32 *)0x1FF800F0 & 0xFFFFu;
+    if (replay && (extMem ? plgNow != 1 || g_plgNoGood : osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW))
     {
-        /* A game that needs extra memory (Old 3DS): a ring of 1 MB or less, and HOME Menu wants the
-           memory back the moment HOME is pressed. A recording there is the user's choice; the
-           buffer, on all the time, stays out (and does not touch the launcher plugin's memory). */
         g_shared.replayError = REC_REPLAY_NO_MEMORY;
         return false;
     }
-    g_inPlg = !replay && MapPluginMemory();
+    g_inPlg = MapPluginMemory();
+    if (replay && extMem && !g_inPlg)
+    {
+        g_plgNoGood = true;   /* until the plugin's status changes: no try (and log line) every 3 s */
+        g_shared.replayError = REC_REPLAY_NO_MEMORY;
+        return false;
+    }
     g_plgTop = 0;
     const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW;
     g_lite = lite;
@@ -3597,7 +4051,7 @@ static bool StartRecordingAs(bool replay)
     g_convThread = g_convThreads[g_convActive];
     g_packThread = g_packThreads[g_packActive];
     g_c420Always = g_inPlg && g_c420On;
-    if (g_c420Always)
+    if (g_c420Always && !replay)   /* the buffer keeps each screen's last frame instead (g_c420Keep, 260 KB) */
         g_aqCap = AUDIO_QUEUE_PLG_C420;
     for (int sc = 0; sc < 2; sc++)
     {
@@ -3616,7 +4070,7 @@ static bool StartRecordingAs(bool replay)
     g_audioReserveBytes = g_inPlg ? AUDIO_RESERVE / 2u : AUDIO_RESERVE;
     for (int sc = 0; sc < 2; sc++)
     {
-        g_arenaCap[sc] = g_c420Always ? ARENA_CAP_PLG_C420[sc] : g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
+        g_arenaCap[sc] = g_c420Always && !replay ? ARENA_CAP_PLG_C420[sc] : g_inPlg ? ARENA_CAP_PLG[sc] : lite ? ARENA_CAP_LITE[sc] : ARENA_CAP[sc];
         g_arena[sc] = BigAlloc(g_arenaCap[sc]);
         g_prev[sc] = g_c420Always ? NULL : BigAlloc((sc == 0 ? 400u : 320u) * 240u * 2u);
         g_c420Keep[sc] = replay && g_c420On ? BigAlloc((u32)codec_c420_size(sc == 0 ? 400u : 320u, 240u)) : NULL;
@@ -3624,7 +4078,7 @@ static bool StartRecordingAs(bool replay)
         g_codecFrames[sc] = 0;
         g_codecWords[sc] = 0;
     }
-    g_againBuf = replay ? BigAlloc(400u * 240u * 2u) : NULL;
+    g_againBuf = replay && !g_c420Always ? BigAlloc(400u * 240u * 2u) : NULL;   /* C420 only: StoreAgain copies g_c420Keep */
     const bool prevOk = g_c420Always || (g_prev[0] && g_prev[1]);
     /* before the ring: given back with the encoder's memory (ReleaseEncoderMemory) */
     const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
@@ -3811,25 +4265,48 @@ static bool StartRecording(void) { return StartRecordingAs(false); }
    legacy mode runs at 268 MHz without L2, and the converter shares the system core there.
    ptm:sysm (rec3ds.rsf). */
 static s32  g_cpuBefore = -1;   /* PTMSYSM_ConfigureNew3DSCPU value to restore, -1: nothing changed */
+static u32  g_cpuPid;           /* the application that ran when the speed was changed (0: none) */
+static bool g_cpuWait;          /* a program was starting when the recording began: the speed is set once it has loaded */
 
+/* The speed is the whole console's, and NS sets it for each title as it starts. The recorder keeps
+   out of that: nothing is changed while a program starts (the main loop asks again once it has
+   loaded), and the value from before goes back only while the same program still runs
+   (cpu_restore_ok, front.h): put back later, it would be another program's wrong speed. */
 static void CpuBoost(bool on)
 {
     if (!g_ptmSysm)
         return;
     if (on && g_cpuBefore < 0)
     {
+        g_cpuWait = FrontQuiet();
+        if (g_cpuWait)
+            return;
         s64 mhz = 0, l2 = 0;
         if (R_FAILED(svcGetSystemInfo(&mhz, 0x10001, 0)) || R_FAILED(svcGetSystemInfo(&l2, 0x10001, 2)))
             return;
         const s32 before = (mhz > 300 ? 1 : 0) | (l2 ? 2 : 0);
         if (before == 3)
             return;   /* the game runs that way already */
+        const u32 pid = ApplicationPid();
         if (R_SUCCEEDED(PTMSYSM_ConfigureNew3DSCPU(3)))
+        {
             g_cpuBefore = before;
+            g_cpuPid = pid;
+        }
     }
-    else if (!on && g_cpuBefore >= 0)
+    else if (!on)
     {
-        PTMSYSM_ConfigureNew3DSCPU((u8)g_cpuBefore);
+        g_cpuWait = false;
+        if (g_cpuBefore < 0)
+            return;
+        s64 mhz = 0, l2 = 0;
+        const bool known = R_SUCCEEDED(svcGetSystemInfo(&mhz, 0x10001, 0)) && R_SUCCEEDED(svcGetSystemInfo(&l2, 0x10001, 2));
+        const int state = known ? (mhz > 300 ? 1 : 0) | (l2 ? 2 : 0) : -1;
+        const u32 pid = ApplicationPid();
+        if (cpu_restore_ok(g_cpuPid, pid, state))
+            PTMSYSM_ConfigureNew3DSCPU((u8)g_cpuBefore);
+        else
+            Log("processor speed left as it is (%s): set for pid %lu, now pid %lu runs", CpuState(), g_cpuPid, pid);
         g_cpuBefore = -1;
     }
 }
@@ -4247,6 +4724,31 @@ static void WriteSystemStop(bool gameClosed)
 
 /* ------------------------------------------------------------------ main loop */
 
+/* A moment after pm said an application started (0x10C): which one, at what processor speed and
+   with how much memory, whatever the recorder is doing. In a recording UpdateBoost says it too;
+   the replay buffer and the idle recorder said nothing, and a report about a game that did not
+   start had no line naming the game (New 3DS, 2026-11-14). */
+static void LogStarted(void)
+{
+    const u32 pid = ApplicationPid();
+    s64 tid = 0;
+    Handle h = 0;
+    if (pid && R_SUCCEEDED(svcOpenProcess(&h, pid)))
+    {
+        svcGetProcessInfo(&tid, h, 0x10001);
+        svcCloseHandle(h);
+    }
+    if (!pid)
+    {
+        Log("program started: gone again 3 s later (%s)", CpuState());
+        return;
+    }
+    Log("program started: pid %lu title %016llX (%s; application memory %lu KB, free %ld KB; SYSTEM free %lu KB; %s)",
+        pid, (u64)tid, CpuState(), OS_KernelConfig->memregion_sz[0] / KB,
+        (s32)osGetMemRegionFree(MEMREGION_APPLICATION) / (s32)KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
+        g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording");
+}
+
 /* The app is on the screen: it adds to g_shared.appBeat every second or so while it runs in front.
    The replay buffer pauses then (the app's player, its MP4 conversion and its Wi-Fi transfer need
    the card and the processor, and nobody wants a clip of the app). An app that was closed, sent to
@@ -4275,7 +4777,18 @@ int main(void)
     LightLock_Init(&g_dropLock);
     LightLock_Init(&g_logLock);
     g_logLockOk = true;
+    {
+        s64 n3ds = 0;
+        svcGetSystemInfo(&n3ds, 0x10000, 0x201);
+        g_isNew3ds = n3ds != 0;
+    }
+    BootWait();
     InitFs();
+    BootGuard();
+    BootWaitServices();
+    EarlyLoader();
+    if (g_bootStart)   /* the rest of the system is still starting */
+        svcSleepThread(2000 * 1000 * 1000);
     LoadConfig();
     InitLed();
     g_shared.initStage = 4;
@@ -4395,6 +4908,9 @@ int main(void)
     }
     else if (g_cfg.bench)
         CodecBench();
+    Log("start: %s, %lu ms after the kernel, waited %lu ms for the card and services; launch on startup %s", g_bootStart ? "WITH THE CONSOLE" : "by the app or the plugin",
+        (u32)(TicksToUs64(g_startTick) / 1000u), (u32)g_bootWaitMs, g_cfg.autostart ? "on" : "off");
+    AutoApply();
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */
     for (u32 i = 0; i < 2 && g_cfg.replay && g_sd; i++)   /* before PrepareNext: it leaves room for missing ones */
@@ -4416,6 +4932,15 @@ int main(void)
         srvSubscribe(0x213);   /* lid opened (NS) */
         srvSubscribe(0x214);   /* lid closed: the console goes to sleep */
         srvSubscribe(0x204);   /* HOME pressed (Rosalina publishes it too) */
+        /* For the log only, and after the ones the recorder needs (a process may subscribe to a
+           limited number): what happened to the console when a recording or a game ends badly.
+           A report with "the game hung" could not be told from "the game crashed" without them. */
+        srvSubscribe(0x10C);   /* pm: an application has started (and front.h's quiet time) */
+        srvSubscribe(0x202);   /* POWER pressed */
+        srvSubscribe(0x203);   /* POWER held: the user forces the console off */
+        srvSubscribe(0x20C);   /* mcu: fatal hardware condition (its watchdog) */
+        for (u32 id = 0x110; id <= 0x113; id++)   /* pm: an application has ended */
+            srvSubscribe(id);
     }
     else
         notif = 0;
@@ -4427,7 +4952,11 @@ int main(void)
     g_ptmu = ptmu;
     bool lidClosed = false, lidResume = false;
     u64 resumeAt = 0, lastLidPoll = 0;
-    if (resumeInGame)   /* the game draws its first frames by then; same path as after the lid */
+    bool resumeOnPlg = false;
+    u64 lastUpCheck = 0;
+    if (resumeInGame && g_orderKept)   /* started with the console: the game is not there yet */
+        resumeOnPlg = true;
+    else if (resumeInGame)   /* the game draws its first frames by then; same path as after the lid */
     {
         lidResume = true;
         resumeAt = Ticks() + SYSCLOCK_ARM11 * 2;
@@ -4441,6 +4970,7 @@ int main(void)
     u32 lastPlg = 0;
     bool reloadPending = false;
     u64 lastSdCheck = 0;
+    u64 startedLogAt = 0;    /* an application started: its log line is due at this tick */
     for (;;)
     {
         u32 cmd = g_shared.cmd;
@@ -4450,6 +4980,21 @@ int main(void)
         if (notif && svcWaitSynchronization(notif, 0) == 0 && R_FAILED(srvReceiveNotification(&nid)))
             nid = 0;
         const bool appOnScreen = AppOnScreen();
+        if (g_bootTry && Ticks() - g_startTick > BOOT_OK_US * (SYSCLOCK_ARM11 / 1000000u) && Ticks() - lastUpCheck > SYSCLOCK_ARM11)
+        {
+            lastUpCheck = Ticks();
+            if (SystemUp())
+                BootTryDone("ok: 20 s and HOME Menu or a program runs");
+            else if (Ticks() - g_startTick > 120ull * SYSCLOCK_ARM11)
+            {
+                AutoRemove("nothing but system modules ran 2 minutes after the start");
+                WriteSmall(AUTO_BLOCK_FS, "", 0);
+                BootTryDone("FAILED: the override is removed");
+                g_shared.autoState = REC_AUTO_FAILED_START;
+            }
+        }
+        if (g_orderKept && Ticks() - g_startTick > 120ull * SYSCLOCK_ARM11)
+            AfterPluginUp("no plugin after 2 minutes");
         if (Ticks() - lastBattery > 600ull * SYSCLOCK_ARM11)   /* every ten minutes, whatever runs */
         {
             lastBattery = Ticks();
@@ -4462,6 +5007,7 @@ int main(void)
         {
             lastAppCheck = Ticks();
             g_frontPid = ApplicationPid();
+            front_note(&g_front, g_frontPid, lastAppCheck);
         }
         ReplayPrepare();
         g_shared.replayOn = g_cfg.replay;
@@ -4516,6 +5062,15 @@ int main(void)
                         plg == 1 ? "game" : plg == 2 ? "HOME, plugin swapped out" : plg == 3 ? "game closing" : "none",
                         osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
                 lastPlg = plg;
+                g_plgNoGood = false;
+                if (plg == 1)
+                    AfterPluginUp("the plugin is in the game");
+                if (plg == 1 && resumeOnPlg)   /* started with the console: the game draws a moment after its plugin starts */
+                {
+                    resumeOnPlg = false;
+                    lidResume = true;
+                    resumeAt = Ticks() + SYSCLOCK_ARM11 * 2;
+                }
                 if (homeResume && plg == 2)
                     homeSeen = true;
                 if (homeResume && homeSeen && plg == 1)   /* back in the game: new file in 1 s */
@@ -4529,8 +5084,10 @@ int main(void)
                     homeResume = false;
                     if (g_recording && g_inPlg)
                     {
+                        const bool buffer = g_replay;
                         StopRecording("the game closes", false);
-                        WriteSystemStop(true);   /* the console restarts right after: the app explains */
+                        if (!buffer)
+                            WriteSystemStop(true);   /* the console restarts right after: the app explains */
                     }
                     UnmapPluginMemory();
                 }
@@ -4545,8 +5102,24 @@ int main(void)
             if (!g_recording && !StartRecording())
                 LED_SIGNAL(LED_ERROR);
         }
+        if (nid == 0x10C)   /* its process is looked at a moment later: nothing of ours in its first instant */
+        {
+            front_started(&g_front, Ticks());
+            startedLogAt = Ticks() + 3ull * SYSCLOCK_ARM11;
+        }
+        else if (nid == 0x202 || nid == 0x203 || nid == 0x20C || (nid >= 0x110 && nid <= 0x113))
+            Log("system notification %03lX: %s; %s", nid,
+                nid == 0x202 ? "POWER pressed" : nid == 0x203 ? "POWER held (forced power-off)" :
+                nid == 0x20C ? "fatal hardware condition (mcu)" : "an application has ended",
+                g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording");
+        if (startedLogAt && Ticks() >= startedLogAt && !g_shutdownSeen)
+        {
+            startedLogAt = 0;
+            LogStarted();
+        }
         if (nid == PTMNOTIFID_SHUTDOWN || nid == 0x100)
         {
+            BootTryDone(NULL);   /* a power-off or a game's reboot soon after the start is not a failed start */
             Log("system notification %03lX: %s", nid, nid == 0x100 ? "the recorder must end" : "power-off or reboot");
             g_shutdownSeen = true;   /* no new recording and no file prepared from now on */
             const bool wasRecording = g_recording && !g_replay;
@@ -4577,6 +5150,7 @@ int main(void)
         {
             reloadPending = false;
             LoadConfig();
+            AutoApply();
             g_replayFailed = false;
             if (!g_cfg.replay)
             {
@@ -4624,6 +5198,8 @@ int main(void)
             if (DmasRunning())
                 sleepUs = POLL_REC_US;   /* close them soon after they finish */
             UpdateBoost();
+            if (g_cpuWait && !FrontQuiet())   /* the program that was starting has loaded */
+                CpuBoost(true);
             /* New 3DS: a program that keeps core 2 busy itself starves the converter there (lowest
                priority) and frames find no free slot: back to the system core, as before 0.12.6,
                for the rest of this recording and the next ones */
@@ -4719,9 +5295,10 @@ int main(void)
         }
         /* the replay buffer: on whenever the setting is and nothing else records. Not while a
            recording is about to go on (lid, HOME), nor while the next recording's file is still
-           being made (its steps keep the card busy for seconds). */
+           being made (its steps keep the card busy for seconds), nor while a program is still
+           starting (front.h). */
         if (g_cfg.replay && !g_replayFailed && !g_shutdownSeen && !lidResume && !homeResume && !appOnScreen && g_frontPid &&
-            Ticks() >= replayAt && (!g_prepThread || g_prepDone))
+            !FrontQuiet() && Ticks() >= replayAt && (!g_prepThread || g_prepDone))
         {
             noAppSince = 0;
             if (StartRecordingAs(true))
@@ -4733,6 +5310,7 @@ int main(void)
         svcSleepThread(POLL_IDLE_US * 1000ull);
     }
 
+    BootTryDone(NULL);
     /* exit (uninstall / update from the app): nothing may stay behind */
     if (g_prepThread || g_prepFile)
     {

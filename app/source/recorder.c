@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "../../sysmod/source/shared.h"
+#include "../../sysmod/source/autostart.h"
 #include "shared_addr.h"
 
 Result svcControlService(u32 op, ...);
@@ -206,6 +207,8 @@ static void Status(RecStatus *out, bool beat)
             if (beat)
                 s->appBeat = s->appBeat + 1;
         }
+        if (s->version >= 4)
+            out->autoState = s->autoState;
         UnmapShared();
     }
     svcCloseHandle(m);
@@ -366,6 +369,14 @@ bool recorder_luma_modules_on(void)
     return (cfg >> 1) & 1; /* singleOptions: LOADEXTFIRMSANDMODULES = 1 */
 }
 
+bool recorder_luma_patching_on(void)
+{
+    s64 cfg = 0;
+    if (R_FAILED(svcGetSystemInfo(&cfg, 0x10000, 3)))
+        return false;
+    return (cfg >> 2) & 1; /* singleOptions: PATCHGAMES = 2 */
+}
+
 u32 recorder_luma_version(void)
 {
     s64 v = 0;
@@ -453,15 +464,59 @@ static void RemoveLauncherOrder(void)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, order));
 }
 
+/* Launch on startup: the exheader override the module put in place (sysmod AutoInstall). Only a
+   file that lists the recorder goes: the place the module wrote down, and ptm's on either console.
+   Left behind it would do nothing (Luma's pm skips a module whose file is gone), but nothing of
+   the recorder's stays. */
+static void RemoveAutostartFile(const char *path)
+{
+    static u8 exh[AUTO_EXH_SIZE + 1];
+    char full[96];
+    snprintf(full, sizeof(full), "sdmc:%s", path);
+    FILE *f = fopen(full, "rb");
+    if (!f)
+        return;
+    const size_t n = fread(exh, 1, sizeof(exh), f);
+    fclose(f);
+    if (n != AUTO_EXH_SIZE || !auto_has(exh, REC_TITLE_ID))
+        return;
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, path));
+    char dir[96];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = 0;
+        FSUSER_DeleteDirectory(g_sd, fsMakePath(PATH_ASCII, dir)); /* only if empty */
+    }
+    app_log("uninstall: launch on startup removed (%s)", path);
+}
+
+static void RemoveAutostart(void)
+{
+    char path[80] = {0};
+    FILE *f = fopen("sdmc:" REC_DIR_FS "/.autostart", "rb");
+    if (f) {
+        const size_t n = fread(path, 1, sizeof(path) - 1, f);
+        fclose(f);
+        path[n] = 0;
+        if (strncmp(path, "/luma/titles/", 13) == 0)
+            RemoveAutostartFile(path);
+    }
+    RemoveAutostartFile("/luma/titles/0004013000002202/exheader.bin");
+    RemoveAutostartFile("/luma/titles/0004013020002202/exheader.bin");
+}
+
 bool recorder_uninstall(bool recordings, const char *selfPath)
 {
     recorder_stop();
+    RemoveAutostart();
     RemoveLauncherOrder();
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_CXI_FS));
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_DIR_FS "/config.ini"));
     static const char *const files[] = {REC_DIR_FS "/recorder.log", REC_DIR_FS "/recorder.old.log", REC_DIR_FS "/.system_stop",
                                         REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log",
                                         REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on",
+                                        REC_DIR_FS "/.autostart", REC_DIR_FS "/.boot_try", REC_DIR_FS "/.autostart_failed",
                                         REC_FILES_FS "/.next.tmp", REC_FILES_FS "/.next.info"};
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, files[i]));
