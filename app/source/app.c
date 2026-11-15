@@ -43,8 +43,8 @@ static const Rect BACK_BTN = {12, 10, 22, 22};
 static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: 8 rows under a short navbar */
-enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
-static Rect set_row(int i) { return (Rect){10, 32 + i * 25.5f, 300, 23}; }   /* 8 rows: down to y 233.5 */
+enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
+static Rect set_row(int i) { return (Rect){10, 31 + i * 22.7f, 300, 20.5f}; }   /* 9 rows: down to y 233 */
 static const Rect SET_BACK = {10, 6, 21, 21};
 /* Hotkey screen buttons */
 static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200, 92, 28}};
@@ -52,8 +52,8 @@ static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200,
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 /* Help topics */
-#define HELP_TOPICS 8
-static Rect help_row(int i) { return (Rect){12, 38 + i * 24.5f, 296, 22}; }   /* 8 topics: down to y 232 */
+#define HELP_TOPICS 9
+static Rect help_row(int i) { return (Rect){12, 36 + i * 21.8f, 296, 20}; }   /* 9 topics: down to y 230 */
 
 /* A 3D game at 30 fps fills what the SD card takes: ~5.4 MB/s while writing, both screens or the top
    one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
@@ -161,10 +161,46 @@ static void info_apply(App *a, const SdInfo *i)
 static void say(App *a, const char *text);
 static void say_important(App *a, const char *text);
 static void format_name(char *buf, size_t cap, const char *name);
+static void apply_setting(App *a, const char *key, const char *value);
+
+/* Launch on startup: what the module made of the setting (it sets the override up, shared.h
+   REC_AUTO_*). A start with the console that failed switched it off: said once, and the setting
+   follows. After the switch in Settings: the module's answer, or that it comes later. */
+static void autostart_tick(App *a)
+{
+    const bool known = a->st.running && a->st.readable;
+    if (known && a->cfg.autostart && a->cfg.guideSeen && a->st.autoState == REC_AUTO_FAILED_START) {
+        a->autoWait = 0;
+        apply_setting(a, "autostart", "off");   /* the module forgets the failed start with it */
+        say_important(a, T(S_MSG_AUTO_FAILED));
+        return;
+    }
+    if (a->autoWait) {
+        if (known && a->st.autoState != REC_AUTO_OFF) {
+            a->autoWait = 0;
+            if (a->st.autoState == REC_AUTO_ON) {
+                say(a, T(S_MSG_AUTO_ON));
+                return;
+            }
+            say(a, T(a->st.autoState == REC_AUTO_NO_PATCHING ? S_MSG_AUTO_PATCHING : S_MSG_AUTO_UNSUPPORTED));
+            apply_setting(a, "autostart", "off");
+        } else if (a->frame > a->autoWait) {   /* the recorder is off, or a recording runs: set up after it */
+            a->autoWait = 0;
+            say(a, T(S_MSG_AUTO_LATER));
+        }
+        return;
+    }
+    /* the Luma option was turned off after launch on startup had been set up */
+    if (known && a->cfg.autostart && a->cfg.guideSeen && a->st.autoState == REC_AUTO_NO_PATCHING && !a->autoWarned) {
+        a->autoWarned = true;
+        say(a, T(S_MSG_AUTO_PATCHING));
+    }
+}
 
 static void refresh(App *a, bool files)
 {
     recorder_poll(&a->st);   /* also tells the module the app is on the screen */
+    autostart_tick(a);
     if (!a->clipsTold && a->cfg.guideSeen && prepare_clips(NULL) > 0) {
         char msg[256];
         a->clipsTold = true;
@@ -626,6 +662,23 @@ static void open_hotkey(App *a)
     go(a, SCR_HOTKEY, 0);
 }
 
+/* Launch On Startup: the module sets it up when it reads the setting; its answer comes through
+   the status (autostart_tick). Not switched on without Luma's game patching: nothing would start. */
+static void set_autostart(App *a, bool on)
+{
+    if (on == a->cfg.autostart)
+        return;
+    if (on && !recorder_luma_patching_on()) {
+        say(a, T(S_MSG_AUTO_PATCHING));
+        return;
+    }
+    apply_setting(a, "autostart", on ? "on" : "off");
+    a->autoWait = on ? a->frame + 60 * 6 : 0;
+    a->autoWarned = false;
+    if (!on)
+        say(a, T(S_MSG_AUTO_OFF));
+}
+
 static void settings_activate(App *a, int row)
 {
     Seg g;
@@ -633,6 +686,8 @@ static void settings_activate(App *a, int row)
         choose(a, row, (g.sel + 1) % g.n);
     } else if (row == ROW_SOUND)
         apply_setting(a, "audio", a->cfg.audio ? "off" : "on");
+    else if (row == ROW_AUTOSTART)
+        set_autostart(a, !a->cfg.autostart);
     else if (row == ROW_HOTKEY)
         open_hotkey(a);
     else if (row == ROW_UNINSTALL) {
@@ -876,6 +931,8 @@ static void update_settings(App *a, const Input *in)
     }
     if (a->focus == ROW_SOUND && (d & (KEY_DLEFT | KEY_DRIGHT)) && ((d & KEY_DRIGHT) != 0) != a->cfg.audio)
         apply_setting(a, "audio", (d & KEY_DRIGHT) ? "on" : "off");
+    if (a->focus == ROW_AUTOSTART && (d & (KEY_DLEFT | KEY_DRIGHT)))
+        set_autostart(a, (d & KEY_DRIGHT) != 0);
     if (d & KEY_A)
         settings_activate(a, a->focus);
     for (int r = 0; r < SET_ROWS && in->tapped; r++) {
@@ -1559,8 +1616,8 @@ static void draw_firstrun_top(App *a)
     check_row(182, a->sdFreeMb > 256, a->sdFreeMb <= 256, T(S_FR_SD), val);
 }
 
-static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8};
-static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY};
+static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8, S_H9};
+static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY, S_H9_BODY};
 
 /* The author's Telegram channel (news, questions), opposite "Y How to use". */
 static void help_channel(void)
@@ -1681,7 +1738,7 @@ static void draw_guide_bottom(App *a)
 
 static void draw_settings_top(App *a)
 {
-    char v[48], note[220], s1[32], s2[32], s3[32];
+    char v[48], note[640], s1[32], s2[32], s3[32];
     ui_text(14, 13, 9, FONT_REG, COL_MUTED, T(S_FRAME_IN_FILE));
     const bool both = a->cfg.screens == SCREENS_BOTH;
     ui_frame(14, 28, 104, both ? 122 : 64, 6, 1, COL_FAINT);
@@ -1706,7 +1763,10 @@ static void draw_settings_top(App *a)
     stat_card(138 + w, 40, w, T(S_STREAM), s1, NULL);
     stat_card(132, 96, w, T(S_PER_MIN), s2, NULL);
     stat_card(138 + w, 96, w, T(S_FITS), s3, NULL);
-    snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
+    if (a->focus == ROW_AUTOSTART)   /* what the switch does, while it is the row in focus */
+        snprintf(note, sizeof(note), "%s", T(S_AUTOSTART_NOTE));
+    else
+        snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     const float h = ui_text_wrap_height(234, 9, FONT_REG, note) + 14;
     /* right under the stat cards: the toast takes the bottom of the screen */
     ui_card(132, 154, 254, h, 8, COL_SURFACE);
@@ -2087,9 +2147,9 @@ static void draw_help_bottom(App *a)
         snprintf(n, sizeof(n), "%d", i + 1);
         if (i == a->helpTopic)
             ui_rrect(r.x, r.y, r.w, r.h, 7, COL_SURFACE);
-        ui_rrect(r.x + 7, r.y + 2.5f, 17, 17, 4, COL_SURFACE2);
-        ui_text_center(r.x + 15.5f, r.y + 4.5f, 8, FONT_BOLD, COL_SOFT, n);
-        ui_text(r.x + 32, r.y + 3.5f, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
+        ui_rrect(r.x + 7, r.y + 1.5f, 17, 17, 4, COL_SURFACE2);
+        ui_text_center(r.x + 15.5f, r.y + 3.5f, 8, FONT_BOLD, COL_SOFT, n);
+        ui_text(r.x + 32, r.y + 2.5f, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
         if (i == a->helpTopic)
             focus_ring(r, 7);
     }
@@ -2100,12 +2160,12 @@ static void draw_settings_bottom(App *a)
     ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
     ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
     ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_SETTINGS));
-    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
+    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
     for (int r = 0; r < SET_ROWS; r++) {
         const Rect row = set_row(r);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
-        ui_text(row.x + 8, row.y + 5, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : COL_TEXT, T(NAME[r]));
+        ui_text(row.x + 8, row.y + 4, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : COL_TEXT, T(NAME[r]));
         Seg g;
         if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
@@ -2121,16 +2181,16 @@ static void draw_settings_bottom(App *a)
                 if (dis)
                     ui_rect(opt[i].x + opt[i].w / 2 - tw / 2, opt[i].y + opt[i].h / 2, tw, 1, COL_FAINT);
             }
-        } else if (r == ROW_SOUND)
-            ui_toggle(row.x + row.w - 37, row.y + 2.5f, a->cfg.audio);
+        } else if (r == ROW_SOUND || r == ROW_AUTOSTART)
+            ui_toggle(row.x + row.w - 37, row.y + 1.25f, r == ROW_SOUND ? a->cfg.audio : a->cfg.autostart);
         else if (r == ROW_HOTKEY) {
             /* the recording hotkey, then the replay one */
             const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
             const float sep = ui_text_width(9, FONT_REG, "·") + 8;
             float x = row.x + row.w - 20 - hk_chips_width(m) - sep - hk_chips_width(m2);
-            x += hk_chips(x, row.y + 4.5f, m, COL_MUTED) + 1;
-            x += ui_text(x, row.y + 5.5f, 9, FONT_REG, COL_FAINT, "·") + 4;
-            hk_chips(x, row.y + 4.5f, m2, COL_MUTED);
+            x += hk_chips(x, row.y + 3.5f, m, COL_MUTED) + 1;
+            x += ui_text(x, row.y + 4.5f, 9, FONT_REG, COL_FAINT, "·") + 4;
+            hk_chips(x, row.y + 3.5f, m2, COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);

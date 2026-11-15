@@ -25,6 +25,7 @@ typedef struct {
     bool guideSeen;   /* guide=done: the first-run guide was shown */
     bool replay;      /* replay=on: the module keeps the last 30 seconds all the time (the replay buffer) */
     char replayHotkey[48]; /* replay_hotkey: saves them as a clip, e.g. X+SELECT */
+    bool autostart;   /* autostart=on: the recorder starts with the console (the module sets it up: sysmod AutoApply) */
 } Config;
 
 void config_load(Config *c);

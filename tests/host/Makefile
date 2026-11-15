@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front
 
 .PHONY: test clean
 
@@ -31,3 +31,9 @@ test_unwrap: test_unwrap.c ../../prep/source/unwrap.c ../../prep/include/unwrap.
 
 clean:
 	rm -f $(TESTS)
+
+test_autostart: test_autostart.c ../../sysmod/source/autostart.h
+	$(CC) $(CFLAGS) -I../../sysmod/source -o $@ test_autostart.c
+
+test_front: test_front.c ../../sysmod/source/front.h
+	$(CC) $(CFLAGS) -I../../sysmod/source -o $@ test_front.c

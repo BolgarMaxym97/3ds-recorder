@@ -9,7 +9,7 @@
 #include <3ds/types.h>
 
 #define REC_SHARED_MAGIC   0x43455233u   /* "3REC" */
-#define REC_SHARED_VERSION 3u   /* 2: recovered, recoveredFile; 3: replay (REC_STATE_REPLAY, appBeat, clips) */
+#define REC_SHARED_VERSION 4u   /* 2: recovered, recoveredFile; 3: replay (REC_STATE_REPLAY, appBeat, clips); 4: autoState */
 #define REC_TITLE_ID       0x0004013000F1D302ULL
 #define REC_PROCESS_NAME   "rec3ds"
 
@@ -41,8 +41,20 @@ typedef struct {
     s32 replayError;        /* why the buffer does not run though it is on: 0, or REC_REPLAY_* */
     u32 clips;              /* clips saved since start */
     char lastClip[32];
+    volatile u32 autoState; /* launch on startup (config.ini autostart=on): REC_AUTO_* */
 } RecShared;
 
 enum { REC_REPLAY_OK, REC_REPLAY_NO_SPACE, REC_REPLAY_NO_MEMORY, REC_REPLAY_WRITE_ERROR };
+
+/* Launch on startup, as the module found it when it last read the settings:
+   OFF            the setting is off;
+   ON             the recorder starts with the console;
+   NO_PATCHING    Luma's "Enable game patching" (or external modules) is off: it does not;
+   FAILED_START   a start with the console did not finish, the recorder took it away again
+                  (stays until the setting is switched off);
+   UNSUPPORTED    not on this console (Luma older than 13.0, another program's file in the place,
+                  a system whose modules start in another order);
+   ERROR          the SD card refused the file. */
+enum { REC_AUTO_OFF, REC_AUTO_ON, REC_AUTO_NO_PATCHING, REC_AUTO_FAILED_START, REC_AUTO_UNSUPPORTED, REC_AUTO_ERROR };
 
 #endif

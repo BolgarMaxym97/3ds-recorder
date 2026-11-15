@@ -76,7 +76,8 @@ recorder by itself. Settings and recordings stay.
 - **Start / stop a recording:** **R + SELECT**, anywhere — in a game, in the HOME Menu, in an app.
   You can close 3DS Recorder: the recorder keeps running in the background.
 - **Replay — the last 30 seconds** (from version 1.1): switch **Replay 30 s** on in the Recorder tile. While a
-  game or another program runs, the recorder keeps its last 30 seconds all the time (the LED glows faint blue);
+  game or another program runs, the recorder keeps its last 30 seconds all the time (the LED glows faint blue; it begins about 15 seconds after
+  a game starts, so the game loads undisturbed);
   press **X + SELECT** and they become a clip. Open 3DS Recorder afterwards: each clip turns up in the Gallery,
   marked *Replay*, within a minute or so. R + SELECT still starts a normal recording; Replay pauses meanwhile and
   goes on after it. See [Good to know](#good-to-know) for what it costs.
@@ -86,7 +87,11 @@ recorder by itself. Settings and recordings stay.
   - faint blue, steady — Replay is keeping the last 30 seconds;
   - green twice — the recording or the clip is saved;
   - red three times — something went wrong (usually a full SD card); open the app to see why.
-- **After each power-on, open 3DS Recorder once** — that starts the recorder again.
+- **After each power-on, open 3DS Recorder once** — that starts the recorder again. Or let it start by itself:
+- **Launch On Startup** (from version 1.2, off at first): Settings → **Launch On Startup**. The recorder then starts
+  with the console each time it is turned on or restarts, with Replay as you left it, and you never have to open
+  the app for it. It needs one more Luma option, **Enable game patching** (the same SELECT menu as at install);
+  the app says so if it is off. See [Good to know](#good-to-know) for how it works and how to undo it.
 - **Watch:** open the Gallery and press **A**.
 - **Get the video on your phone:** in the Gallery press **Y** on a recording, scan the QR code with the phone's camera
   and tap **Save the video**. Nothing to install on the phone; iPhone and Android both work.
@@ -102,13 +107,27 @@ recorder by itself. Settings and recordings stay.
 <p align="center">
   <img src="docs/screenshots/en/settings.png" width="260" alt="Settings">
   <img src="docs/screenshots/en/help.png" width="260" alt="Help">
-  <img src="docs/screenshots/en/help-led.png" width="260" alt="What the LED means">
+  <img src="docs/screenshots/en/startup.png" width="260" alt="Launch on startup">
 </p>
 
 ### Good to know
 
 - **Leaving System Settings, starting a DS or GBA game, or turning the console off restarts the console.** The
-  recording is saved and stops there; open 3DS Recorder again afterwards. The app tells you what happened.
+  recording is saved and stops there; open 3DS Recorder again afterwards (with Launch On Startup the recorder is
+  back by itself). The app tells you what happened.
+- **Launch On Startup:**
+  - the recorder adds one small file for Luma to the SD card (`/luma/titles/<system title>/exheader.bin`), which
+    makes the console start the recorder together with its own system modules. Nothing in the console's own memory
+    is changed, and Luma reads the file only with **Enable game patching** and **Enable loading external FIRMs
+    and modules** on;
+  - before it puts the file there, the recorder checks on your console that a missing recorder cannot stop the
+    console from starting, and afterwards that Luma really uses the file; if either check fails it changes nothing
+    and tells you;
+  - if the console ever does not get to the HOME Menu with it, turn the console on again: the recorder notices the
+    failed start and switches Launch On Startup off by itself. If even that does not help, hold **SELECT** while
+    turning the console on and turn **Enable game patching** off;
+  - switching it off in Settings, or Uninstall recorder, removes the file. Needs Luma3DS 13.0 or newer;
+  - tested on an Old 3DS; on a New 3DS the same checks run, but it has not been tried there yet: reports are welcome.
 - **Closing the lid** saves the recording; it goes on in a new file when you open the lid.
 - **If the power is cut** (battery, crash), the recording is recovered the next time you open the app.
 - **Long recordings** continue in a new file every 4 GB or every hour (a 1–2 second gap): the SD card's FAT32 limit.
@@ -124,24 +143,29 @@ recorder by itself. Settings and recordings stay.
   - it writes to the SD card all the time, several GB an hour in a 3D game, which wears the card, and keeps
     512 MB of the card while it is on. In a 30-minute test on an Old 3DS the battery ran down as fast with it as
     without it;
-  - it is off again after the console has been turned off: switch it on for a play session;
-  - on an Old 3DS it does not run in games that need extra memory (the next point).
+  - it is off again after the console has been turned off: switch it on for a play session. With Launch On
+    Startup it stays as you left it;
+  - on an Old 3DS it runs in games that need extra memory too (from version 1.2), with fewer frames a second
+    there (the next point).
 - **DS and GBA games can't be recorded:** they run in a separate mode of the console.
 - **Games that need extra memory on an Old 3DS** (Smash Bros, Pokémon Sun / Moon and Ultra Sun / Ultra Moon,
   Super Mario Maker, Monster Hunter) restart the console when they start and when they close. If the recorder runs,
   it comes back inside the game by itself and the recording goes on in a new file: right before the restart it
   leaves Luma's plugin loader a one-time order to load a tiny launcher plugin (about 1 KB) into that game, which
-  starts the recorder again and does nothing else. If the plugin loader is off, it is turned on for that one game
-  and off again afterwards. The game gets 2 MB less memory, the recorder keeps its buffers in those 2 MB, and the
-  video is less smooth there; recording only the top screen (Settings → Screens → Top) makes it smoother. When such a
-  game closes, the recording is saved; open 3DS Recorder to record again.
+  starts the recorder again and does nothing else. **Luma's Plugin Loader must be on for this** (Rosalina menu,
+  L + ↓ + SELECT → Plugin Loader); with Launch On Startup the recorder turns it on for that one game and off
+  again afterwards. The game gets 2 MB less memory, the recorder keeps its buffers in those 2 MB (Replay too),
+  and the video is less smooth there (about 12 frames a second in Pokémon Ultra Moon, 18 in Smash Bros);
+  recording only the top screen (Settings → Screens → Top) makes it smoother. When such a game closes, the
+  recording is saved; open 3DS Recorder to record again, or use Launch On Startup: the recorder then comes back
+  by itself.
   A New 3DS does not restart for these games.
 - On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: only the left half.
 
 ### Remove
 
 Settings → **Uninstall recorder**. It removes the recorder, its settings and logs, and the app itself. Your recordings
-stay unless you tick the box. Luma settings are not changed.
+stay unless you tick the box. The Launch On Startup file goes too. Luma settings are not changed.
 
 ### Problems and feedback
 
@@ -149,6 +173,11 @@ stay unless you tick the box. Luma settings are not changed.
 card. Replay has been tested on an Old 3DS only so far. If something goes wrong, please open an [issue](../../issues/new), say what you did and what happened
 (console model, game), and attach the log: on the phone page (the QR code) tap
 **Log for the developer** at the bottom, or copy `/3ds/recorder/app.log` and `recorder.log` from the SD card.
+
+**A game does not start or freezes while the recorder runs?** Switch **Recorder** off on the app's panel and play
+without it: nothing of the recorder runs then. Please open an [issue](../../issues/new) with the game's name, the
+console model and both logs, so it can be fixed. This was reported for Pokémon Ultra Moon and Smash Bros on a New 3DS;
+1.2.0 is more careful while a game starts, but the cause has not been confirmed yet.
 
 ### Building from source
 
@@ -250,7 +279,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 - **Почати / зупинити запис:** **R + SELECT** будь-де — у грі, в меню HOME, у програмі.
   3DS Recorder можна закрити: рекордер працює далі у фоні.
 - **Повтор — останні 30 секунд** (з версії 1.1): увімкніть **Повтор 30 с** у плитці «Рекордер». Поки запущено
-  гру чи іншу програму, рекордер постійно тримає її останні 30 секунд (LED слабко світиться синім); натисніть
+  гру чи іншу програму, рекордер постійно тримає її останні 30 секунд (LED слабко світиться синім; він починає приблизно через
+  15 секунд після запуску гри, щоб не заважати їй завантажитись); натисніть
   **X + SELECT** — і вони стануть кліпом. Потім відкрийте 3DS Recorder: кожен кліп з'явиться в Галереї з
   позначкою «Повтор» приблизно за хвилину. R + SELECT, як і раніше, починає звичайний запис; Повтор на цей час
   стає на паузу і продовжується після нього. Чого він коштує — у розділі [Варто знати](#варто-знати).
@@ -260,7 +290,13 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   - червоний «дихає» — іде запис;
   - зелений двічі — запис або кліп збережено;
   - червоний тричі — щось пішло не так (найчастіше заповнена SD-картка); відкрийте додаток, щоб дізнатися причину.
-- **Після кожного ввімкнення консолі відкрийте 3DS Recorder один раз** — так рекордер запускається знову.
+- **Після кожного ввімкнення консолі відкрийте 3DS Recorder один раз** — так рекордер запускається знову. Або
+  нехай стартує сам:
+- **Запуск з консоллю** (з версії 1.2, спершу вимкнено): Налаштування → **Запуск з консоллю**. Тоді рекордер
+  стартує разом з консоллю щоразу, коли вона вмикається чи перезапускається, Повтор лишається таким, як ви його
+  залишили, і відкривати додаток для цього не треба. Потрібна ще одна опція Luma — **Enable game patching** (те
+  саме меню SELECT, що й при встановленні); якщо її вимкнено, додаток про це скаже. Як це працює і як скасувати —
+  у розділі [Варто знати](#варто-знати).
 - **Переглянути:** відкрийте Галерею і натисніть **A**.
 - **Отримати відео на телефон:** у Галереї натисніть **Y** на записі, відскануйте QR-код камерою телефона і натисніть
   **Зберегти відео**. На телефон нічого ставити не треба; працює і на iPhone, і на Android.
@@ -275,12 +311,28 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 <p align="center">
   <img src="docs/screenshots/uk/settings.png" width="260" alt="Налаштування">
   <img src="docs/screenshots/uk/help.png" width="260" alt="Допомога">
+  <img src="docs/screenshots/uk/startup.png" width="260" alt="Запуск з консоллю">
 </p>
 
 ### Варто знати
 
 - **Вихід з Налаштувань консолі, запуск DS- чи GBA-гри або вимкнення перезапускають консоль.** Запис на цьому
-  зберігається і зупиняється; потім знову відкрийте 3DS Recorder. Додаток пояснить, що сталося.
+  зберігається і зупиняється; потім знову відкрийте 3DS Recorder (із запуском з консоллю рекордер повернеться
+  сам). Додаток пояснить, що сталося.
+- **Запуск з консоллю:**
+  - рекордер додає на SD-картку один маленький файл для Luma (`/luma/titles/<системний титул>/exheader.bin`),
+    через який консоль запускає рекордер разом зі своїми системними модулями. У пам'яті самої консолі нічого не
+    змінюється, а Luma читає цей файл лише з увімкненими **Enable game patching** і **Enable loading external
+    FIRMs and modules**;
+  - перш ніж покласти файл, рекордер перевіряє на вашій консолі, що відсутній рекордер не завадить їй
+    запуститися, а після — що Luma справді використовує файл; якщо хоч одна перевірка не проходить, він нічого
+    не змінює і каже про це;
+  - якщо консоль колись не дійде з ним до меню HOME, увімкніть її ще раз: рекордер помітить невдалий старт і сам
+    вимкне запуск з консоллю. Якщо й це не допомогло, тримайте **SELECT** під час увімкнення і вимкніть **Enable
+    game patching**;
+  - вимкнення в Налаштуваннях або «Видалити рекордер» прибирає файл. Потрібна Luma3DS 13.0 або новіша;
+  - перевірено на Old 3DS; на New 3DS виконуються ті самі перевірки, але там це ще не пробували — відгуки
+    вітаються.
 - **Закрита кришка** зберігає запис, а після відкриття він продовжується новим файлом.
 - **Якщо зникло живлення** (батарея, збій), запис відновиться, коли ви наступного разу відкриєте додаток.
 - **Довгі записи** продовжуються в новому файлі кожні 4 GB або щогодини (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.
@@ -295,24 +347,28 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
     наступного разу відкрито 3DS Recorder (не закривайте додаток, доки не зникне «Зберігаю кліп»);
   - постійно пише на SD-картку, кілька ГБ за годину в 3D-грі, і картка від цього зношується; займає на ній
     512 МБ, поки ввімкнений. У 30-хвилинному тесті на Old 3DS батарея сідала з ним так само, як без нього;
-  - після вимкнення консолі знову вимкнений: вмикайте його на ігрову сесію;
-  - на Old 3DS не працює в іграх, яким треба більше пам'яті (наступний пункт).
+  - після вимкнення консолі знову вимкнений: вмикайте його на ігрову сесію. Із запуском з консоллю він
+    лишається таким, як ви його залишили;
+  - на Old 3DS працює і в іграх, яким треба більше пам'яті (з версії 1.2), але кадрів за секунду там менше
+    (наступний пункт).
 - **DS- і GBA-ігри записати не можна:** вони працюють в окремому режимі консолі.
 - **Ігри, яким на Old 3DS треба більше пам'яті** (Smash Bros, Pokémon Sun / Moon і Ultra Sun / Ultra Moon,
   Super Mario Maker, Monster Hunter), перезапускають консоль, коли стартують і коли закриваються. Якщо рекордер
   працює, він сам повертається в гру, а запис продовжується новим файлом: перед перезапуском він залишає
   завантажувачу плагінів Luma одноразову інструкцію завантажити в цю гру крихітний плагін-запускач (близько 1 КБ),
-  який лише знову запускає рекордер. Якщо завантажувач плагінів вимкнено, він вмикається лише на цю гру і потім
-  вимикається. Грі лишається на 2 МБ менше пам'яті, рекордер тримає свої буфери в цих 2 МБ, і відео там менш
-  плавне; запис лише верхнього екрана (Налаштування → Екрани → Верхній) робить його плавнішим. Коли така гра
-  закривається, запис зберігається; щоб писати далі, відкрийте 3DS Recorder. New 3DS для цих
-  ігор не перезапускається.
+  який лише знову запускає рекордер. **Для цього в Luma має бути ввімкнений Plugin Loader** (меню Rosalina,
+  L + ↓ + SELECT → Plugin Loader); із запуском з консоллю рекордер сам вмикає його лише на цю гру і потім
+  вимикає. Грі лишається на 2 МБ менше пам'яті, рекордер тримає свої буфери в цих 2 МБ (і Повтор теж), і відео
+  там менш плавне (близько 12 кадрів на секунду в Pokémon Ultra Moon, 18 у Smash Bros); запис лише верхнього
+  екрана (Налаштування → Екрани → Верхній) робить його плавнішим. Коли така гра закривається, запис
+  зберігається; щоб писати далі, відкрийте 3DS Recorder або ввімкніть запуск з консоллю — тоді рекордер
+  повернеться сам. New 3DS для цих ігор не перезапускається.
 - На New 3DS кілька ігор із **широким верхнім екраном 800 пікселів** записуються у 400 пікселях: лише ліва половина.
 
 ### Видалення
 
 Налаштування → **Видалити рекордер**. Видаляє рекордер, його налаштування й журнали та сам додаток. Записи
-лишаються, якщо не поставити позначку. Налаштування Luma не змінюються.
+лишаються, якщо не поставити позначку. Файл запуску з консоллю теж зникає. Налаштування Luma не змінюються.
 
 ### Проблеми і відгуки
 
@@ -321,6 +377,11 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 пішло не так, будь ласка, створіть [issue](../../issues/new), напишіть, що робили і що сталося
 (модель консолі, гра), і додайте журнал: на сторінці в телефоні (через QR-код) унизу натисніть
 **Журнал для розробника**, або скопіюйте з SD-картки `/3ds/recorder/app.log` і `recorder.log`.
+
+**Гра не запускається або зависає, поки працює рекордер?** Вимкніть **Рекордер** на пульті додатка й грайте без
+нього: тоді від рекордера нічого не працює. Будь ласка, створіть [issue](../../issues/new) з назвою гри, моделлю
+консолі й обома журналами, щоб це можна було виправити. Про таке повідомили для Pokémon Ultra Moon і Smash Bros на
+New 3DS; 1.2.0 обережніший під час запуску гри, але причину ще не підтверджено.
 
 ### Збірка з кодів
 
