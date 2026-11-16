@@ -251,11 +251,24 @@ static void read_list(void)
     int n = 0;
     u64 bytes = 0;
     Handle dir = 0;
+    /* continuations waiting to be joined to the recording they go on from (prepare.c, join.h):
+       not shown on their own; their part appears in that recording once joined */
+    static char joins[MAX_ITEMS][16];
+    int nj = 0;
     if (items && R_SUCCEEDED(FSUSER_OpenDirectory(&dir, recorder_archive(), fsMakePath(PATH_ASCII, REC_FILES_FS)))) {
         static FS_DirectoryEntry e[16];
         u32 got = 0;
         while (n < MAX_ITEMS && R_SUCCEEDED(FSDIR_Read(dir, &got, 16, e)) && got > 0)
             for (u32 i = 0; i < got && n < MAX_ITEMS; i++) {
+                if (!(e[i].attributes & FS_ATTRIBUTE_DIRECTORY) && strcmp(e[i].shortExt, "JOI") == 0 && nj < MAX_ITEMS) {
+                    u32 k = 0;
+                    for (; k < 15 && e[i].name[k]; k++)
+                        joins[nj][k] = (char)e[i].name[k];
+                    joins[nj][k] = 0;
+                    if (k == 15 && e[i].name[15] == '.')
+                        nj++;
+                    continue;
+                }
                 if ((e[i].attributes & FS_ATTRIBUTE_DIRECTORY) || strcmp(e[i].shortExt, "R3D") != 0)
                     continue;
                 GalItem *it = &items[n++];
@@ -267,6 +280,17 @@ static void read_list(void)
                 bytes += it->bytes;
             }
         FSDIR_Close(dir);
+    }
+    for (int i = 0; i < n;) {
+        bool waiting = false;
+        for (int j = 0; j < nj && !waiting; j++)
+            waiting = strncmp(items[i].name, joins[j], 15) == 0 && !prepare_join_failed(items[i].name);
+        if (!waiting) {
+            i++;
+            continue;
+        }
+        bytes -= items[i].bytes;
+        items[i] = items[--n];
     }
     if (n)
         qsort(items, n, sizeof(GalItem), cmp_newest);

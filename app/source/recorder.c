@@ -119,6 +119,44 @@ static bool ModuleRunning(void)
     return h != 0;
 }
 
+/* The module's shared page in the module: REC_SHARED_VA for the module this app carries. A module
+   from another build has it elsewhere (the address moves with the code: 0x12B000 in 1.2.0), and the
+   app could then neither read its state nor restart it with its own (an update stayed on the old
+   module, O3DS 2026-11-16): its writable pages are searched for the page once. */
+static u32 g_sharedVa = REC_SHARED_VA;
+
+static bool MapPage(Handle module, u32 va)
+{
+    if (R_FAILED(svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, module, va, 0x1000, 0)))
+        return false;
+    const volatile RecShared *s = (const volatile RecShared *)MAP_VA;
+    if (s->magic == REC_SHARED_MAGIC && s->version >= 1u && s->version <= 64u)
+        return true;
+    svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000);
+    return false;
+}
+
+static bool FindShared(Handle module)
+{
+    u32 va = 0x00100000u;
+    for (int regions = 0; regions < 64 && va < 0x04000000u; regions++) {
+        MemInfo mi;
+        PageInfo pi;
+        if (R_FAILED(svcQueryProcessMemory(&mi, &pi, module, va)) || mi.size == 0)
+            return false;
+        if ((mi.perm & MEMPERM_READWRITE) == MEMPERM_READWRITE && mi.state != MEMSTATE_FREE)
+            for (u32 p = mi.base_addr; p < mi.base_addr + mi.size; p += 0x1000)
+                if (MapPage(module, p)) {
+                    app_log("module: shared page at %08lX (this app's module has it at %08lX)", (unsigned long)p,
+                            (unsigned long)REC_SHARED_VA);
+                    g_sharedVa = p;
+                    return true;
+                }
+        va = mi.base_addr + mi.size;
+    }
+    return false;
+}
+
 /* Maps the module's shared page at MAP_VA; caller unmaps. */
 static volatile RecShared *MapShared(Handle module)
 {
@@ -126,14 +164,9 @@ static volatile RecShared *MapShared(Handle module)
     PageInfo pi;
     if (R_FAILED(svcQueryMemory(&mi, &pi, MAP_VA)) || mi.state != MEMSTATE_FREE)
         return NULL;
-    if (R_FAILED(svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, module, REC_SHARED_VA, 0x1000, 0)))
+    if (!MapPage(module, g_sharedVa) && !FindShared(module))
         return NULL;
-    volatile RecShared *s = (volatile RecShared *)MAP_VA;
-    if (s->magic != REC_SHARED_MAGIC) {
-        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000);
-        return NULL;
-    }
-    return s;
+    return (volatile RecShared *)MAP_VA;
 }
 
 static void UnmapShared(void) { svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000); }

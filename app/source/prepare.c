@@ -9,7 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
+#include "join.h"
 #include "prep.h"
 #include "unwrap.h"
 #include "recorder.h"
@@ -128,6 +130,11 @@ static void scan(void)
         if (old)
             continue;
         char path[96];
+        prepare_path(path, sizeof(path), found[i].name, "join");
+        if (exists(path) && !prepare_join_failed(found[i].name)) {
+            found[i].state = PS_NONE;   /* waits to be joined to the recording it continues (join_one) */
+            continue;
+        }
         prepare_path(path, sizeof(path), found[i].name, "mp4");
         if (exists(path)) {
             found[i].state = PS_READY;
@@ -177,8 +184,9 @@ static bool recording(void)
 
 static void delete_made(const char *name)
 {
-    static const char *const ext[] = {"mp4", "mp4.part", "ptbl", "prep"};
-    for (int i = 0; i < 4; i++) {
+    /* "join": its link to the recording it continues (join.h), which goes with it */
+    static const char *const ext[] = {"mp4", "mp4.part", "ptbl", "prep", "join"};
+    for (int i = 0; i < 5; i++) {
         char path[96];
         prepare_path(path, sizeof(path), name, ext[i]);
         remove(path);
@@ -298,6 +306,259 @@ static bool unwrap_clip(void)
     g_clipPermille = -1;
     if (g_clips > 0)
         g_clips--;
+    return true;
+}
+
+/* ---- continuations: a recording the recorder paused by itself and went on with in a new file
+   (an applet, the lid, HOME in an extended-memory game) is joined to the session's first file
+   (join.h). The module leaves "<next>.join" naming that file. */
+
+/* links not tried again this session (no room, the card, a link it cannot read): the gallery
+   shows those continuations as recordings of their own */
+#define JOIN_FAILED_MAX 32
+static char g_joinFailed[JOIN_FAILED_MAX][20];   /* under g_lock */
+static int g_joinFailedN;
+static volatile int g_joins, g_joinPermille = -1;
+
+static void join_fail(const char *next)
+{
+    LightLock_Lock(&g_lock);
+    if (g_joinFailedN < JOIN_FAILED_MAX)
+        snprintf(g_joinFailed[g_joinFailedN++], 20, "%.19s", next);
+    LightLock_Unlock(&g_lock);
+}
+
+bool prepare_join_failed(const char *next)
+{
+    bool found = false;
+    if (!g_thread)
+        return false;
+    LightLock_Lock(&g_lock);
+    for (int i = 0; i < g_joinFailedN && !found; i++)
+        found = strcmp(g_joinFailed[i], next) == 0;
+    LightLock_Unlock(&g_lock);
+    return found;
+}
+
+int prepare_joins(int *permille)
+{
+    if (permille)
+        *permille = g_joinPermille;
+    return g_joins;
+}
+
+static bool is_rec_name(const char *n)
+{
+    if (strlen(n) != 19 || strcmp(n + 15, ".r3d") != 0 || n[8] != '_')
+        return false;
+    for (int i = 0; i < 15; i++)
+        if (i != 8 && (n[i] < '0' || n[i] > '9'))
+            return false;
+    return true;
+}
+
+/* The oldest link on the card: the continuation's name and the first file's. */
+static bool find_join(char *next, char *first)
+{
+    Handle dir = 0;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, recorder_archive(), fsMakePath(PATH_ASCII, REC_FILES_FS))))
+        return false;
+    static FS_DirectoryEntry e[16];
+    u32 got = 0;
+    int count = 0;
+    char best[20] = "";
+    while (R_SUCCEEDED(FSDIR_Read(dir, &got, 16, e)) && got > 0)
+        for (u32 i = 0; i < got; i++) {
+            if ((e[i].attributes & FS_ATTRIBUTE_DIRECTORY) || strcmp(e[i].shortExt, "JOI") != 0)
+                continue;
+            char it[24];
+            u32 k = 0;
+            for (; k + 1 < sizeof(it) && e[i].name[k]; k++)
+                it[k] = (char)e[i].name[k];
+            it[k] = 0;
+            if (k != 20 || strcmp(it + 15, ".join") != 0)
+                continue;   /* not ours (yyyymmdd_hhmmss.join) */
+            memcpy(it + 15, ".r3d", 5);
+            if (prepare_join_failed(it))
+                continue;
+            count++;
+            if (!best[0] || strcmp(it, best) < 0)
+                snprintf(best, sizeof(best), "%.19s", it);
+        }
+    FSDIR_Close(dir);
+    g_joins = count;
+    if (!best[0])
+        return false;
+    snprintf(next, 20, "%s", best);
+    char link[96];
+    prepare_path(link, sizeof(link), best, "join");
+    FILE *f = fopen(link, "rb");
+    char buf[32] = {0};
+    const size_t n = f ? fread(buf, 1, sizeof(buf) - 1, f) : 0;
+    if (f)
+        fclose(f);
+    buf[n < 19 ? n : 19] = 0;
+    snprintf(first, 20, "%s", buf);
+    return true;
+}
+
+static char g_joinFirst[20], g_joinNext[20];   /* the pair being joined */
+
+/* The pair is one the gallery wants deleted: the join stops first, then the request is answered. */
+static bool join_forgotten(void)
+{
+    LightLock_Lock(&g_lock);
+    const bool ours = g_forget[0] && (strcmp(g_forget, g_joinFirst) == 0 || strcmp(g_forget, g_joinNext) == 0);
+    LightLock_Unlock(&g_lock);
+    return ours;
+}
+
+static int join_progress(void *ctx, uint64_t done, uint64_t total)
+{
+    (void)ctx;
+    g_joinPermille = total ? (int)(done * 1000u / total) : 0;
+    while (!g_quit && held() && !join_forgotten())
+        svcSleepThread(200 * 1000 * 1000);
+    if (g_quit || join_forgotten())
+        return 1;   /* its files are closed before the request is answered */
+    take_forget(NULL);
+    return 0;
+}
+
+static u64 file_size(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 ? (u64)st.st_size : 0;
+}
+
+/* A continuation stays a recording of its own: prepared like any other, shown again. */
+static void kept_apart(const char *next)
+{
+    LightLock_Lock(&g_lock);
+    Entry *e = find(next);
+    if (e && e->state == PS_NONE) {
+        e->state = PS_QUEUED;
+        e->permille = -1;
+    }
+    LightLock_Unlock(&g_lock);
+    g_clipsDone++;   /* the gallery reads its list again */
+}
+
+/* The joined recording is in place: what was made from either is stale, the gallery reads again. */
+static void joined(const char *first, const char *next, const char *link)
+{
+    remove(link);
+    delete_made(first);
+    delete_made(next);
+    LightLock_Lock(&g_lock);
+    Entry *e = find(first);
+    if (e) {
+        e->state = PS_QUEUED;
+        e->permille = -1;
+    }
+    e = find(next);
+    if (e) {
+        e->state = PS_NONE;
+        e->permille = -1;
+    }
+    LightLock_Unlock(&g_lock);
+    g_clipsDone++;   /* the gallery reads its list again */
+}
+
+/* One link handled; true when there was one. Nothing is changed in place (join.h): both
+   recordings stay as they are until the joined one is whole and checked. */
+static bool join_one(void)
+{
+    char first[20], next[20];
+    if (!find_join(next, first))
+        return false;
+    char a[96], b[96], part[96], old[96], mark[96], link[96];
+    prepare_path(link, sizeof(link), next, "join");
+    if (!is_rec_name(first) || strcmp(first, next) >= 0) {
+        /* not a link the recorder writes (it names an earlier recording), or one read while it was
+           being written: left alone this session, kept apart */
+        join_fail(next);
+        kept_apart(next);
+        app_log("join %s: the link names \"%s\": not now", next, first);
+        return true;
+    }
+    prepare_path(a, sizeof(a), first, "r3d");
+    prepare_path(b, sizeof(b), next, "r3d");
+    prepare_path(part, sizeof(part), first, "jpart");
+    prepare_path(old, sizeof(old), first, "jold");
+    prepare_path(mark, sizeof(mark), first, "jmark");
+    /* a join of this pair cut short last time (the app closed, the power gone) */
+    const int rec = r3d_join_recover(a, b, part, old, mark);
+    if (rec == JOIN_FINISHED) {
+        joined(first, next, link);
+        app_log("join %s + %s: finished after a stop", first, next);
+        return true;
+    }
+    if (rec == JOIN_STUCK) {
+        join_fail(next);
+        kept_apart(next);
+        app_log("join %s + %s: files left in a state it cannot sort out, left alone", first, next);
+        return true;
+    }
+    if (rec == JOIN_UNDONE)
+        app_log("join %s + %s: undone after a stop, both kept; joining again", first, next);
+    if (!exists(b) || !exists(a)) {
+        remove(link);   /* one of them was deleted: nothing to join */
+        kept_apart(next);
+        app_log("join %s + %s: %s is gone, kept apart", first, next, exists(a) ? next : first);
+        return true;
+    }
+    const u64 need = file_size(a) + file_size(b);
+    const u64 freeB = (u64)recorder_sd_free_mb() << 20;
+    if (freeB < need + (64ull << 20)) {
+        join_fail(next);
+        kept_apart(next);
+        app_log("join %s + %s: %llu MB needed, %llu MB free: not now", first, next, (unsigned long long)(need >> 20),
+                (unsigned long long)(freeB >> 20));
+        return true;
+    }
+    snprintf(g_joinFirst, sizeof(g_joinFirst), "%s", first);
+    snprintf(g_joinNext, sizeof(g_joinNext), "%s", next);
+    const u64 t0 = osGetTime();
+    g_joinPermille = 0;
+    int rc = r3d_join(a, b, part, join_progress, NULL);
+    if (rc == JOIN_OK) {
+        /* in place only while nothing reads them (the player, a transfer) or records */
+        while (!g_quit && held() && !join_forgotten())
+            svcSleepThread(200 * 1000 * 1000);
+        if (g_quit || join_forgotten()) {
+            remove(part);
+            rc = JOIN_STOPPED;
+        } else if (r3d_join_commit(a, b, part, old, mark) == 0) {
+            joined(first, next, link);
+            app_log("join %s + %s: one recording now, %llu MB, %llu s", first, next, (unsigned long long)(need >> 20),
+                    (unsigned long long)((osGetTime() - t0) / 1000));
+        } else {
+            const int r = r3d_join_recover(a, b, part, old, mark);
+            if (r == JOIN_FINISHED)
+                joined(first, next, link);
+            else {
+                join_fail(next);
+                kept_apart(next);
+            }
+            app_log("join %s + %s: putting it in place failed, %s", first, next,
+                    r == JOIN_FINISHED ? "finished" : r == JOIN_UNDONE ? "undone, both kept" : "left alone");
+        }
+    } else if (rc == JOIN_DIFFERENT) {
+        remove(link);
+        kept_apart(next);
+        app_log("join %s + %s: not recordings that join (another kind, cut off, or too long): kept apart", first, next);
+    } else if (rc == JOIN_IO) {
+        join_fail(next);
+        kept_apart(next);
+        app_log("join %s + %s: reading or writing failed: kept apart this time", first, next);
+    }
+    g_joinFirst[0] = g_joinNext[0] = 0;
+    g_joinPermille = -1;
+    if (g_joins > 0)
+        g_joins--;
+    if (rc == JOIN_STOPPED)
+        take_forget(NULL);   /* a delete of one of them waits for this */
     return true;
 }
 
@@ -430,7 +691,7 @@ static void thread_main(void *arg)
     const PrepOptions opt = {0, 0, now_us, sleep_us};
     PrepJob *job = NULL;
     char name[20] = "";
-    u64 scanned = 0, clipLook = 0;
+    u64 scanned = 0, clipLook = 0, joinLook = 0;
     Tune t = {0};
     while (!g_quit) {
         if (take_forget(job ? name : NULL)) { /* its job is open: close it first */
@@ -448,6 +709,13 @@ static void thread_main(void *arg)
                 continue;
             }
             clipLook = osGetTime();
+        }
+        if (!job && osGetTime() - joinLook > 5000) { /* then continuations: one recording before its MP4 */
+            if (join_one()) {
+                scanned = 0;
+                continue;
+            }
+            joinLook = osGetTime();
         }
         if (osGetTime() - scanned > 5000) { /* new recordings; a directory listing */
             scan();

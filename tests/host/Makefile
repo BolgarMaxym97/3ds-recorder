@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join
 
 .PHONY: test clean
 
@@ -37,3 +37,12 @@ test_autostart: test_autostart.c ../../sysmod/source/autostart.h
 
 test_front: test_front.c ../../sysmod/source/front.h
 	$(CC) $(CFLAGS) -I../../sysmod/source -o $@ test_front.c
+
+test_plgring: test_plgring.c ../../sysmod/source/plgring.h
+	$(CC) $(CFLAGS) -I../../sysmod/source -o $@ test_plgring.c
+
+test_appletguard: test_appletguard.c ../../sysmod/source/appletguard.h
+	$(CC) $(CFLAGS) -I../../sysmod/source -o $@ test_appletguard.c
+
+test_join: test_join.c ../../prep/source/join.c ../../prep/include/join.h ../../codec/include/r3d_format.h
+	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -I../../prep/include -o $@ test_join.c ../../prep/source/join.c

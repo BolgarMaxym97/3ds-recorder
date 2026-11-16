@@ -52,8 +52,8 @@ static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200,
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 /* Help topics */
-#define HELP_TOPICS 9
-static Rect help_row(int i) { return (Rect){12, 36 + i * 21.8f, 296, 20}; }   /* 9 topics: down to y 230 */
+#define HELP_TOPICS 10
+static Rect help_row(int i) { return (Rect){12, 34 + i * 20.4f, 296, 19}; }   /* 10 topics: down to y 237 */
 
 /* A 3D game at 30 fps fills what the SD card takes: ~5.4 MB/s while writing, both screens or the top
    one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
@@ -1490,18 +1490,22 @@ static bool draw_last_thumb(const char *newest, float x, float y)
     return true;
 }
 
-/* "Saving clip 42% · 2 more" while replay clips are made into recordings (prepare.c); false: none. */
+/* "Saving clip 42% · 2 more" while replay clips are made into recordings, else "Joining recordings
+   42% · 1 more" while recordings paused by the recorder are joined (prepare.c); false: none. */
 static bool clips_text(char *buf, size_t cap)
 {
     int pm = -1;
-    const int n = prepare_clips(&pm);
+    int n = prepare_clips(&pm);
+    const bool joins = n <= 0;
+    if (joins)
+        n = prepare_joins(&pm);
     if (n <= 0)
         return false;
     char one[64];
     if (pm >= 0)
-        snprintf(one, sizeof(one), T(S_CLIP_PCT), pm / 10);
+        snprintf(one, sizeof(one), T(joins ? S_JOIN_PCT : S_CLIP_PCT), pm / 10);
     else
-        snprintf(one, sizeof(one), "%s", T(S_CLIP_WAIT));
+        snprintf(one, sizeof(one), "%s", T(joins ? S_JOIN_WAIT : S_CLIP_WAIT));
     if (n > 1)
         snprintf(buf, cap, T(S_CLIP_MORE), one, n - 1);
     else
@@ -1616,8 +1620,8 @@ static void draw_firstrun_top(App *a)
     check_row(182, a->sdFreeMb > 256, a->sdFreeMb <= 256, T(S_FR_SD), val);
 }
 
-static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8, S_H9};
-static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY, S_H9_BODY};
+static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8, S_H9, S_H10};
+static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY, S_H9_BODY, S_H10_BODY};
 
 /* The author's Telegram channel (news, questions), opposite "Y How to use". */
 static void help_channel(void)

@@ -128,7 +128,15 @@ recorder by itself. Settings and recordings stay.
     turning the console on and turn **Enable game patching** off;
   - switching it off in Settings, or Uninstall recorder, removes the file. Needs Luma3DS 13.0 or newer;
   - tested on an Old 3DS; on a New 3DS the same checks run, but it has not been tried there yet: reports are welcome.
-- **Closing the lid** saves the recording; it goes on in a new file when you open the lid.
+- **Applets** (Internet Browser, Game Notes, Friend List, ...) need the memory the recorder holds, so when one opens
+  during a recording (from version 1.3), the recording is saved first and gives its memory back. On an Old 3DS it
+  goes on next to a small applet at a lower frame rate; nothing is recorded next to the Internet Browser (it takes
+  nearly all of the memory), and on a New 3DS nothing next to any applet. When the applet closes, the recording goes
+  on, and Replay starts again.
+- **Closing the lid** saves the recording; it goes on when you open the lid.
+- **One recording, not many** (from version 1.3): when the recorder pauses a recording by itself (an applet, the
+  lid), the parts become one recording again while 3DS Recorder is open (*Joining recordings*); a pause shows as half
+  a second of the last picture. Recordings you stop yourself stay separate.
 - **If the power is cut** (battery, crash), the recording is recovered the next time you open the app.
 - **Long recordings** continue in a new file every 4 GB or every hour (a 1–2 second gap): the SD card's FAT32 limit.
 - **Fast 3D scenes on a slow SD card** may be recorded at a lower frame rate for a moment: the card cannot keep up.
@@ -137,7 +145,7 @@ recorder by itself. Settings and recordings stay.
   there), and the game itself is not slowed.
 - **Replay:**
   - it works while a game or another program is open, not in the HOME Menu alone; it pauses while a normal
-    recording runs, while 3DS Recorder is open and while the lid is closed;
+    recording runs, while 3DS Recorder is open, while an applet is open and while the lid is closed;
   - a clip is 30 seconds, a few more at times; it is saved at once, and becomes a recording in the Gallery the next
     time 3DS Recorder is open (keep the app open until *Saving clip* is gone);
   - it writes to the SD card all the time, several GB an hour in a 3D game, which wears the card, and keeps
@@ -196,7 +204,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 | `sysmod/` | the recorder: reads the screens and the sound, compresses them (XR32, lossless; C420 for pictures in motion) and writes `.r3d` |
 | `app/` | the app: install, settings, gallery, player, the Wi-Fi server for the phone |
 | `plugin/` | the launcher plugin for extended-memory games on an Old 3DS (starts the recorder again inside the game) |
-| `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console; makes Replay clips into `.r3d` recordings |
+| `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console; makes Replay clips into `.r3d` recordings; joins the parts of a recording the recorder paused |
 | `web/` | the page the phone opens |
 | `codec/` | the screen codecs and the `.r3d` format |
 | `tools/` | build helpers, `r3dconv` / `r3d2mp4.sh` (`.r3d` → MP4 on a computer) |
@@ -333,7 +341,15 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   - вимкнення в Налаштуваннях або «Видалити рекордер» прибирає файл. Потрібна Luma3DS 13.0 або новіша;
   - перевірено на Old 3DS; на New 3DS виконуються ті самі перевірки, але там це ще не пробували — відгуки
     вітаються.
-- **Закрита кришка** зберігає запис, а після відкриття він продовжується новим файлом.
+- **Аплетам** (Інтернет-браузер, Нотатки до ігор, Список друзів, ...) потрібна пам'ять, яку тримає рекордер, тож коли
+  аплет відкривається під час запису (з версії 1.3), запис спершу зберігається і віддає пам'ять. На Old 3DS поруч
+  із невеликим аплетом запис іде далі з меншою частотою кадрів; поруч з Інтернет-браузером нічого не записується
+  (він забирає майже всю пам'ять), а на New 3DS — поруч із жодним аплетом. Коли аплет закривається, запис
+  продовжується, а Повтор стартує знову.
+- **Закрита кришка** зберігає запис, а після відкриття він продовжується.
+- **Один запис, а не кілька** (з версії 1.3): коли рекордер сам ставить запис на паузу (аплет, кришка), частини
+  знову стають одним записом, поки відкрито 3DS Recorder («Склеюю записи»); пауза виглядає як пів секунди
+  останнього кадру. Записи, які ви зупиняєте самі, лишаються окремими.
 - **Якщо зникло живлення** (батарея, збій), запис відновиться, коли ви наступного разу відкриєте додаток.
 - **Довгі записи** продовжуються в новому файлі кожні 4 GB або щогодини (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.
 - **Швидкі 3D-сцени на повільній SD-картці** можуть на мить записатися з меншою частотою кадрів: картка не встигає.
@@ -342,7 +358,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   знизу), а сама гра не сповільнюється.
 - **Повтор:**
   - працює, поки відкрито гру чи іншу програму, не в самому меню HOME; стає на паузу, поки йде звичайний запис,
-    поки відкрито 3DS Recorder і поки закрита кришка;
+    поки відкрито 3DS Recorder чи аплет і поки закрита кришка;
   - кліп — це 30 секунд, часом на кілька більше; він зберігається одразу, а записом у Галереї стає, коли
     наступного разу відкрито 3DS Recorder (не закривайте додаток, доки не зникне «Зберігаю кліп»);
   - постійно пише на SD-картку, кілька ГБ за годину в 3D-грі, і картка від цього зношується; займає на ній

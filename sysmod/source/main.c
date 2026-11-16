@@ -35,6 +35,8 @@
 #include "shared.h"
 #include "autostart.h"
 #include "front.h"
+#include "plgring.h"
+#include "appletguard.h"
 
 /* Luma custom SVCs (csvc.s) */
 Result svcControlMemoryUnsafe(u32 *out, u32 addr0, u32 size, MemOp op, MemPerm perm);
@@ -782,7 +784,7 @@ static const u32 ARENA_CAP[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u }
 static const u32 ARENA_CAP_LITE[2] = { 2u * 400u * 240u * 4u, 2u * 320u * 240u * 4u };
 static u32 g_arenaCap[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
 /* In the launcher plugin's 2 MB (an extended-memory game, Old 3DS): two frames per screen at 2 bytes
-   a pixel (one at 3 or 4), a 256-frame audio queue, the ring gets the rest (~768 KB). The plugin
+   a pixel (one at 3 or 4), a 256-frame audio queue, the ring gets the last 768 KB (plgring.h). The plugin
    cannot be bigger: Pokemon Ultra Moon did not start with 5 MB taken from it (75 MB left; 78 MB
    worked; Smash ran on 75), O3DS 2026-11-08. */
 static const u32 ARENA_CAP_PLG[2] = { 2u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
@@ -960,12 +962,68 @@ static volatile bool g_prepStop;       /* a recording starts: stop growing it */
 static u32    g_growCount, g_growMaxMs;
 static u64    g_writeTicks;            /* time inside block writes (the card's real speed, logged) */
 static u32    g_writeMaxMs;
+static u32    g_writeMaxGrow;          /* GROW_*: a file being made grew during the slowest block (0: none) */
+static u32    g_writeGrowBlocks, g_writeGrowMs;   /* blocks written while one grew, and their time */
 static volatile bool g_prepDone;
 
 /* application owning FCRAM framebuffers: pid only, never a handle */
 static u32 g_appPid, g_appBase, g_ownPid;
 
 /* ------------------------------------------------------------------ prepared file */
+
+/* Files made in advance grow in steps (FSFILE_SetSize), and the card serves nothing else during a
+   step. Measured, to see what a step costs the writer when the replay buffer or a recording runs
+   meanwhile (a 1.4 s block and a ring filled to 7.6 of 8 MB right after a clip was saved, Mario
+   Kart 7, O3DS 2026-11-15; the cause was not known). */
+enum { GROW_NEXT = 1, GROW_REPLAY = 2 };
+static const char *const GROW_NAMES[3] = { "no file being made", "the next recording's file", "a replay file" };
+static volatile u32 g_growing;         /* GROW_*: a step runs now */
+static volatile u32 g_growLast;        /* GROW_*: the last step's file */
+static volatile u32 g_growSteps;       /* steps finished so far */
+typedef struct {
+    u32 steps, ms, maxMs;              /* all steps */
+    u32 busySteps, busyMs, busyMaxMs;  /* those with the buffer or a recording running */
+    u32 waits;                         /* times a step waited for the ring to empty */
+} GrowStat;
+
+static Result GrowStep(Handle h, u64 size, u32 kind, GrowStat *st)
+{
+    const bool busy = g_recording;
+    const u64 t0 = Ticks();
+    g_growing = kind;
+    const Result rc = FSFILE_SetSize(h, size);
+    g_growLast = kind;
+    g_growSteps++;
+    g_growing = 0;
+    const u32 ms = TicksToUs(Ticks() - t0) / 1000u;
+    st->steps++;
+    st->ms += ms;
+    if (ms > st->maxMs)
+        st->maxMs = ms;
+    if (busy || g_recording)
+    {
+        st->busySteps++;
+        st->busyMs += ms;
+        if (ms > st->busyMaxMs)
+            st->busyMaxMs = ms;
+    }
+    return rc;
+}
+
+/* After a recording or the buffer stops: what the files being made cost its writer. */
+static void LogWriteGrow(void)
+{
+    Log("card and files being made: %lu blocks (%lu ms) written while one grew; the slowest block (%lu ms): %s",
+        g_writeGrowBlocks, g_writeGrowMs, g_writeMaxMs, GROW_NAMES[g_writeMaxGrow < 3u ? g_writeMaxGrow : 0u]);
+}
+
+static void LogGrow(const char *what, u64 size, u32 stepMb, const GrowStat *st, u64 startTick)
+{
+    Log("%s: %llu MB in %lu steps of %lu MB, %lu ms in them (slowest %lu ms), %lu ms from start to end; "
+        "%lu steps with the buffer or a recording running (%lu ms, slowest %lu ms), waited for the ring %lu times",
+        what, size / MB, st->steps, stepMb, st->ms, st->maxMs, TicksToUs(Ticks() - startTick) / 1000u,
+        st->busySteps, st->busyMs, st->busyMaxMs, st->waits);
+}
 
 static void PrepMain(void *arg)
 {
@@ -976,14 +1034,17 @@ static void PrepMain(void *arg)
     g_prepReached = 0;
     if (R_SUCCEEDED(FSUSER_OpenFile(&h, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
     {
+        GrowStat st = { 0 };
+        const u64 t0 = Ticks();
         /* in 64 MB steps: a recording that starts meanwhile waits for one step only */
         while (g_prepReached < g_prepSize && !g_prepStop)
         {
             const u64 next = g_prepReached + 64ull * MB < g_prepSize ? g_prepReached + 64ull * MB : g_prepSize;
-            if (R_FAILED(FSFILE_SetSize(h, next)))
+            if (R_FAILED(GrowStep(h, next, GROW_NEXT, &st)))
                 break;
             g_prepReached = next;
         }
+        LogGrow("next recording's file made", g_prepReached, 64u, &st, t0);
         if (g_prepReached < FIRST_ALLOC / 2)
         {
             FSFILE_Close(h);
@@ -996,6 +1057,10 @@ static void PrepMain(void *arg)
 }
 
 static bool g_shutdownSeen;        /* the system is powering off / rebooting */
+/* The lid is closed (the console sleeps): the card is left alone. Growing the next recording's file
+   while the console went to sleep left it with a black screen on opening the lid (the green LED
+   on, no wake), O3DS 2026-11-16; the same steps done before the sleep woke fine the day before. */
+static bool g_lidShut;
 
 /* ------------------------------------------------------------------ replay buffer's files */
 
@@ -1057,15 +1122,22 @@ static void ReplayPrepMain(void *arg)
         if (R_FAILED(FSUSER_OpenFile(&h, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
             break;
         u64 size = 0;
+        GrowStat st = { 0 };
+        const u64 t0 = Ticks();
+        bool waiting = false;
         while (size < REPLAY_FILE_BYTES && !g_rpStop)
         {
             if (g_recording && g_ringSize && RingFill() > g_ringSize / 4u)
             {
+                if (!waiting)
+                    st.waits++;
+                waiting = true;
                 svcSleepThread(50 * 1000 * 1000);
                 continue;
             }
+            waiting = false;
             const u64 next = size + REPLAY_STEP < REPLAY_FILE_BYTES ? size + REPLAY_STEP : REPLAY_FILE_BYTES;
-            if (R_FAILED(FSFILE_SetSize(h, next)))
+            if (R_FAILED(GrowStep(h, next, GROW_REPLAY, &st)))
             {
                 g_rpNoSpace = true;
                 break;
@@ -1074,6 +1146,7 @@ static void ReplayPrepMain(void *arg)
             svcSleepThread(20 * 1000 * 1000);
         }
         FSFILE_Close(h);
+        LogGrow(i ? "replay file 1 made" : "replay file 0 made", size, (u32)(REPLAY_STEP / MB), &st, t0);
         if (size == REPLAY_FILE_BYTES)
             g_rpReady[i] = true;
         else
@@ -1093,7 +1166,7 @@ static void ReplayPrepare(void)
         threadFree(g_rpThread);
         g_rpThread = NULL;
     }
-    if (!g_cfg.replay || !g_sd || g_shutdownSeen || (g_rpReady[0] && g_rpReady[1]))
+    if (!g_cfg.replay || !g_sd || g_shutdownSeen || g_lidShut || (g_rpReady[0] && g_rpReady[1]))
         return;
     if (g_rpNoSpace && Ticks() - g_rpRetryTick < 30ull * SYSCLOCK_ARM11)
         return;   /* a full card: looked at again now and then (recordings get deleted) */
@@ -1124,7 +1197,7 @@ static void ReplayRemoveFiles(void)
 
 static void PrepareNext(void)
 {
-    if (g_prepThread || g_prepFile || !g_sd || g_shutdownSeen)
+    if (g_prepThread || g_prepFile || !g_sd || g_shutdownSeen || g_lidShut)
         return;
     const u32 freeMb = SdFreeMb();
     const u32 keep = 4 * MIN_SD_FREE_MB + ReplayMissingMb();   /* and room for the replay buffer's files */
@@ -1135,6 +1208,28 @@ static void PrepareNext(void)
     g_prepDone = false;
     g_prepStop = false;
     g_prepThread = threadCreate(PrepMain, NULL, 8 * KB, 0x3F, 1, false);
+}
+
+static Handle TakePrepared(void);
+
+/* The lid closes: a file being made stops growing at once (its step ends, ~50-100 ms); what it
+   reached is kept for the next recording. The replay files' maker stops the same way. */
+static void StopFileWork(void)
+{
+    if (g_prepThread)
+    {
+        const Handle h = TakePrepared();
+        g_prepFile = h;   /* the size reached (TakePrepared deletes a file too small to use) */
+        Log("lid closed: the next recording's file stops growing at %llu MB", g_prepReached / MB);
+    }
+    if (g_rpThread)
+    {
+        g_rpStop = true;
+        threadJoin(g_rpThread, U64_MAX);
+        threadFree(g_rpThread);
+        g_rpThread = NULL;
+        Log("lid closed: the replay file being made stops (made again later)");
+    }
 }
 
 static Handle TakePrepared(void)
@@ -1196,6 +1291,7 @@ static void WriterMain(void *arg)
                     g_growMaxMs = ms;
             }
             u32 done = 0;
+            const u32 grow0 = g_growing, growSteps0 = g_growSteps;
             const u64 w0 = Ticks();
             g_writeRc = FSFILE_Write(g_file, &done, FileOffset(g_written), g_ring + (g_r % g_ringSize), g_block, g_writeFlags);
             g_written += done;
@@ -1210,8 +1306,18 @@ static void WriterMain(void *arg)
             const u64 now = Ticks();
             g_writeTicks += now - w0;
             const u32 wms = TicksToUs(now - w0) / 1000u;
+            /* a file being made grew while this block waited for the card */
+            const u32 grow = grow0 ? grow0 : g_growing ? g_growing : g_growSteps != growSteps0 ? g_growLast : 0u;
+            if (grow)
+            {
+                g_writeGrowBlocks++;
+                g_writeGrowMs += wms;
+            }
             if (wms > g_writeMaxMs)
+            {
                 g_writeMaxMs = wms;
+                g_writeMaxGrow = grow;
+            }
             if (g_logLen && now - lastLog > 2ull * SYSCLOCK_ARM11) {   /* lines kept while capturing (Log) */
                 lastLog = now;
                 LogFlush();
@@ -2925,6 +3031,209 @@ static u32 ApplicationPid(void)
     return 0;
 }
 
+/* Four times a second: every process that comes or goes (applets, applications, HOME Menu) with
+   the SYSTEM memory left, that memory running low, and whether an applet is in the recorder's way
+   (appletguard.h: g_appletUp). While one runs, its memory is logged as it moves. */
+/* A recording the recorder pauses by itself (an applet, the lid, HOME in an extended-memory game)
+   and then goes on with in a new file: that file is a continuation of the session's first one. On
+   saving it, "<its stem>.join" goes next to it naming that first file, and the app joins them
+   (prep/include/join.h). Only PauseStop / ResumeStart make that link: a recording the user starts or
+   stops, one that goes on after the file limit, the replay buffer: never. */
+#define JOIN_NAME_LEN 19u                 /* yyyymmdd_hhmmss.r3d */
+static char g_curRoot[JOIN_NAME_LEN + 1];   /* this recording continues that one ("": none) */
+static char g_lastRoot[JOIN_NAME_LEN + 1];  /* the last recording saved: its session's first file */
+static char g_pauseRoot[JOIN_NAME_LEN + 1]; /* paused by the recorder: the session to go on with */
+static bool g_savedOk;                      /* the last StopRecording saved a recording file */
+static bool g_resuming;                     /* the start under way is ResumeStart's */
+
+static AppletGuard g_guard;
+
+/* New 3DS. Next to an applet it records nothing (the light profile has never run on one, and no
+   New 3DS is at hand to try it): the recording is saved when the applet comes and goes on, joined,
+   when it ends. Old 3DS: a light recording next to the applet, as tested (2026-11-16). */
+static bool IsNew3ds(void)
+{
+    static int known = -1;
+    if (known < 0)
+    {
+        s64 v = 0;
+        svcGetSystemInfo(&v, 0x10000, 0x201);
+        known = v != 0;
+    }
+    return known == 1;
+}
+static bool g_appletUp;   /* an applet other than HOME Menu runs, or HOME Menu has ended */
+
+static bool ProcessWatch(void)
+{
+    static u64 last;
+    static u32 known[64];
+    static u64 knownTid[64];
+    static s32 knownN = -1;
+    static bool homeSeen;
+    /* Powering off / rebooting: nothing more. The system ends one process after another then, and
+       this went on listing them and writing a line to the card for each; one power-off ended in a
+       kernel panic in ptm (whose start brings the recorder up), O3DS 2026-11-16, cause not known.
+       Before this watch the module was quiet then, through many power-offs. */
+    static bool teardown;   /* the system is going down (a system module ended) */
+    if (teardown || g_shutdownSeen || g_lidShut || Ticks() - last < SYSCLOCK_ARM11 / 4)
+        return false;
+    last = Ticks();
+    /* no SYSTEM memory reading here (appletguard.h: the kernel panicked under it) */
+    const char *const doing = !g_recording ? "not recording" : g_replay ? "the replay buffer runs" : "a recording runs";
+    u32 pids[64];
+    u64 tids[64] = { 0 };
+    s32 n = 0;
+    if (R_FAILED(svcGetProcessList(&n, pids, 64)))
+        return false;
+    for (s32 i = 0; i < n; i++)
+    {
+        s32 k = 0;
+        while (k < knownN && known[k] != pids[i])
+            k++;
+        if (knownN >= 0 && k < knownN)
+        {
+            tids[i] = knownTid[k];
+            continue;
+        }
+        s64 tid = 0;
+        Handle h = 0;
+        if (R_SUCCEEDED(svcOpenProcess(&h, pids[i])))
+        {
+            svcGetProcessInfo(&tid, h, 0x10001);
+            svcCloseHandle(h);
+        }
+        tids[i] = (u64)tid;
+    }
+    /* A system module ends only when the system goes down (a power-off, the reboot after an
+       extended-memory game, which comes with no notification to the recorder first). From then on
+       nothing at all: no line to the card for each process ended, as this did until 2026-11-16 (a
+       kernel panic in ptm at a power-off, an Arm9 svcBreak at the reboot after Smash, both with
+       such lines being written; O3DS). Lines per process are not written at any time now. */
+    /* "ro" (..3702) starts and ends with each application and applet: 26 times in a day's logs (Old
+       3DS), where no other system module ever ended but while the system went down, and then ~20
+       of them within 2 s. A New 3DS starts some on demand (mvd for video): one alone ending is not
+       taken for it; two within 3 s are. */
+    static u64 endedAt;
+    static u32 endedN;
+    for (s32 k = 0; k < knownN; k++)
+    {
+        s32 i = 0;
+        while (i < n && pids[i] != known[k])
+            i++;
+        if (i == n && (u32)(knownTid[k] >> 32) == 0x00040130u && knownTid[k] != 0x0004013000003702ull)
+        {
+            if (!endedN || Ticks() - endedAt > 3ull * SYSCLOCK_ARM11)
+            {
+                endedN = 0;
+                endedAt = Ticks();
+            }
+            if (++endedN >= 2)
+            {
+                teardown = true;
+                return false;
+            }
+        }
+    }
+    memcpy(known, pids, sizeof(known));
+    memcpy(knownTid, tids, sizeof(knownTid));
+    knownN = n;
+    bool home = false, applet = false;
+    for (s32 i = 0; i < n; i++)
+    {
+        home = home || ag_is_home(tids[i]);
+        applet = applet || (ag_is_applet(tids[i]) && !ag_is_home(tids[i]));
+    }
+    homeSeen = homeSeen || home;
+    const bool up = applet || (homeSeen && !home);
+    if (up != g_appletUp)
+        Log("applet %s; %s", up ? applet ? "running" : "coming (HOME Menu ended)" : "gone, HOME Menu back", doing);
+    g_appletUp = up;
+    return true;
+}
+
+/* The applet guard's actions (appletguard.h), from the main loop. */
+static bool StartRecording(void);
+static void StopRecording(const char *why, bool releaseFirst);
+
+/* The recorder pauses a recording by itself: saved now; the one ResumeStart makes later is joined
+   to this session's first file (g_curRoot). The replay buffer is only stopped. */
+static void PauseStop(const char *why, bool releaseFirst)
+{
+    const bool rec = g_recording && !g_replay;
+    StopRecording(why, releaseFirst);
+    if (rec && g_savedOk)
+        memcpy(g_pauseRoot, g_lastRoot, sizeof(g_pauseRoot));
+    else if (rec)
+        g_pauseRoot[0] = 0;   /* not saved: whatever comes next stands alone */
+}
+
+/* The recorder goes on after its own pause (PauseStop). */
+static bool ResumeStart(void)
+{
+    g_resuming = true;
+    const bool ok = StartRecording();
+    g_resuming = false;
+    return ok;
+}
+
+/* After each ProcessWatch look (4 a second), not on every pass of the main loop. */
+static void AppletGuardStep(bool lidClosed)
+{
+    static u64 freeAt;
+    static u32 freeKb = AG_FREE_UNKNOWN;
+    if (g_shutdownSeen)
+        return;
+    const bool rec = g_recording && !g_inPlg;
+    /* SYSTEM free only for a light recording next to a running applet, once a second */
+    if (!ag_wants_free(&g_guard))
+        freeKb = AG_FREE_UNKNOWN;
+    else if (Ticks() - freeAt >= SYSCLOCK_ARM11)
+    {
+        freeAt = Ticks();
+        freeKb = osGetMemRegionFree(MEMREGION_SYSTEM) / KB;
+    }
+    const AgAction a = ag_step(&g_guard, g_appletUp, rec, g_replay, freeKb, Ticks(), SYSCLOCK_ARM11 / 1000000u);
+    if (a != AG_DO_NOTHING)
+        freeKb = AG_FREE_UNKNOWN;   /* read again after the change */
+    switch (a)
+    {
+    case AG_DO_NOTHING:
+        break;
+    case AG_DO_RELEASE:
+        Log("an applet comes: the %s gives its memory back", g_replay ? "replay buffer" : "recording");
+        if (g_replay)
+            StopRecording("an applet comes: its memory given back", false);
+        else
+            PauseStop("an applet comes: its memory given back", true);
+        break;
+    case AG_DO_STOP:
+        Log("the applet wants more memory (SYSTEM free under %u KB): nothing recorded until it ends", AG_LOW_KB);
+        PauseStop("the applet wants more memory", true);
+        break;
+    case AG_DO_RESTART_NORMAL:
+        PauseStop("the applet has ended: the normal profile again", false);
+        /* fall through */
+    case AG_DO_START_LITE:
+    case AG_DO_START_NORMAL:
+        if (a == AG_DO_START_LITE && IsNew3ds())
+        {
+            Log("New 3DS: nothing recorded next to the applet; the recording goes on after it");
+            ag_start_failed(&g_guard, true);
+            break;
+        }
+        if (g_recording || lidClosed || !ResumeStart())
+        {
+            Log("the recording does not go on %s (%s)", a == AG_DO_START_LITE ? "next to the applet" : "after the applet",
+                g_recording ? "one runs" : lidClosed ? "the lid is closed" : "no start");
+            ag_start_failed(&g_guard, g_appletUp);
+        }
+        else
+            Log("the recording goes on %s", a == AG_DO_START_LITE ? "next to the applet, light profile" : "after the applet");
+        break;
+    }
+}
+
 /* Twice a second while recording: boost once the same application has run PRIO_BOOST_AFTER_US,
    drop back as soon as it is gone or another one starts (launches happen at low priority). */
 static const char *CpuState(void);
@@ -3808,7 +4117,24 @@ static void RecoverCutOff(void)
     }
 }
 
-/* Maps the launcher plugin's heap (from its header at 0x07000000 in the game) once per game. */
+/* One whole record, the largest there is. */
+static u32 RecMax(void)
+{
+    return (sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u;
+}
+
+/* The room past a ring's end for one whole record, in pages (g_ringOver). */
+static u32 RingOver(void)
+{
+    return (RecMax() + 0xFFFu) & ~0xFFFu;
+}
+
+_Static_assert(PLG_RING_BYTES % BLOCK_LITE == 0 && PLG_RING_BYTES >= 4u * BLOCK_LITE, "the plugin ring: whole write blocks");
+
+static void MapRingMirror(void);
+
+/* Maps the launcher plugin's heap (from its header at 0x07000000 in the game) once per game, and
+   the ring's mirror after it. */
 static bool MapPluginMemory(void)
 {
     if (g_plgSize)
@@ -3863,70 +4189,82 @@ static bool MapPluginMemory(void)
     }
     Log("launcher plugin memory: %s (rc %08lX, magic %08lX, heap %08lX, %lu KB)", R_SUCCEEDED(rc) ? "mapped" : "not used",
         rc, magic, heapVa, heapSize / KB);
+    if (g_plgSize)
+        MapRingMirror();   /* now, once: no recording runs in this memory yet */
     return R_SUCCEEDED(rc);
 }
 
-/* Maps the plugin ring's first `over` bytes again right after the plugin's memory (where the ring
-   ends). False: not mapped (pad records as before). */
+/* The plugin ring's mirror: the ring's first bytes mapped a second time right after the plugin's
+   memory, where the ring ends (plgring.h). It is mapped once per game, with the plugin's memory
+   (MapPluginMemory), for the one place the ring has there, and goes only with that memory
+   (UnmapPluginMemory): mapping one again after an unmap failed every time (E0A01BF5). */
 static u32 g_mirrorSize, g_mirrorOff;   /* a mirror is mapped: its size, and the ring's offset it shows */
 
-static bool MirrorRing(u32 over)
+/* The mirror shows the bytes at `ringOff` of the plugin's memory (the place is not in use now). */
+static bool MirrorShows(u32 ringOff, u32 mark)
 {
-    const u32 ringOff = (u32)g_ring - PLG_MEM_VA;
-    if (!g_ring || !over || over > g_ringSize || ringOff + g_ringSize != g_plgSize || !g_plgHeapVa)
-        return false;
-    if (g_mirrorSize)
+    volatile u32 *a = (volatile u32 *)(PLG_MEM_VA + ringOff), *b = (volatile u32 *)(PLG_MEM_VA + g_plgSize);
+    const u32 keep = a[0];
+    a[0] = mark;
+    const bool same = b[0] == mark;
+    a[0] = keep;
+    return same;
+}
+
+static void MapRingMirror(void)
+{
+    const u32 over = RingOver();
+    u32 ringOff = 0;
+    g_mirrorSize = 0;
+    if (!g_plgHeapVa || !plg_mirror_place(g_plgSize, over, &ringOff))
     {
-        /* The last recording's mirror is still mapped (StopRecording leaves it: mapping one again
-           failed with E0A01BF5 in every recording after the first in one run of Smash, O3DS
-           0.12.1-0.12.2, and those went on with pad records). The same place: it serves again. */
-        volatile u32 *a = (volatile u32 *)g_ring, *b = (volatile u32 *)(PLG_MEM_VA + g_plgSize);
-        const u32 keep = a[0];
-        a[0] = 0x4D525253u;
-        const bool same = g_mirrorSize == over && g_mirrorOff == ringOff && b[0] == 0x4D525253u;
-        a[0] = keep;
-        if (same)
-            return true;
-        const Result un = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, g_mirrorSize);
-        Log("plugin ring mirror: another place now (%lu KB at %lu KB, was %lu KB at %lu KB), unmap rc %08lX", over / KB,
-            ringOff / KB, g_mirrorSize / KB, g_mirrorOff / KB, (u32)un);
-        g_mirrorSize = 0;
+        Log("plugin ring mirror: no place for it in %lu KB: pad records in this game", g_plgSize / KB);
+        return;
     }
     const u32 pid = ApplicationPid();
     Handle game = 0;
-    if (!pid || R_FAILED(svcOpenProcess(&game, pid)))
-        return false;
-    Result rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff,
-                                      over, 1);
-    if (R_FAILED(rc))
+    Result rc = pid ? svcOpenProcess(&game, pid) : (Result)-1;
+    if (R_SUCCEEDED(rc))
     {
-        /* The second recording in one run of Smash got E0A01BF5 here (O3DS 0.12.1, 2026-11-11): in
-           case the last recording's mirror is still mapped there, unmap and map once more. */
-        const Result first = rc;
-        const Result un = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, over);
         rc = svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, game, g_plgHeapVa + ringOff, over, 1);
-        Log("plugin ring mirror: map rc %08lX, unmap rc %08lX, second map rc %08lX", (u32)first, (u32)un, (u32)rc);
+        svcCloseHandle(game);
     }
-    svcCloseHandle(game);
     if (R_FAILED(rc))
     {
-        Log("plugin ring mirror not mapped (rc %08lX): pad records", (u32)rc);
-        return false;
+        Log("plugin ring mirror not mapped (rc %08lX): pad records in this game", (u32)rc);
+        return;
     }
-    /* the mirror must show the ring's own bytes */
-    volatile u32 *a = (volatile u32 *)g_ring, *b = (volatile u32 *)(PLG_MEM_VA + g_plgSize);
-    const u32 keep = a[0];
-    a[0] = 0x4D525252u;
-    const bool same = b[0] == 0x4D525252u;
-    a[0] = keep;
-    if (!same)
+    if (!MirrorShows(ringOff, 0x4D525252u))
     {
-        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, over);
-        Log("plugin ring mirror does not show the ring: pad records");
-        return false;
+        const Result un = svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_MEM_VA + g_plgSize, over);
+        Log("plugin ring mirror does not show the ring (unmap rc %08lX): pad records in this game", (u32)un);
+        return;
     }
     g_mirrorSize = over;
     g_mirrorOff = ringOff;
+    Log("plugin ring mirror: %lu KB of the ring at %lu KB, for every recording in this game", over / KB, ringOff / KB);
+}
+
+/* This recording's ring (in the plugin's memory) is the one the game's mirror is for. False: pad
+   records, as without a mirror. */
+static bool MirrorRing(u32 over)
+{
+    if (!g_ring)
+        return false;
+    const u32 ringOff = (u32)g_ring - PLG_MEM_VA;
+    if (!g_mirrorSize)
+        return false;   /* said once, when the plugin's memory was mapped */
+    if (!plg_mirror_serves(g_mirrorSize, g_mirrorOff, ringOff, g_ringSize, g_plgSize, over))
+    {
+        Log("plugin ring: %lu KB at %lu KB, its mirror is for %lu KB at %lu KB: pad records", g_ringSize / KB,
+            ringOff / KB, g_mirrorSize / KB, g_mirrorOff / KB);
+        return false;
+    }
+    if (!MirrorShows(ringOff, 0x4D525253u))
+    {
+        Log("plugin ring mirror does not show the ring any more: pad records");
+        return false;
+    }
     return true;
 }
 
@@ -3955,11 +4293,14 @@ static void UnmapPluginMemory(void)
 
 static R3dFileHeader g_fileHdr;   /* this recording's file header (a clip's .r3d gets it too) */
 
+
 /* replay: the replay buffer (the stream goes round in a replay file), else a recording of its own. */
 static bool StartRecordingAs(bool replay)
 {
     if (g_shutdownSeen)   /* powering off / rebooting: nothing new */
         return false;
+    const u64 startTick = Ticks();
+    const u32 growSteps0 = g_growSteps, grow0 = g_growing;
     const u32 sdFree = SdFreeMb();
     if (replay)
     {
@@ -3997,10 +4338,12 @@ static bool StartRecordingAs(bool replay)
         return false;
     }
     g_plgTop = 0;
-    const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW;
+    /* next to an applet: light, and 4 MB always left (appletguard.h) */
+    const bool agLite = ag_lite(&g_guard) && !g_inPlg && !IsNew3ds();
+    const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW || agLite;
     g_lite = lite;
     const u32 ringMax = lite ? LITE_RING_MAX : 8u * MB;
-    g_keepFree = lite ? KEEP_FREE_LITE : KEEP_FREE;
+    g_keepFree = lite && !agLite ? KEEP_FREE_LITE : KEEP_FREE;
     g_aqCap = g_inPlg ? AUDIO_QUEUE_PLG : lite ? AUDIO_QUEUE_LITE : AUDIO_QUEUE;
     /* A/B test: this recording's variant (the writer is idle: it is not recording) */
     const u32 ab = g_cfg.abTest ? g_abNext++ % AB_VARIANTS : AB_DEFAULT;
@@ -4081,7 +4424,7 @@ static bool StartRecordingAs(bool replay)
     g_againBuf = replay && !g_c420Always ? BigAlloc(400u * 240u * 2u) : NULL;   /* C420 only: StoreAgain copies g_c420Keep */
     const bool prevOk = g_c420Always || (g_prev[0] && g_prev[1]);
     /* before the ring: given back with the encoder's memory (ReleaseEncoderMemory) */
-    const u32 recMax = ((sizeof(R3dRecHeader) + (u32)codec_xr32_max_size(400u * 240u) + 15u) & ~15u);
+    const u32 recMax = RecMax();
     /* staging buffers for the packer (Huffman on): three in the normal profile, one in the light
        ones (no memory to spare there: the ring gets less) */
     /* not in the replay buffer: the converter is the ring's producer there (StoreAgain) */
@@ -4097,18 +4440,19 @@ static bool StartRecordingAs(bool replay)
     g_huffIn = g_huffOut = 0;
     g_torn[0] = g_torn[1] = 0;
     /* the overhang only in the normal profile: the light ones have no memory to spare */
-    const u32 over = lite && !g_inPlg ? 0u : (recMax + 0xFFFu) & ~0xFFFu;   /* the plugin's: mirrored, no memory */
+    const u32 over = lite && !g_inPlg ? 0u : RingOver();   /* the plugin's: mirrored, no memory */
     /* 8 MB rides out ~3 s of SD stall at 2.5 MB/s */
     static const u32 ringSizes[] = { 8u * MB, 6u * MB, 4u * MB, 3u * MB, 2u * MB, 1u * MB };
     g_ring = NULL;
     void *plgAq = NULL;
     if (g_inPlg && g_arena[0] && g_arena[1] && prevOk)
     {
-        /* the audio queue first, then the ring in whole write blocks up to the end of the plugin's
-           memory, where its mirror goes (MirrorRing) */
+        /* the audio queue first, then the ring in whole write blocks at the end of the plugin's
+           memory, where its mirror is: the same place for a recording and for the replay buffer
+           (plgring.h), so the mirror mapped with the plugin's memory serves both */
         plgAq = g_cfg.audio ? BigAlloc(g_aqCap * sizeof(AudioItem)) : NULL;
         const u32 left = g_plgSize - g_plgTop;
-        const u32 size = (left / g_block) * g_block;
+        const u32 size = plg_ring_size(left, g_block);
         if (size >= 4u * g_block && (!g_cfg.audio || plgAq))
         {
             g_plgTop = g_plgSize - size;
@@ -4192,6 +4536,7 @@ static bool StartRecordingAs(bool replay)
     g_growCount = g_growMaxMs = 0;
     g_writeTicks = 0;
     g_writeMaxMs = 0;
+    g_writeMaxGrow = g_writeGrowBlocks = g_writeGrowMs = 0;
     g_written = 0;
     g_writeRc = 0;
     g_w = g_r = 0;
@@ -4246,8 +4591,26 @@ static bool StartRecordingAs(bool replay)
         g_inPlg ? " in the launcher plugin's memory" : "",
         g_shared.sysFreeKb, sdFree,
         CpuState());
+    {
+        /* its own file work waits for a step of a file being made (1.7 s instead of 0.2, O3DS 2026-11-15) */
+        const u32 ms = TicksToUs(Ticks() - startTick) / 1000u;
+        if (ms >= 400u)
+            Log("the start took %lu ms; %s", ms,
+                GROW_NAMES[grow0 ? grow0 : g_growing ? g_growing : g_growSteps != growSteps0 ? g_growLast : 0u]);
+    }
     if (!replay)
+    {
+        /* a continuation only when the recorder itself goes on after its own pause */
+        if (g_resuming && g_pauseRoot[0])
+        {
+            memcpy(g_curRoot, g_pauseRoot, sizeof(g_curRoot));
+            Log("the recording goes on after a pause: it will be joined to %s", g_curRoot);
+        }
+        else
+            g_curRoot[0] = 0;
+        g_pauseRoot[0] = 0;
         LogMemory("recording started");
+    }
     if (g_testVar)
     {
         Log("test variant %lu of %u: %s; converter on core %ld, packer on core %ld", (g_testNext - 1) % TEST_VAR_COUNT + 1,
@@ -4467,6 +4830,7 @@ static bool CloseReplay(bool save, u64 endUs, char *name, u32 nameSize)
 
 static void StopRecording(const char *why, bool releaseFirst)
 {
+    g_savedOk = false;
     const bool replay = g_replay, saveClip = g_replay && g_saveClip;
     const u64 endUs = TicksToUs64(Ticks() - g_recStartTick);
     g_saveClip = false;
@@ -4554,7 +4918,7 @@ static void StopRecording(const char *why, bool releaseFirst)
             g_ringOver = 0;
             ringDropped = true;
         }
-        Log("HOME: recording memory given back at once (ring %s), SYSTEM free %lu KB",
+        Log("recording memory given back at once (ring %s), SYSTEM free %lu KB",
             ringDropped ? "dropped" : "still being written", osGetMemRegionFree(MEMREGION_SYSTEM) / KB);
     }
     if (replay && !saveClip)
@@ -4593,6 +4957,7 @@ static void StopRecording(const char *why, bool releaseFirst)
             g_batStart.pct, batEnd.pct, g_batStart.mv, batEnd.mv, g_batStart.charger || batEnd.charger ? ", ON THE CHARGER" : "",
             (u32)g_writeRc, clip ? "clip saved: " : saveClip ? "CLIP NOT SAVED" : "no clip",
             clip ? name : "", why);
+        LogWriteGrow();
         if (clip)
         {
             snprintf((char *)g_shared.lastClip, sizeof(g_shared.lastClip), "%s", name);
@@ -4636,6 +5001,21 @@ static void StopRecording(const char *why, bool releaseFirst)
     g_file = 0;
     rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
     CloseInfo();   /* saved: nothing to recover */
+    if (R_SUCCEEDED(rn) && strlen(name) == JOIN_NAME_LEN)
+    {
+        g_savedOk = true;
+        if (g_curRoot[0] && strcmp(g_curRoot, name) != 0)
+        {
+            /* after the recording is in place: the app never sees the link before the file */
+            char joinPath[96];
+            snprintf(joinPath, sizeof(joinPath), REC_DIR_FS "/%.15s.join", name);
+            const bool linked = WriteSmall(joinPath, g_curRoot, JOIN_NAME_LEN);
+            Log("%s continues %s: %s", name, g_curRoot, linked ? "the app joins them" : "LINK NOT WRITTEN (kept apart)");
+        }
+        memcpy(g_lastRoot, g_curRoot[0] ? g_curRoot : name, sizeof(g_lastRoot));
+        g_lastRoot[JOIN_NAME_LEN] = 0;
+    }
+    g_curRoot[0] = 0;
     if (g_testVar)
         IdleProbe("recording ends");
     Log("recording saved: %s, %lu s, %llu KB, frames %lu + %lu, dropped %lu, throttled %lu, ring max %lu KB, "
@@ -4650,6 +5030,7 @@ static void StopRecording(const char *why, bool releaseFirst)
         Log("SD writes: %llu KB at %lu KB/s while writing, slowest block %lu ms; video %lu KB/s on average",
             g_written / KB, us ? (u32)(g_written * 1000000ull / us / KB) : 0, g_writeMaxMs,
             seconds ? (u32)(g_written / KB / seconds) : 0);
+        LogWriteGrow();
     }
     if (ringDropped)
         Log("  file cut at %llu KB: the part not yet on the SD was dropped for HOME", dropFrom / KB);
@@ -4694,7 +5075,7 @@ static void StopRecording(const char *why, bool releaseFirst)
     g_ring = NULL;
     g_stageN = 0;   /* the stages are empty (waited for above) */
     g_ringOver = 0;
-    g_ringMirror = false;   /* the mapping stays for the next recording (MirrorRing); UnmapPluginMemory removes it */
+    g_ringMirror = false;   /* the mapping stays for the game's next recordings; UnmapPluginMemory removes it */
     BigFreeAll();
     g_appPid = g_appBase = 0;
     g_convHold = false;
@@ -5010,6 +5391,8 @@ int main(void)
             front_note(&g_front, g_frontPid, lastAppCheck);
         }
         ReplayPrepare();
+        if (ProcessWatch())
+            AppletGuardStep(lidClosed);
         g_shared.replayOn = g_cfg.replay;
         if ((g_recording || lidClosed) && ptmu && Ticks() - lastLidPoll > SYSCLOCK_ARM11 / 10)   /* every 100 ms */
         {
@@ -5021,17 +5404,24 @@ int main(void)
         if (nid == 0x214 && !lidClosed)
         {
             lidClosed = true;
+            g_lidShut = true;   /* before the recording is saved: no next file is begun after it */
+            StopFileWork();
             Log("lid closed%s", g_recording ? ": recording saved, it goes on when the lid opens" : "");
             if (g_recording)
             {
                 const bool buffer = g_replay;   /* starts again by itself once the lid is open */
-                StopRecording("lid closed (sleep)", false);
+                if (buffer)
+                    StopRecording("lid closed (sleep)", false);
+                else
+                    PauseStop("lid closed (sleep)", false);
                 lidResume = !buffer;
             }
         }
         else if (nid == 0x213 && lidClosed)
         {
             lidClosed = false;
+            g_lidShut = false;
+            PrepareNext();   /* the file it did not begin while the lid was closed */
             if (lidResume)   /* the screens wake up a moment after the lid */
                 resumeAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
             replayAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
@@ -5045,10 +5435,11 @@ int main(void)
         if (nid == 0x204)
         {
             Log("HOME pressed: SYSTEM free %lu KB%s", osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
-                g_recording && g_lite && !g_inPlg ? ", the recording is saved to give HOME Menu its memory" : "");
-            if (g_recording && g_lite && !g_inPlg)
+                g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard) ? ", the recording is saved to give HOME Menu its memory" : "");
+            /* not a light recording next to an applet (appletguard.h): that one is the guard's */
+            if (g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard))
             {
-                StopRecording("HOME in a game that needs extra memory", true);
+                PauseStop("HOME in a game that needs extra memory", true);
                 homeResume = true;
                 homeSeen = false;
             }
@@ -5099,7 +5490,7 @@ int main(void)
             resumeAt = 0;
             if (g_recording && g_replay)
                 StopRecording("a recording goes on", false);
-            if (!g_recording && !StartRecording())
+            if (!g_recording && !ResumeStart())   /* joined only after PauseStop (lid, HOME); a start with the console stands alone */
                 LED_SIGNAL(LED_ERROR);
         }
         if (nid == 0x10C)   /* its process is looked at a moment later: nothing of ours in its first instant */
@@ -5297,7 +5688,8 @@ int main(void)
            recording is about to go on (lid, HOME), nor while the next recording's file is still
            being made (its steps keep the card busy for seconds), nor while a program is still
            starting (front.h). */
-        if (g_cfg.replay && !g_replayFailed && !g_shutdownSeen && !lidResume && !homeResume && !appOnScreen && g_frontPid &&
+        if (g_cfg.replay && !g_replayFailed && !g_shutdownSeen && !lidClosed && !lidResume && !homeResume && !appOnScreen &&
+            g_frontPid && !ag_lite(&g_guard) &&
             !FrontQuiet() && Ticks() >= replayAt && (!g_prepThread || g_prepDone))
         {
             noAppSince = 0;

@@ -37,6 +37,12 @@ int prepare_clips(int *permille);
 /* How many clips have become recordings since the app started (the gallery reads its list again
    when this changes). */
 u32 prepare_clips_done(void);
+/* Recordings waiting to be joined to the one they continue (join.h): how many, and the progress
+   of the one being joined (permille, -1: waiting). */
+int prepare_joins(int *permille);
+/* The continuation `next` ("yyyymmdd_hhmmss.r3d") could not be joined this session: the gallery
+   shows it as a recording of its own. */
+bool prepare_join_failed(const char *next);
 /* A recording is being encoded right now (the UI then draws less often: it shares the core). */
 bool prepare_busy(void);
 /* "sdmc:/3ds/recorder/recordings/<stem>.<ext>" */
