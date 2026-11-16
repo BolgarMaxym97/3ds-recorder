@@ -423,6 +423,9 @@ static void InitLed(void)
         g_mcuRc = 0;
 }
 
+/* When the module last wrote the LED (LedKeep). */
+static u64 g_ledWrittenTick;
+
 static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoothing, u8 loopDelay)
 {
     if (R_FAILED(g_mcuRc))
@@ -436,6 +439,7 @@ static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoot
     memcpy(p.greenPattern, g, 32);
     memcpy(p.bluePattern, b, 32);
     MCUHWC_SetInfoLedPattern(&p);
+    g_ledWrittenTick = svcGetSystemTick();
 }
 
 static const u8 ZERO32[32];
@@ -563,6 +567,23 @@ static void LedReplay(void)
         LedOff();
     else
         LedSolid(0, 0, 0x28);
+}
+
+/* The notification LED is the system's too: a StreetPass / SpotPass notification puts its own
+   colour there and later turns it off, and the recording's red was gone while the recording went
+   on (issue #3; a news notification made on purpose, O3DS 2026-11-16: the recording ran on for 89 s).
+   The MCU's LED register does not read back, so the module cannot see that: while it records, it
+   writes its own light again every 16 s. The breathing pattern takes exactly that long (32 steps
+   of 8/16 s), so the new one starts where the old one would have begun again. */
+#define LED_KEEP_TICKS (16ull * SYSCLOCK_ARM11)
+static void LedKeep(bool replay)
+{
+    if (g_ledSeqLen || svcGetSystemTick() - g_ledWrittenTick < LED_KEEP_TICKS)
+        return;   /* a signal is playing, or not time yet */
+    if (replay)
+        LedReplay();
+    else
+        LedRecording();
 }
 
 static const LedStep LED_READY[] = { { 0, 0, 0xFF, 1500 } };
@@ -5393,6 +5414,8 @@ int main(void)
         ReplayPrepare();
         if (ProcessWatch())
             AppletGuardStep(lidClosed);
+        if (g_recording)
+            LedKeep(g_replay);
         g_shared.replayOn = g_cfg.replay;
         if ((g_recording || lidClosed) && ptmu && Ticks() - lastLidPoll > SYSCLOCK_ARM11 / 10)   /* every 100 ms */
         {
@@ -5683,6 +5706,14 @@ int main(void)
             if (!StartRecording())
                 LED_SIGNAL(LED_ERROR);
             continue;
+        }
+        /* The clip hotkey with no replay buffer running (Replay off, HOME Menu alone, a game's first
+           ~15 s, an applet): red three times, as for any clip not saved. It did nothing at all, and
+           a user took it for Replay not working (issue #3, 2026-11-16). */
+        if (save && !g_shutdownSeen && !lidClosed)
+        {
+            Log("clip hotkey: no replay buffer runs (%s)", !g_cfg.replay ? "Replay is off" : "it has not started here");
+            LED_SIGNAL(LED_ERROR);
         }
         /* the replay buffer: on whenever the setting is and nothing else records. Not while a
            recording is about to go on (lid, HOME), nor while the next recording's file is still

@@ -78,7 +78,8 @@ recorder by itself. Settings and recordings stay.
 - **Replay — the last 30 seconds** (from version 1.1): switch **Replay 30 s** on in the Recorder tile. While a
   game or another program runs, the recorder keeps its last 30 seconds all the time (the LED glows faint blue; it begins about 15 seconds after
   a game starts, so the game loads undisturbed);
-  press **X + SELECT** and they become a clip. Open 3DS Recorder afterwards: each clip turns up in the Gallery,
+  press **X + SELECT** and they become a clip (if the LED blinks red three times instead, Replay is not running
+  there: it is off, or the game started less than 15 seconds ago). Open 3DS Recorder afterwards: each clip turns up in the Gallery,
   marked *Replay*, within a minute or so. R + SELECT still starts a normal recording; Replay pauses meanwhile and
   goes on after it. See [Good to know](#good-to-know) for what it costs.
 - **The LED tells you what is happening:**
@@ -289,7 +290,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 - **Повтор — останні 30 секунд** (з версії 1.1): увімкніть **Повтор 30 с** у плитці «Рекордер». Поки запущено
   гру чи іншу програму, рекордер постійно тримає її останні 30 секунд (LED слабко світиться синім; він починає приблизно через
   15 секунд після запуску гри, щоб не заважати їй завантажитись); натисніть
-  **X + SELECT** — і вони стануть кліпом. Потім відкрийте 3DS Recorder: кожен кліп з'явиться в Галереї з
+  **X + SELECT** — і вони стануть кліпом (якщо замість цього LED тричі мигне червоним, Повтор там не працює:
+  його вимкнено або гра стартувала менш ніж 15 секунд тому). Потім відкрийте 3DS Recorder: кожен кліп з'явиться в Галереї з
   позначкою «Повтор» приблизно за хвилину. R + SELECT, як і раніше, починає звичайний запис; Повтор на цей час
   стає на паузу і продовжується після нього. Чого він коштує — у розділі [Варто знати](#варто-знати).
 - **LED показує, що відбувається:**
