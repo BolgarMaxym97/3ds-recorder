@@ -1,6 +1,6 @@
 // Checks web/r3d.js against tools/r3dconv on a real recording: the same video frames (rgb24) and the
 // same audio samples, byte for byte. The file is fed in random piece sizes, as the network delivers it.
-// Usage: node tests/web/compare.mjs <file.r3d>   (builds build/r3dconv first: tools/r3d2mp4.sh does)
+// Usage: node tests/web/compare.mjs <file.r3d> [--no-eq]   (--no-eq: the sound without the treble cut, both sides)   (builds build/r3dconv first: tools/r3d2mp4.sh does)
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const R3D = createRequire(import.meta.url)(join(repo, 'web', 'r3d.js'));
 const file = process.argv[2];
+const noEq = process.argv.includes('--no-eq');
 const conv = join(repo, 'build', 'r3dconv');
 if (!existsSync(conv))
   execFileSync('cc', ['-std=c11', '-O2', '-Wall', '-I' + join(repo, 'codec/include'), '-o', conv,
@@ -22,7 +23,7 @@ const wav = join(mkdtempSync(join(tmpdir(), 'r3dcmp')), 'a.wav');
 const refVideo = createHash('md5');
 let refBytes = 0;
 await new Promise((ok, fail) => {
-  const p = spawn(conv, ['--wav', wav, file], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const p = spawn(conv, [...(noEq ? ['--no-eq'] : []), '--wav', wav, file], { stdio: ['ignore', 'pipe', 'ignore'] });
   p.stdout.on('data', (d) => { refVideo.update(d); refBytes += d.length; });
   p.on('close', (c) => (c === 0 ? ok() : fail(new Error('r3dconv ' + c))));
 });
@@ -41,7 +42,7 @@ const c = new R3D.Converter({
     frames++;
   },
   onAudio: (s) => { aud.update(Buffer.from(s.buffer, s.byteOffset, s.byteLength)); samples += s.length / 2; },
-});
+}, { eq: !noEq });
 const data = readFileSync(file);
 let seed = 12345;
 for (let p = 0; p < data.length;) {
