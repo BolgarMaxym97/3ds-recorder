@@ -97,7 +97,9 @@ recorder by itself. Settings and recordings stay.
 - **Get the video on your phone:** in the Gallery press **Y** on a recording, scan the QR code with the phone's camera
   and tap **Save the video**. Nothing to install on the phone; iPhone and Android both work.
 - **Or take it from the SD card:** recordings are in `/3ds/recorder/recordings/`. Next to each recording
-  (`.r3d`) the console makes an `.mp4` that plays anywhere.
+  (`.r3d`) the console makes an `.mp4` that plays anywhere, while the app is open. Only an `.r3d` there? Drop it on
+  the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/): it makes the MP4 in the browser, the file is
+  not uploaded anywhere. (`.r3d` is this recorder's own format, not RED's: video editors do not open it, use the MP4.)
 - **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, quality, sound on or off, the LED,
   the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
   Replay clip).
@@ -206,7 +208,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 | `app/` | the app: install, settings, gallery, player, the Wi-Fi server for the phone |
 | `plugin/` | the launcher plugin for extended-memory games on an Old 3DS (starts the recorder again inside the game) |
 | `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console; makes Replay clips into `.r3d` recordings; joins the parts of a recording the recorder paused |
-| `web/` | the page the phone opens |
+| `web/` | the page the phone opens; also the `.r3d` converter for computers (GitHub Pages, `tools/build-web.py --local`) |
 | `codec/` | the screen codecs and the `.r3d` format |
 | `tools/` | build helpers, `r3dconv` / `r3d2mp4.sh` (`.r3d` → MP4 on a computer) |
 | `tests/` | host tests and benchmarks |
@@ -311,7 +313,9 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 - **Отримати відео на телефон:** у Галереї натисніть **Y** на записі, відскануйте QR-код камерою телефона і натисніть
   **Зберегти відео**. На телефон нічого ставити не треба; працює і на iPhone, і на Android.
 - **Або забрати з SD-картки:** записи лежать у `/3ds/recorder/recordings/`. Поруч із кожним записом (`.r3d`)
-  консоль робить `.mp4`, яке відтворюється будь-де.
+  консоль робить `.mp4`, яке відтворюється будь-де, поки відкритий додаток. Там лише `.r3d`? Перетягніть його на
+  [сторінку конвертера](https://bolgarmaxym97.github.io/3ds-recorder/): MP4 зробить браузер, файл нікуди не
+  вивантажується. (`.r3d` — власний формат цього рекордера, не RED: відеоредактори його не відкривають, беріть MP4.)
 - **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, мова і
   дві комбінації кнопок (**Хоткеї**: спершу для запису, потім для збереження кліпу Повтору).
 - **Якість:** в режимі **Авто** картинка, яка змінюється вся (3D-гра в русі), зберігається як у відео — колір із половинною

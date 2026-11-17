@@ -8,6 +8,10 @@
  *         only to https pages; the console serves http): MP4 where the browser writes it, else WebM
  *   none  only the original .r3d
  * The download runs ahead of the conversion; both pause for each other, so memory stays small.
+ *
+ * Local mode (<html data-mode="local">, the GitHub Pages build of tools/build-web.py --local): no
+ * console. A .r3d from the SD card is dropped on the page or picked, read from the disk instead of
+ * downloaded and turned into a video the same way. The file never leaves the computer.
  */
 (function () {
   'use strict';
@@ -35,6 +39,11 @@
       c2: 'Download to the phone', direct: 'Download directly', directLink: 'or download directly',
       big: 'A long video (%1): the phone\'s browser downloads it by itself, look in its downloads. Keep the console on the “Download” screen, lid open.',
       diag: 'Log for the developer (.txt)',
+      pick: 'Drop a .r3d here or click to choose', pickHint: 'From the SD card: /3ds/recorder/recordings',
+      privacy: 'The file stays on your computer: the browser makes the video, nothing is uploaded.',
+      read: 'Read the file', notR3d: 'This is not a 3DS Recorder recording (.r3d).',
+      rpl: 'This is a Replay buffer, not a recording. Save the clip on the console (Replay hotkey) and convert the .r3d it makes.',
+      fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
     },
     uk: {
       length: 'Тривалість', size: 'Розмір', eta: 'Передача', s1: 'Завантаження з консолі', s2: 'Робимо відео',
@@ -57,6 +66,11 @@
       c2: 'Завантаження на телефон', direct: 'Завантажити напряму', directLink: 'або завантажити напряму',
       big: 'Довге відео (%1): браузер телефона сам його завантажить — дивіться в його завантаженнях. Тримайте консоль на екрані «Завантажити» з відкритою кришкою.',
       diag: 'Журнал для розробника (.txt)',
+      pick: 'Перетягніть сюди .r3d або натисніть, щоб вибрати', pickHint: 'З SD-картки: /3ds/recorder/recordings',
+      privacy: 'Файл лишається на вашому комп\'ютері: відео робить браузер, нічого не вивантажується.',
+      read: 'Читаємо файл', notR3d: 'Це не запис 3DS Recorder (.r3d).',
+      rpl: 'Це буфер Повтору, а не запис. Збережіть кліп на консолі (комбінація Повтору) і сконвертуйте .r3d, який вона створить.',
+      fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
     },
   };
   let L = TEXT.en;
@@ -73,17 +87,19 @@
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/.test(ua);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const LOCAL = document.documentElement.dataset.mode === 'local';
 
   // the QR code names the recording; the address typed by hand (shown under the code) does not:
   // then it is the one the console offers
   let name = new URLSearchParams(location.search).get('f');
   let info = null;
+  let localFile = null; // local mode: the File being converted
 
   // One line into the console's app.log: what the phone did, so a test far away needs no
   // questions afterwards (the "Log for the developer" file has it). Never fails the page.
   let reports = 0;
   function report(msg) {
-    if (++reports > 200) return;
+    if (LOCAL || ++reports > 200) return; // local: no console to tell
     try {
       fetch('/api/log?m=' + encodeURIComponent(String(msg).slice(0, 300)), { cache: 'no-store' }).catch(() => {});
     } catch (e) { /* no fetch */ }
@@ -228,6 +244,24 @@
           this.fed += d.length;
         }
       });
+    }
+  }
+
+  // Local mode: the same interface as Download, the bytes read from a File in order.
+  class FileSource {
+    constructor(file, feed, progress) {
+      this.file = file; this.feed = feed; this.progress = progress;
+      this.got = 0;
+      this.t0 = performance.now();
+    }
+    async run() {
+      const size = this.file.size;
+      for (let off = 0; off < size; off += CHUNK) {
+        const d = new Uint8Array(await this.file.slice(off, Math.min(off + CHUNK, size)).arrayBuffer());
+        for (let p = 0; p < d.length; p += FEED) await this.feed(d.subarray(p, p + FEED));
+        this.got += d.length;
+        this.progress(this.got, size, this.got / ((performance.now() - this.t0) / 1000));
+      }
     }
   }
 
@@ -602,17 +636,19 @@
         await sleep(20);
       }
     })();
-    const dl = new Download(url, info.size, feed, (g, size, rate) => {
+    const progress = (g, size, rate) => {
       const left = rate ? (size - g) / rate : 0;
       step(1, g >= size ? 'done' : 'on', (g / size) * 100, Math.floor((g / size) * 100) + '%',
         `${mb(g)} / ${mb(size)} · ${(rate / 1048576).toFixed(2)} ${t('mbs')}` + (g < size ? ' · ' + t('left', duration(left)) : ''));
-    });
+    };
+    const dl = LOCAL ? new FileSource(localFile, feed, progress) : new Download(url, info.size, feed, progress);
     const go = async () => {
       try {
         await dl.run();
       } catch (e) {
         report('r3d download failed: ' + why(e));
-        fail(e.notFound ? t('notFound') : t('lost'), e.notFound ? null : go);
+        if (LOCAL) fail(t('readErr', why(e)));
+        else fail(e.notFound ? t('notFound') : t('lost'), e.notFound ? null : go);
         return;
       }
       report(`r3d downloaded: ${dl.got} B in ${((performance.now() - dl.t0) / 1000).toFixed(1)} s`);
@@ -628,7 +664,7 @@
         offer(blob);
       } catch (e) {
         report('browser video failed: ' + why(e));
-        fail(t('failed', e && e.message ? e.message : e));
+        fail(t(LOCAL ? 'failedLocal' : 'failed', e && e.message ? e.message : e));
       }
     };
     go();
@@ -639,7 +675,7 @@
     const ext = blob.type.indexOf('webm') >= 0 ? 'webm' : 'mp4';
     const href = URL.createObjectURL(blob);
     const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(name) || [];
-    const fname = `3DS ${m[1]}-${m[2]}-${m[3]} ${m[4]}-${m[5]}-${m[6]}.${ext}`;
+    const fname = m[0] ? `3DS ${m[1]}-${m[2]}-${m[3]} ${m[4]}-${m[5]}-${m[6]}.${ext}` : `${name.replace(/\.[^.]*$/, '')}.${ext}`;
     $('preview').src = href;
     const save = $('save');
     save.href = href;
@@ -659,9 +695,11 @@
       save.after(b);
     }
     save.addEventListener('click', () => { report('save tapped'); step(3, 'done'); });
+    if (LOCAL) $('again').hidden = false;
   }
 
   async function main() {
+    if (LOCAL) { localMain(); return; }
     document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = t(el.dataset.t); });
     report(`open ${name} | ${ua} | screen ${screen.width}x${screen.height}@${devicePixelRatio} | ${navigator.language}` +
       ` | mem ${navigator.deviceMemory || '?'} GB | secure ${window.isSecureContext} | VideoEncoder ${typeof VideoEncoder}` +
@@ -689,6 +727,47 @@
     step(3, '');
     if (info.prep && info.prep !== 'failed') consoleVideo();
     else browserVideo();
+  }
+
+  /* ------------------------------------------------------------ local mode: a file on the computer */
+
+  function localMain() {
+    if (/^uk\b/i.test(navigator.language || '')) { L = TEXT.uk; document.documentElement.lang = 'uk'; }
+    document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = t(el.dataset.t); });
+    for (const id of ['card', 'steps', 'raw', 'sd', 'diag']) $(id).hidden = true;
+    $('s1').querySelector('b').textContent = t('read');
+    $('pick').hidden = false;
+    const drop = $('drop'), input = $('file');
+    input.addEventListener('change', () => { if (input.files[0]) openLocal(input.files[0]); });
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      drop.classList.remove('over');
+      if (e.dataTransfer.files[0]) openLocal(e.dataTransfer.files[0]);
+    });
+  }
+
+  async function openLocal(file) {
+    $('error').hidden = true;
+    let hdr = null;
+    try { // the header (32 bytes) through the decoder itself: it knows every version
+      const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+      if (head.length >= 4 && new DataView(head.buffer).getUint32(0, true) === 0x52443352) { fail(t('rpl')); return; } // R3DR
+      new R3D.Converter({ onHeader: (h) => { hdr = h; } }).push(head);
+    } catch (e) { /* not a .r3d */ }
+    if (!hdr) { fail(t('notR3d')); return; }
+    localFile = file;
+    name = file.name;
+    info = { name, size: file.size, ms: 0, both: hdr.both, fps: hdr.fps, audio: hdr.audio };
+    $('pick').hidden = true;
+    $('card').hidden = false;
+    $('steps').hidden = false;
+    $('when').textContent = when(name);
+    $('fname').textContent = name + ' · ' + mb(file.size);
+    $('stats').hidden = true; // the length is known only at the end:
+    $('b2').parentNode.hidden = true; // step 2 shows the video's time without a bar
+    browserVideo();
   }
 
   /* ------------------------------------------------------------ the console's MP4 */
@@ -766,10 +845,12 @@
   /* ------------------------------------------------------------ the browser makes it */
 
   async function browserVideo() {
-    $('size').textContent = mb(info.size);
-    const etaSec = info.size / (WIFI_KBS * 1024);
-    $('eta').textContent = duration(etaSec);
-    if (etaSec > 10 * 60) show('long', t('long', duration(etaSec)));
+    if (!LOCAL) {
+      $('size').textContent = mb(info.size);
+      const etaSec = info.size / (WIFI_KBS * 1024);
+      $('eta').textContent = duration(etaSec);
+      if (etaSec > 10 * 60) show('long', t('long', duration(etaSec)));
+    }
     step(1, 'on', 0, t('waiting'));
     step(2, '', 0, t('waiting'));
 
@@ -777,7 +858,7 @@
     const codec = await fastSupport(height, info.fps || 30, info.audio);
     if (codec) {
       report('browser video: fast, ' + JSON.stringify(codec).slice(0, 120));
-      run({ fast: true, label: t('fast'), make: (hdr) => fastConvert(hdr, codec) });
+      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast'), make: (hdr) => fastConvert(hdr, codec) });
       return;
     }
     const mime = liveType();

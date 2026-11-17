@@ -1,6 +1,8 @@
 // Drives the phone page in headless Chrome (DevTools protocol) and saves the video it makes into
 // build/web-result.<ext> (through tests/web/serve.py's test-only upload), for ffprobe.
 // Usage: node tests/web/run.mjs <page url> [--live]   (--live: presses Start, the MediaRecorder path)
+//        node tests/web/run.mjs <local page url> --file <x.r3d>   (the --local build: picks the file,
+//        saves the video into build/web-result.<ext> itself)
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,6 +10,7 @@ import { join } from 'node:path';
 
 const url = process.argv[2];
 const live = process.argv.includes('--live');
+const fileArg = process.argv.includes('--file') ? process.argv[process.argv.indexOf('--file') + 1] : null;
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const port = 9333;
 const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'cdp'))}`,
@@ -45,6 +48,12 @@ await send('Page.navigate', { url });
 await sleep(1500);
 console.log('secure context:', await ev('isSecureContext'), '| VideoEncoder:', await ev('typeof VideoEncoder'));
 await shot('start');
+if (fileArg) {
+  const doc = await send('DOM.getDocument');
+  const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#file' });
+  await send('DOM.setFileInputFiles', { nodeId: q.result.nodeId, files: [(await import('node:path')).resolve(fileArg)] });
+  await sleep(500);
+}
 if (live) await ev("document.getElementById('start').hidden ? 'no start button' : (document.getElementById('start').click(), 'started')").then(console.log);
 const t0 = Date.now();
 let last = '';
@@ -60,6 +69,16 @@ for (;;) {
   if (Date.now() - t0 > 4000 && Date.now() - t0 < 6100) await shot('progress');
   last = line;
   if (s.err) { console.log('ERROR:', s.err); break; }
+  if (s.done && fileArg) { // no server to take it: the bytes come back through the protocol
+    const got = JSON.parse(await ev(`(async () => { const a = document.getElementById('save'); const b = await (await fetch(a.href)).blob();
+      const u = new Uint8Array(await b.arrayBuffer()); let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode(...u.subarray(i, i + 32768));
+      return JSON.stringify({ name: a.download, data: btoa(s) }); })()`));
+    const out = join('build', 'web-result.' + got.name.split('.').pop());
+    (await import('node:fs')).writeFileSync(out, Buffer.from(got.data, 'base64'));
+    console.log('saved:', out, got.name, `after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    await shot('done');
+    break;
+  }
   if (s.done) {
     const saved = await ev(`(async () => { const a = document.getElementById('save'); const b = await (await fetch(a.href)).blob();
       const r = await fetch('/upload.' + a.download.split('.').pop(), { method: 'POST', body: b });
