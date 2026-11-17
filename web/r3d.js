@@ -20,6 +20,8 @@
  * onAudio(int16)        stereo samples (L R L R ...) at audioRate / 1000 Hz, in order, gaps as
  *                       silence, lost frames filled in, through the treble cut.
  * onEnd(info)           { frames, seconds, audioSamples }
+ * new R3D.Converter(cb, { eq: false }): the sound as the DSP mixed it, without the treble cut
+ * (r3dconv --no-eq).
  */
 (function (root) {
   'use strict';
@@ -379,6 +381,7 @@
     constructor(cb, opt) {
       this.cb = cb;
       this.vfr = !!(opt && opt.vfr);
+      this.eqOn = !(opt && opt.eq === false);
       this.dirty = true;     // vfr: the picture changed since the last frame (time 0: a frame)
       this.dirtySince = 0;   // ... first at this time (us)
       this.buf = new Uint8Array(1 << 20);
@@ -553,7 +556,7 @@
     }
 
     out(s) {
-      this.eq.run(s);
+      if (this.eqOn) this.eq.run(s);
       this.audioSamples += s.length / 2;
       this.cb.onAudio && this.cb.onAudio(s);
     }

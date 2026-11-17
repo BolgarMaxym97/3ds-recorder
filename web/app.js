@@ -11,7 +11,9 @@
  *
  * Local mode (<html data-mode="local">, the GitHub Pages build of tools/build-web.py --local): no
  * console. A .r3d from the SD card is dropped on the page or picked, read from the disk instead of
- * downloaded and turned into a video the same way. The file never leaves the computer.
+ * downloaded and turned into a video the same way. The file never leaves the computer. Two options
+ * there, for editing: the size (1x, or 2x / 3x with sharp pixels: players smooth a small video
+ * when they stretch it) and the sound as recorded (no treble cut). The live way stays 1x.
  */
 (function () {
   'use strict';
@@ -43,6 +45,8 @@
       privacy: 'The file stays on your computer: the browser makes the video, nothing is uploaded.',
       read: 'Read the file', notR3d: 'This is not a 3DS Recorder recording (.r3d).',
       rpl: 'This is a Replay buffer, not a recording. Save the clip on the console (Replay hotkey) and convert the .r3d it makes.',
+      optScale: 'Size', optAudio: 'Sound', eqOn: 'Like the speaker', eqOff: 'As recorded',
+      scaleHint: '1× is the 3DS\'s own size (400×480). 2× and 3× keep the pixels sharp in editors and on big screens; the file is bigger.',
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
     },
     uk: {
@@ -70,6 +74,8 @@
       privacy: 'Файл лишається на вашому комп\'ютері: відео робить браузер, нічого не вивантажується.',
       read: 'Читаємо файл', notR3d: 'Це не запис 3DS Recorder (.r3d).',
       rpl: 'Це буфер Повтору, а не запис. Збережіть кліп на консолі (комбінація Повтору) і сконвертуйте .r3d, який вона створить.',
+      optScale: 'Розмір', optAudio: 'Звук', eqOn: 'Як у динаміку', eqOff: 'Як записано',
+      scaleHint: '1× — рідний розмір 3DS (400×480). 2× і 3× зберігають чіткі пікселі в редакторах і на великих екранах; файл більший.',
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
     },
   };
@@ -94,6 +100,7 @@
   let name = new URLSearchParams(location.search).get('f');
   let info = null;
   let localFile = null; // local mode: the File being converted
+  const opts = { scale: 1, eq: true }; // local mode: the size and the treble cut (remembered in the browser)
 
   // One line into the console's app.log: what the phone did, so a test far away needs no
   // questions afterwards (the "Log for the developer" file has it). Never fails the page.
@@ -291,13 +298,15 @@
     return find(0, b.length, 0x05) || b;
   }
 
-  async function fastSupport(height, fps, audio) {
+  async function fastSupport(width, height, fps, audio) {
     if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
     if (audio && (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined')) return null;
+    if (width > 400 && typeof OffscreenCanvas === 'undefined') return null; // the upscale draws on one
     let codec = null;
-    for (const c of ['avc1.4d401f', 'avc1.42e01f', 'avc1.640028']) {
+    const lv = Math.ceil(width / 16) * Math.ceil(height / 16) > 3600 ? '28' : '1f'; // level 3.1 up to 1280x720, else 4.0
+    for (const c of ['avc1.4d40' + lv, 'avc1.42e0' + lv, 'avc1.640028']) {
       try {
-        const r = await VideoEncoder.isConfigSupported({ codec: c, width: 400, height, bitrate: 2500000, framerate: fps });
+        const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate: 2500000, framerate: fps });
         if (r.supported) { codec = c; break; }
       } catch (e) { /* next */ }
     }
@@ -337,18 +346,25 @@
     }
   }
 
-  function fastConvert(hdr, codec) {
+  function fastConvert(hdr, codec, scale) {
+    const W = 400 * scale, H = hdr.height * scale;
     const target = new Mp4Muxer.ArrayBufferTarget();
     const muxer = new Mp4Muxer.Muxer({
       target,
-      video: { codec: 'avc', width: 400, height: hdr.height, frameRate: hdr.fps },
+      video: { codec: 'avc', width: W, height: H, frameRate: hdr.fps },
       audio: hdr.audio ? { codec: 'aac', numberOfChannels: 2, sampleRate: AAC_RATE } : undefined,
       fastStart: 'in-memory',
       firstTimestampBehavior: 'offset',
     });
     let error = null;
     const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { error = e; } });
-    venc.configure({ codec, width: 400, height: hdr.height, bitrate: 3500000, framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
+    // the upscaled pixels are flat blocks: they need far less than scale^2 times the bits
+    venc.configure({ codec, width: W, height: H, bitrate: [0, 3500000, 8000000, 12000000][scale], framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
+    // 2x / 3x: each picture drawn bigger with no smoothing (nearest neighbour), on the GPU
+    const small = scale > 1 ? new OffscreenCanvas(400, hdr.height) : null;
+    const big = scale > 1 ? new OffscreenCanvas(W, H) : null;
+    const bigCtx = big && big.getContext('2d');
+    if (bigCtx) bigCtx.imageSmoothingEnabled = false;
     let aenc = null, rs = null, aOut = 0, pend = [], pendN = 0;
     if (hdr.audio) {
       aenc = new AudioEncoder({
@@ -378,7 +394,13 @@
         if (error) throw error;
         if (pic !== picture || !base) { // a new picture; repeats share its memory
           if (base) base.close();
-          base = new VideoFrame(rgba, { format: 'RGBA', codedWidth: 400, codedHeight: hdr.height, timestamp: 0 });
+          if (big) {
+            small.getContext('2d').putImageData(new ImageData(rgba, 400, hdr.height), 0, 0);
+            bigCtx.drawImage(small, 0, 0, W, H);
+            base = new VideoFrame(big, { timestamp: 0 });
+          } else {
+            base = new VideoFrame(rgba, { format: 'RGBA', codedWidth: 400, codedHeight: hdr.height, timestamp: 0 });
+          }
           picture = pic;
         }
         // timeUs: the picture's capture time (R3D.Converter vfr); without it the frame sits on the fps grid
@@ -600,7 +622,7 @@
         }
       },
       onAudio: (s) => { if (enc) enc.audio(s); },
-    }, { vfr: !!mode.fast }); // the fast way stamps frames itself; the live one draws on its own clock
+    }, { vfr: !!mode.fast, eq: !LOCAL || opts.eq }); // the fast way stamps frames itself; the live one draws on its own clock
     const totalSec = info.ms / 1000;
     step(1, 'on', 0, '0%');
     step(2, 'on', 0, '', mode.label);
@@ -737,6 +759,7 @@
     for (const id of ['card', 'steps', 'raw', 'sd', 'diag']) $(id).hidden = true;
     $('s1').querySelector('b').textContent = t('read');
     $('pick').hidden = false;
+    localOptions();
     const drop = $('drop'), input = $('file');
     input.addEventListener('change', () => { if (input.files[0]) openLocal(input.files[0]); });
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
@@ -746,6 +769,24 @@
       drop.classList.remove('over');
       if (e.dataTransfer.files[0]) openLocal(e.dataTransfer.files[0]);
     });
+  }
+
+  // The two segmented choices; remembered per browser (storage may be off: then the defaults)
+  function localOptions() {
+    try { Object.assign(opts, JSON.parse(localStorage.getItem('r3d-opts') || '{}')); } catch (e) { /* defaults */ }
+    if (![1, 2, 3].includes(opts.scale)) opts.scale = 1;
+    const seg = (id, get, set) => {
+      const btns = [...$(id).querySelectorAll('button')];
+      const mark = () => btns.forEach((b) => b.classList.toggle('on', b.dataset.v === String(get())));
+      btns.forEach((b) => b.addEventListener('click', () => {
+        set(b.dataset.v);
+        mark();
+        try { localStorage.setItem('r3d-opts', JSON.stringify(opts)); } catch (e) { /* not kept */ }
+      }));
+      mark();
+    };
+    seg('scale', () => opts.scale, (v) => { opts.scale = Number(v); });
+    seg('eq', () => (opts.eq ? 1 : 0), (v) => { opts.eq = v === '1'; });
   }
 
   async function openLocal(file) {
@@ -855,10 +896,13 @@
     step(2, '', 0, t('waiting'));
 
     const height = info.both ? 480 : 240;
-    const codec = await fastSupport(height, info.fps || 30, info.audio);
+    let scale = LOCAL ? opts.scale : 1;
+    let codec = await fastSupport(400 * scale, height * scale, info.fps || 30, info.audio);
+    if (!codec && scale > 1) { scale = 1; codec = await fastSupport(400, height, info.fps || 30, info.audio); } // too big for this encoder
     if (codec) {
       report('browser video: fast, ' + JSON.stringify(codec).slice(0, 120));
-      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast'), make: (hdr) => fastConvert(hdr, codec) });
+      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast') + (scale > 1 ? ` · ${400 * scale}×${height * scale}` : ''),
+        make: (hdr) => fastConvert(hdr, codec, scale) });
       return;
     }
     const mime = liveType();
