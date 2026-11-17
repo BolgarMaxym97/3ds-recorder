@@ -7,7 +7,8 @@
 <title>3DS Recorder</title>
 <!-- The page the console serves (app/source/server.c) for one recording: it downloads the .r3d,
      turns it into an MP4 in the browser (web/app.js) and offers it to save. Everything is inlined
-     by tools/build-web.py: nothing comes from the internet. -->
+     by tools/build-web.py: nothing comes from the internet. The --local build (GitHub Pages) takes
+     a .r3d from the computer instead (data-mode="local"). -->
 <style>
 :root {
   --bg: #14161a; --surface: #242931; --surface2: #313740; --text: #e8eaed; --soft: #c3c8cf;
@@ -61,16 +62,29 @@ button, .btn {
 video { width: 100%; border-radius: 12px; background: #000; display: block; margin-bottom: 12px; }
 canvas.hidden { position: fixed; left: -10000px; top: 0; width: 1px; height: 1px; }
 ol { margin: 6px 0 0; padding-left: 20px; }
+.drop { display: block; border: 2px dashed var(--faint); border-radius: 14px; padding: 40px 16px; text-align: center;
+  cursor: pointer; margin-bottom: 12px; }
+.drop.over, .drop:hover { border-color: var(--accent); background: var(--surface); }
+.drop b { display: block; font-size: 18px; }
+.drop small { color: var(--muted); font-size: 14px; }
 [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header><div class="logo"><i></i></div><b>3DS Recorder</b><span id="console"></span></header>
 
-<div class="card">
+<div id="pick" hidden>
+  <label class="drop" id="drop">
+    <input type="file" id="file" hidden>
+    <b data-t="pick"></b><small data-t="pickHint"></small>
+  </label>
+  <div class="note info" data-t="privacy"></div>
+</div>
+
+<div class="card" id="card">
   <div class="title" id="when">…</div>
   <div class="sub" id="fname"></div>
-  <div class="stats">
+  <div class="stats" id="stats">
     <div class="stat"><div class="l" data-t="length"></div><div class="v" id="len">—</div></div>
     <div class="stat"><div class="l" data-t="size"></div><div class="v" id="size">—</div></div>
     <div class="stat"><div class="l" data-t="eta"></div><div class="v" id="eta">—</div></div>
@@ -93,6 +107,7 @@ ol { margin: 6px 0 0; padding-left: 20px; }
   <video id="preview" controls playsinline></video>
   <a class="btn primary" id="save" download></a>
   <div class="note info" id="howto"></div>
+  <a class="btn link" id="again" href="" hidden data-t="again"></a>
 </div>
 
 <button class="primary" id="retry" hidden></button>
