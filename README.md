@@ -100,8 +100,11 @@ recorder by itself. Settings and recordings stay.
   (`.r3d`) the console makes an `.mp4` that plays anywhere, while the app is open. Only an `.r3d` there? Drop it on
   the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/): it makes the MP4 in the browser, the file is
   not uploaded anywhere. (`.r3d` is this recorder's own format, not RED's: video editors do not open it, use the MP4.)
+- **Close the lid and let it work:** while the app converts, joins recordings or saves Replay clips, you can close
+  the lid. The screens go dark, the work goes on, and the console goes to sleep by itself once everything is done
+  (or when the battery is nearly empty). Settings → **Work With Lid Closed** (on at first) switches it off.
 - **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, quality, sound on or off, the LED,
-  the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
+  Launch On Startup, Work With Lid Closed, the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
   Replay clip).
 - **Quality:** with **Auto** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
   the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay exact.
@@ -138,7 +141,7 @@ recorder by itself. Settings and recordings stay.
   on, and Replay starts again.
 - **Closing the lid** saves the recording; it goes on when you open the lid.
 - **One recording, not many** (from version 1.3): when the recorder pauses a recording by itself (an applet, the
-  lid), the parts become one recording again while 3DS Recorder is open (*Joining recordings*); a pause shows as half
+  lid), the parts become one recording again while 3DS Recorder is open, also with the lid closed (*Joining recordings*); a pause shows as half
   a second of the last picture. Recordings you stop yourself stay separate.
 - **If the power is cut** (battery, crash), the recording is recovered the next time you open the app.
 - **Long recordings** continue in a new file every 4 GB or every hour (a 1–2 second gap): the SD card's FAT32 limit.
@@ -321,7 +324,11 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   консоль робить `.mp4`, яке відтворюється будь-де, поки відкритий додаток. Там лише `.r3d`? Перетягніть його на
   [сторінку конвертера](https://bolgarmaxym97.github.io/3ds-recorder/): MP4 зробить браузер, файл нікуди не
   вивантажується. (`.r3d` — власний формат цього рекордера, не RED: відеоредактори його не відкривають, беріть MP4.)
-- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, мова і
+- **Закрийте кришку — робота піде далі:** поки додаток конвертує, склеює записи чи зберігає кліпи Повтору, кришку
+  можна закрити. Екрани згаснуть, робота продовжиться, а коли все буде готово (або батарея майже сяде), консоль сама
+  засне. Вимкнути: Налаштування → **Робота з закритою кришкою** (спершу ввімкнено).
+- **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, запуск
+  з консоллю, робота з закритою кришкою, мова і
   дві комбінації кнопок (**Хоткеї**: спершу для запису, потім для збереження кліпу Повтору).
 - **Якість:** в режимі **Авто** картинка, яка змінюється вся (3D-гра в русі), зберігається як у відео — колір із половинною
   роздільністю, тому на Old 3DS обидва екрани тримають до 30 кадрів на секунду; меню, 2D-ігри й нерухомі картинки лишаються
@@ -359,7 +366,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   продовжується, а Повтор стартує знову.
 - **Закрита кришка** зберігає запис, а після відкриття він продовжується.
 - **Один запис, а не кілька** (з версії 1.3): коли рекордер сам ставить запис на паузу (аплет, кришка), частини
-  знову стають одним записом, поки відкрито 3DS Recorder («Склеюю записи»); пауза виглядає як пів секунди
+  знову стають одним записом, поки відкрито 3DS Recorder, і з закритою кришкою теж («Склеюю записи»); пауза виглядає як пів секунди
   останнього кадру. Записи, які ви зупиняєте самі, лишаються окремими.
 - **Якщо зникло живлення** (батарея, збій), запис відновиться, коли ви наступного разу відкриєте додаток.
 - **Довгі записи** продовжуються в новому файлі кожні 4 GB або щогодини (пауза 1–2 секунди): це обмеження FAT32 на SD-картці.

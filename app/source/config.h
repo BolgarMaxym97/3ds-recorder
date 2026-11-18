@@ -26,6 +26,7 @@ typedef struct {
     bool replay;      /* replay=on: the module keeps the last 30 seconds all the time (the replay buffer) */
     char replayHotkey[48]; /* replay_hotkey: saves them as a clip, e.g. X+SELECT */
     bool autostart;   /* autostart=on: the recorder starts with the console (the module sets it up: sysmod AutoApply) */
+    bool lidWork;     /* lid_work=on (the default): this app's background work goes on with the lid closed (lid.h) */
 } Config;
 
 void config_load(Config *c);

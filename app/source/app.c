@@ -43,8 +43,21 @@ static const Rect BACK_BTN = {12, 10, 22, 22};
 static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: 8 rows under a short navbar */
-enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
-static Rect set_row(int i) { return (Rect){10, 31 + i * 22.7f, 300, 20.5f}; }   /* 9 rows: down to y 233 */
+enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LID, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
+/* Settings rows: 9 fit (down to y 227); the list scrolls by whole rows to keep the focused one in
+   view, the next one peeks in at the bottom (a tap brings it up) and a thin bar on the right shows
+   where the list is. */
+#define SET_VISIBLE 9
+static int g_setFirst; /* the top row shown */
+static Rect set_row(int i) { return (Rect){10, 31 + (i - g_setFirst) * 22.0f, 300, 20.5f}; }
+static bool set_row_shown(int i) { return i >= g_setFirst && set_row(i).y < 240; }
+static void set_scroll(int focus)
+{
+    if (focus < g_setFirst)
+        g_setFirst = focus;
+    else if (focus > g_setFirst + SET_VISIBLE - 1)
+        g_setFirst = focus - (SET_VISIBLE - 1);
+}
 static const Rect SET_BACK = {10, 6, 21, 21};
 /* Hotkey screen buttons */
 static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200, 92, 28}};
@@ -697,6 +710,8 @@ static void settings_activate(App *a, int row)
         apply_setting(a, "audio", a->cfg.audio ? "off" : "on");
     else if (row == ROW_AUTOSTART)
         set_autostart(a, !a->cfg.autostart);
+    else if (row == ROW_LID)
+        apply_setting(a, "lid_work", a->cfg.lidWork ? "off" : "on");
     else if (row == ROW_HOTKEY)
         open_hotkey(a);
     else if (row == ROW_UNINSTALL) {
@@ -942,11 +957,19 @@ static void update_settings(App *a, const Input *in)
         apply_setting(a, "audio", (d & KEY_DRIGHT) ? "on" : "off");
     if (a->focus == ROW_AUTOSTART && (d & (KEY_DLEFT | KEY_DRIGHT)))
         set_autostart(a, (d & KEY_DRIGHT) != 0);
+    if (a->focus == ROW_LID && (d & (KEY_DLEFT | KEY_DRIGHT)) && ((d & KEY_DRIGHT) != 0) != a->cfg.lidWork)
+        apply_setting(a, "lid_work", (d & KEY_DRIGHT) ? "on" : "off");
     if (d & KEY_A)
         settings_activate(a, a->focus);
+    set_scroll(a->focus);
     for (int r = 0; r < SET_ROWS && in->tapped; r++) {
+        if (!set_row_shown(r))
+            continue;
         const Rect row = set_row(r);
-        if (row_seg(a, r, &g)) {
+        if (row.y + row.h > 240) { /* the row peeking in at the bottom: a tap brings it into view */
+            if (hit(row, in))
+                a->focus = r;
+        } else if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
             seg_layout(row, g.labels, g.n, opt);
             for (int i = 0; i < g.n; i++)
@@ -1778,6 +1801,8 @@ static void draw_settings_top(App *a)
     stat_card(138 + w, 96, w, T(S_FITS), s3, NULL);
     if (a->focus == ROW_AUTOSTART)   /* what the switch does, while it is the row in focus */
         snprintf(note, sizeof(note), "%s", T(S_AUTOSTART_NOTE));
+    else if (a->focus == ROW_LID)
+        snprintf(note, sizeof(note), "%s", T(S_LID_WORK_NOTE));
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     const float h = ui_text_wrap_height(234, 9, FONT_REG, note) + 14;
@@ -2173,8 +2198,11 @@ static void draw_settings_bottom(App *a)
     ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
     ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
     ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_SETTINGS));
-    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
+    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LID_WORK, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
+    set_scroll(a->focus);
     for (int r = 0; r < SET_ROWS; r++) {
+        if (!set_row_shown(r))
+            continue;
         const Rect row = set_row(r);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
@@ -2194,8 +2222,9 @@ static void draw_settings_bottom(App *a)
                 if (dis)
                     ui_rect(opt[i].x + opt[i].w / 2 - tw / 2, opt[i].y + opt[i].h / 2, tw, 1, COL_FAINT);
             }
-        } else if (r == ROW_SOUND || r == ROW_AUTOSTART)
-            ui_toggle(row.x + row.w - 37, row.y + 1.25f, r == ROW_SOUND ? a->cfg.audio : a->cfg.autostart);
+        } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID)
+            ui_toggle(row.x + row.w - 37, row.y + 1.25f,
+                      r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart : a->cfg.lidWork);
         else if (r == ROW_HOTKEY) {
             /* the recording hotkey, then the replay one */
             const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
@@ -2210,6 +2239,8 @@ static void draw_settings_bottom(App *a)
         if (r == a->focus)
             focus_ring(row, 6);
     }
+    const float track = 240 - 31 - 4, thumb = track * SET_VISIBLE / SET_ROWS;
+    ui_rrect(313, 31 + (track - thumb) * g_setFirst / (SET_ROWS - SET_VISIBLE), 3, thumb, 1.5f, COL_TRACK);
 }
 
 static void draw_hotkey_bottom(App *a)
