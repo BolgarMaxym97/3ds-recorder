@@ -843,7 +843,12 @@ static int video_open(PrepJob *j)
     cp.height = j->H;
     cp.gop = PREP_GOP;
     cp.const_input_flag = 1;   /* the picture buffer goes back to the producer as it was */
-    cp.max_threads = 1;        /* the other core makes the pictures */
+    /* one slice: the other core makes the pictures; more where the caller runs them (opt.runJobs) */
+    cp.max_threads = j->opt.runJobs && j->opt.threads > 1 ? (j->opt.threads < 4 ? j->opt.threads : 4) : 1;
+    if (cp.max_threads > 1) {
+        cp.run_func_in_thread = j->opt.runJobs;
+        cp.token = j->opt.runToken;
+    }
     int sp = 0, ss = 0;
     if (H264E_sizeof(&cp, &sp, &ss))
         return fail(j, "H.264 encoder: bad size");

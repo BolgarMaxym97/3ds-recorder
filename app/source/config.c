@@ -48,6 +48,7 @@ void config_load(Config *c)
     c->replay = false;
     c->autostart = false;
     c->lidWork = true;
+    c->mp4Slices = true;
     snprintf(c->replayHotkey, sizeof(c->replayHotkey), "X+SELECT");   /* the module's default too */
     static char buf[MAX_FILE];
     if (!ReadAll(buf, sizeof(buf)))
@@ -89,6 +90,8 @@ void config_load(Config *c)
             c->autostart = strcasecmp(v, "on") == 0;
         else if (strcasecmp(line, "lid_work") == 0)
             c->lidWork = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(line, "mp4_threads") == 0)
+            c->mp4Slices = strcmp(v, "1") != 0;
         else if (strcasecmp(line, "replay_hotkey") == 0 && *v)
             snprintf(c->replayHotkey, sizeof(c->replayHotkey), "%s", v);
         else if (strcasecmp(line, "guide") == 0)

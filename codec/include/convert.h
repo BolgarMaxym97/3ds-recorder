@@ -37,6 +37,17 @@ uint32_t fb_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format,
 /* One column of `rows` pixels to RGB565 (step 1). Returns 0 for an unknown format. */
 int fb_column_to_rgb565(uint16_t *dst, const uint8_t *src, uint32_t format, uint32_t rows);
 
+#ifdef __3DS__
+/* A BGR8 column in ARM assembly for the ARM11 (codec/source/convert_arm.s): the same pixels as
+   fb_column_to_rgb565(dst, src, FB_BGR8, rows). Only where fb_column_bgr8_arm_fits(); the recorder
+   also checks it against the C one first. */
+void fb_column_bgr8_arm(uint16_t *dst, const uint8_t *src, uint32_t rows);
+static inline int fb_column_bgr8_arm_fits(const uint16_t *dst, const uint8_t *src, uint32_t rows)
+{
+    return (rows & 3u) == 0 && (((uintptr_t)dst | (uintptr_t)src) & 3u) == 0;
+}
+#endif
+
 static inline uint32_t fb_out_bytes(uint32_t cols, uint32_t rows, uint32_t step)
 {
     return (cols / step) * (rows / step) * 2u;

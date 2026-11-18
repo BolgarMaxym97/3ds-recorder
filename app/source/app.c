@@ -328,7 +328,7 @@ void app_init(App *a, const char *selfPath)
     if (g_lastTexOk)
         C3D_TexSetFilter(&g_lastTex, GPU_LINEAR, GPU_LINEAR);
     g_info = threadCreate(info_main, NULL, 16 * 1024, prio + 2, -2, false);
-    prepare_start(n3ds); /* recordings become MP4s for the phone in the background */
+    prepare_start(n3ds, n3ds && a->cfg.mp4Slices); /* recordings become MP4s for the phone in the background */
     /* The recorder starts with the app. Only when Luma cannot load it does the first-run
        screen come up, to say what to change. */
     /* After an app update the running module is the older one: it is restarted with the new one

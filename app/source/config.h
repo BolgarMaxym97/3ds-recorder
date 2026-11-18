@@ -27,6 +27,7 @@ typedef struct {
     char replayHotkey[48]; /* replay_hotkey: saves them as a clip, e.g. X+SELECT */
     bool autostart;   /* autostart=on: the recorder starts with the console (the module sets it up: sysmod AutoApply) */
     bool lidWork;     /* lid_work=on (the default): this app's background work goes on with the lid closed (lid.h) */
+    bool mp4Slices;   /* mp4_threads=1 (not in the app) turns it off: a New 3DS encodes MP4s on two cores (prepare.c) */
 } Config;
 
 void config_load(Config *c);

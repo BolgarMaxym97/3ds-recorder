@@ -20,7 +20,8 @@ typedef enum {
 
 enum { PREP_HOLD_PLAYER = 1, PREP_HOLD_SEND = 2 };
 
-void prepare_start(bool new3ds);
+/* slices: the H.264 encoder's second half of each picture on core 2 (New 3DS; config mp4_threads) */
+void prepare_start(bool new3ds, bool slices);
 void prepare_stop(void);
 /* PREP_HOLD_* bits: work pauses while any is set. */
 void prepare_hold(u32 bit, bool on);

@@ -148,6 +148,16 @@ size_t codec_c420_encode_conv(const uint8_t *src, uint32_t cols, uint32_t rows, 
    A, B, G, R). HOME Menu and many games draw in BGR8. Returns the size. */
 size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint32_t bpp,
                              uint8_t *out);
+#ifdef __3DS__
+/* BGR8 (bpp 3) in ARM assembly for the ARM11 (codec/source/c420_arm.s): the same bytes, about twice as
+   fast. Only where codec_c420_arm_fits(); the recorder also checks it against the C one first. (RGB565 in
+   ARM assembly was no faster than codec_c420_encode on an Old 3DS: the memory, not the instructions.) */
+size_t codec_c420_encode_bgr8_arm(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out);
+static inline int codec_c420_arm_fits(const uint8_t *src, uint32_t rows, uint32_t stride, const uint8_t *out)
+{
+    return (rows & 3u) == 0 && (((uintptr_t)src | stride | (uintptr_t)out) & 3u) == 0;
+}
+#endif
 /* Decodes into `frame` (cols x rows words, packed column by column). 0, or -1 on a wrong size. */
 int codec_c420_decode(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows);
 /* The same with column c at frame + c * stride words (the player's textures: no copy). */
