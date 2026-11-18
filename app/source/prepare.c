@@ -651,6 +651,44 @@ static void writer_main(void *arg)
     }
 }
 
+/* New 3DS: the H.264 encoder's second slice of each picture (PrepOptions.runJobs) on core 2, where the
+   producer leaves about half the time idle (New 3DS XL logs, 2026-11-14: H.264 863 of 1138 s on this
+   core, the producer waiting 583 s). Above the producer there; this core waits for it per picture. */
+static Thread g_slicer;
+static LightEvent g_sgo, g_sdone;
+static void (*volatile g_sliceJob)(void *);
+static void *volatile g_sliceData;
+
+static void slicer_main(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        LightEvent_Wait(&g_sgo);
+        if (g_helperQuit)
+            return;
+        g_sliceJob(g_sliceData);
+        LightEvent_Signal(&g_sdone);
+    }
+}
+
+/* minih264's run_func_in_thread: job 1 on the slicer, the rest here; back when all are done */
+static void run_jobs(void *token, void (*job)(void *), void *data[], int n)
+{
+    (void)token;
+    if (n < 2 || !g_slicer) {
+        for (int i = 0; i < n; i++)
+            job(data[i]);
+        return;
+    }
+    g_sliceJob = job;
+    g_sliceData = data[1];
+    LightEvent_Signal(&g_sgo);
+    job(data[0]);
+    for (int i = 2; i < n; i++)
+        job(data[i]);
+    LightEvent_Wait(&g_sdone);
+}
+
 static void job_start(PrepJob *job)
 {
     LightEvent_Clear(&g_done);
@@ -742,7 +780,7 @@ static void tune(PrepJob *job, Tune *t, const char *name)
 static void thread_main(void *arg)
 {
     (void)arg;
-    const PrepOptions opt = {0, 0, now_us, sleep_us};
+    const PrepOptions opt = {0, 0, now_us, sleep_us, g_slicer ? 2 : 1, run_jobs, NULL};
     PrepJob *job = NULL;
     char name[20] = "";
     u64 scanned = 0, clipLook = 0, joinLook = 0;
@@ -860,7 +898,7 @@ static void on_apt(APT_HookType hook, void *param)
         g_suspended = false;
 }
 
-void prepare_start(bool new3ds)
+void prepare_start(bool new3ds, bool slices)
 {
     if (g_thread)
         return;
@@ -902,9 +940,15 @@ void prepare_start(bool new3ds)
         APT_SetAppCpuTimeLimit(CORE1_IDLE);
     aptHook(&g_hook, on_apt, NULL);
     g_writer = threadCreate(writer_main, NULL, 16 * 1024, prio + 2, -2, false);
+    if (slices && core == 2) {   /* only next to the producer on core 2 (not where it fell back to core 1) */
+        LightEvent_Init(&g_sgo, RESET_ONESHOT);
+        LightEvent_Init(&g_sdone, RESET_ONESHOT);
+        g_slicer = threadCreate(slicer_main, NULL, 32 * 1024, prio + 2, 2, false);
+    }
     g_thread = g_helper && g_writer ? threadCreate(thread_main, NULL, 64 * 1024, prio + 3, -2, false) : NULL;
     if (new3ds)
-        app_log("prepare: started, producer on core %d", core);
+        app_log("prepare: started, producer on core %d, H.264 %s", core,
+                g_slicer ? "in two slices (the second on core 2)" : slices ? "on one core (no thread on core 2)" : "on one core (mp4_threads=1)");
     else
         app_log("prepare: started, producer on core %d, core 1 share %s up to %d%%", core,
                 g_limitSet ? "set" : "refused", g_shareGot);
@@ -931,6 +975,12 @@ void prepare_stop(void)
         threadJoin(g_writer, U64_MAX);
         threadFree(g_writer);
         g_writer = NULL;
+    }
+    if (g_slicer) {   /* the encoder (thread_main) has returned: no slice is running */
+        LightEvent_Signal(&g_sgo);
+        threadJoin(g_slicer, U64_MAX);
+        threadFree(g_slicer);
+        g_slicer = NULL;
     }
     if (g_limitSet && g_oldLimit)
         APT_SetAppCpuTimeLimit(g_oldLimit);

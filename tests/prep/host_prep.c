@@ -1,8 +1,9 @@
 /*
  * Runs prep/ (the console's "prepare for the phone") on a PC: the producer and the writer on
  * their own threads, the consumer here, as the app does.
- * Usage: host_prep <file.r3d> <out base> [--interrupt N]
+ * Usage: host_prep <file.r3d> <out base> [--interrupt N] [--threads N]
  *   --interrupt N: abort and reopen the job every N consumer calls (resume test)
+ *   --threads N:   H.264 in N slices at once (PrepOptions.threads; the New 3DS app uses 2)
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -31,6 +32,30 @@ static void *producer(void *job)
     return NULL;
 }
 
+/* PrepOptions.runJobs: job 0 here, the others on threads of their own, as the app runs job 1 on a
+   second core */
+typedef struct { void (*job)(void *); void *data; } Slice;
+static void *slice_main(void *arg)
+{
+    Slice *s = arg;
+    s->job(s->data);
+    return NULL;
+}
+static void run_jobs(void *token, void (*job)(void *), void *data[], int n)
+{
+    (void)token;
+    pthread_t t[4];
+    Slice sl[4];
+    for (int i = 1; i < n && i < 4; i++) {
+        sl[i].job = job;
+        sl[i].data = data[i];
+        pthread_create(&t[i], NULL, slice_main, &sl[i]);
+    }
+    job(data[0]);
+    for (int i = 1; i < n && i < 4; i++)
+        pthread_join(t[i], NULL);
+}
+
 static void *writer(void *job)
 {
     prep_write(job);
@@ -43,8 +68,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <file.r3d> <out base> [--interrupt N]\n", argv[0]);
         return 2;
     }
-    const int every = argc > 4 && !strcmp(argv[3], "--interrupt") ? atoi(argv[4]) : 0;
-    PrepOptions o = {0, 0, now_us, sleep_us};
+    int every = 0, threads = 1;
+    for (int i = 3; i + 1 < argc; i += 2) {
+        if (!strcmp(argv[i], "--interrupt"))
+            every = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--threads"))
+            threads = atoi(argv[i + 1]);
+    }
+    PrepOptions o = {0, 0, now_us, sleep_us, threads, run_jobs, NULL};
     char err[128];
     int opens = 0, r = PREP_MORE;
     const uint64_t t0 = now_us();

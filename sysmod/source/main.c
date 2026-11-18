@@ -191,6 +191,9 @@ typedef struct {
     s8 o3dsCore;        /* o3ds_core=0 or 1 (a test, not in the app): the Old 3DS converter always on that core; -1 auto */
     u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
+    /* n3ds_boost=off (not in the app): a New 3DS records at the speed the running program chose, no
+       804 MHz + L2 (CpuBoost); for a game that misbehaves while recording (a report's next step) */
+    bool n3dsBoost;
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
     bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
     u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
@@ -198,7 +201,7 @@ typedef struct {
 } Config;
 
 static Config g_cfg = { .o3dsCore = -1, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
-                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .codecArm = -1, .bench = false, .abTest = false,
+                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .codecArm = -1, .bench = false, .n3dsBoost = true, .abTest = false,
                         .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
                         .n3dsTest = true,
@@ -720,6 +723,8 @@ static void LoadConfig(void)
             g_cfg.n3dsTest = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "sd_limit_kb") == 0)
             g_cfg.sdLimitKb = (u32)atoi(v);
+        else if (strcasecmp(p, "n3ds_boost") == 0)
+            g_cfg.n3dsBoost = strcasecmp(v, "off") != 0;
         else if (strcasecmp(p, "codec_bench") == 0)
             g_cfg.bench = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "ab_test") == 0)
@@ -5212,6 +5217,14 @@ static void CpuBoost(bool on)
 {
     if (!g_ptmSysm)
         return;
+    if (on && !g_cfg.n3dsBoost)
+    {
+        static bool said;
+        if (!said)
+            Log("processor speed left as the program set it (n3ds_boost=off): %s", CpuState());
+        said = true;
+        return;
+    }
     if (on && g_cpuBefore < 0)
     {
         g_cpuWait = FrontQuiet();

@@ -42,6 +42,12 @@ typedef struct {
     int audioKbps;           /* 0: 96 */
     uint64_t (*nowUs)(void); /* a clock for prep_stats (optional) */
     void (*sleepUs)(uint32_t us); /* waits on the queue (required) */
+    /* H.264 in `threads` slices of each picture at once (2..4; 0 or 1: one, as before): runJobs runs
+       job(data[i]) for every i < n and returns when all are done, some of them on other threads
+       (the app: a second core). The picture is the same, cut in slices (a few bytes more). */
+    int threads;
+    void (*runJobs)(void *token, void (*job)(void *), void *data[], int n);
+    void *runToken;
 } PrepOptions;
 
 typedef struct {
