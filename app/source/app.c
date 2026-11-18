@@ -12,6 +12,7 @@
 #include "prepare.h"
 #include "qrcodegen.h"
 #include "server.h"
+#include "stats.h"
 #include "ui.h"
 
 /* ------------------------------------------------------------------ layout helpers */
@@ -43,7 +44,7 @@ static const Rect BACK_BTN = {12, 10, 22, 22};
 static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: 8 rows under a short navbar */
-enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LID, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
+enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LID, ROW_STATS, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
 /* Settings rows: 9 fit (down to y 227); the list scrolls by whole rows to keep the focused one in
    view, the next one peeks in at the bottom (a tap brings it up) and a thin bar on the right shows
    where the list is. */
@@ -329,6 +330,7 @@ void app_init(App *a, const char *selfPath)
         C3D_TexSetFilter(&g_lastTex, GPU_LINEAR, GPU_LINEAR);
     g_info = threadCreate(info_main, NULL, 16 * 1024, prio + 2, -2, false);
     prepare_start(n3ds, n3ds && a->cfg.mp4Slices); /* recordings become MP4s for the phone in the background */
+    stats_start(a->cfg.stats); /* new log lines to the developer, quietly (stats.h) */
     /* The recorder starts with the app. Only when Luma cannot load it does the first-run
        screen come up, to say what to change. */
     /* After an app update the running module is the older one: it is restarted with the new one
@@ -383,6 +385,7 @@ void app_exit(App *a)
         threadFree(g_info);
         g_info = NULL;
     }
+    stats_stop();
     prepare_stop(); /* the job keeps its resume point */
 }
 
@@ -701,6 +704,14 @@ static void set_autostart(App *a, bool on)
         say(a, T(S_MSG_AUTO_OFF));
 }
 
+static void set_stats(App *a, bool on)
+{
+    if (on == a->cfg.stats)
+        return;
+    apply_setting(a, "stats", on ? "on" : "off");
+    stats_set_enabled(on); /* on again: from the next launch */
+}
+
 static void settings_activate(App *a, int row)
 {
     Seg g;
@@ -712,6 +723,8 @@ static void settings_activate(App *a, int row)
         set_autostart(a, !a->cfg.autostart);
     else if (row == ROW_LID)
         apply_setting(a, "lid_work", a->cfg.lidWork ? "off" : "on");
+    else if (row == ROW_STATS)
+        set_stats(a, !a->cfg.stats);
     else if (row == ROW_HOTKEY)
         open_hotkey(a);
     else if (row == ROW_UNINSTALL) {
@@ -959,6 +972,8 @@ static void update_settings(App *a, const Input *in)
         set_autostart(a, (d & KEY_DRIGHT) != 0);
     if (a->focus == ROW_LID && (d & (KEY_DLEFT | KEY_DRIGHT)) && ((d & KEY_DRIGHT) != 0) != a->cfg.lidWork)
         apply_setting(a, "lid_work", (d & KEY_DRIGHT) ? "on" : "off");
+    if (a->focus == ROW_STATS && (d & (KEY_DLEFT | KEY_DRIGHT)))
+        set_stats(a, (d & KEY_DRIGHT) != 0);
     if (d & KEY_A)
         settings_activate(a, a->focus);
     set_scroll(a->focus);
@@ -1803,6 +1818,8 @@ static void draw_settings_top(App *a)
         snprintf(note, sizeof(note), "%s", T(S_AUTOSTART_NOTE));
     else if (a->focus == ROW_LID)
         snprintf(note, sizeof(note), "%s", T(S_LID_WORK_NOTE));
+    else if (a->focus == ROW_STATS)
+        snprintf(note, sizeof(note), T(S_STATS_NOTE), stats_id());
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     const float h = ui_text_wrap_height(234, 9, FONT_REG, note) + 14;
@@ -2198,7 +2215,7 @@ static void draw_settings_bottom(App *a)
     ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
     ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
     ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_SETTINGS));
-    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LID_WORK, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
+    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LID_WORK, S_STATS, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
     set_scroll(a->focus);
     for (int r = 0; r < SET_ROWS; r++) {
         if (!set_row_shown(r))
@@ -2222,9 +2239,11 @@ static void draw_settings_bottom(App *a)
                 if (dis)
                     ui_rect(opt[i].x + opt[i].w / 2 - tw / 2, opt[i].y + opt[i].h / 2, tw, 1, COL_FAINT);
             }
-        } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID)
+        } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID || r == ROW_STATS)
             ui_toggle(row.x + row.w - 37, row.y + 1.25f,
-                      r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart : a->cfg.lidWork);
+                      r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart
+                                                     : r == ROW_LID      ? a->cfg.lidWork
+                                                                         : a->cfg.stats);
         else if (r == ROW_HOTKEY) {
             /* the recording hotkey, then the replay one */
             const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
