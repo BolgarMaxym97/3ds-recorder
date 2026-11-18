@@ -188,7 +188,8 @@ AccessControlInfo:
   InterruptNumbers:
 
   # What the app calls: APT, fs (SD), gsp + hid (screens, buttons, touch), pm:app (start /
-  # stop the recorder module), am:u (the CIA removes itself on uninstall), mcu::HWC (LED test).
+  # stop the recorder module), am:u (the CIA removes itself on uninstall), mcu::HWC (LED test),
+  # ptm:u (the lid and the battery: lid.c).
   ServiceAccessControl:
     - APT:U
     - fs:USER
@@ -201,3 +202,4 @@ AccessControlInfo:
     - dsp::DSP
     - soc:U
     - ac:u
+    - ptm:u   # the lid (shell) state and the battery: work goes on with the lid closed (lid.c)

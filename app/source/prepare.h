@@ -45,6 +45,9 @@ int prepare_joins(int *permille);
 bool prepare_join_failed(const char *next);
 /* A recording is being encoded right now (the UI then draws less often: it shares the core). */
 bool prepare_busy(void);
+/* How long the thread has had nothing to do (no clip, join or MP4 left, or held), ms; 0 while it
+   works; UINT32_MAX when it does not run. */
+u32 prepare_idle_ms(void);
 /* "sdmc:/3ds/recorder/recordings/<stem>.<ext>" */
 void prepare_path(char *out, size_t n, const char *name, const char *ext);
 

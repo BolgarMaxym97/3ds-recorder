@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "lid.h"
 #include "prepare.h"
 #include "recorder.h"
 #include "ui.h"
@@ -103,6 +104,7 @@ int main(int argc, char **argv)
     static App app;
     const bool ready = top && bottom && ui_init();
     app_init(&app, self);
+    lid_init();
 
     bool touching = false, dragged = false;
     u32 idle = 0, skipped = 0; /* frames without input; frames not drawn since the last drawn one */
@@ -128,6 +130,10 @@ int main(int argc, char **argv)
             in.tap_y = last.py;
         }
         app_update(&app, &in);
+        if (lid_step(app.cfg.lidWork)) { /* the lid is closed: the screens are dark, the work goes on (lid.h) */
+            svcSleepThread(50 * 1000 * 1000);
+            continue;
+        }
         idle = in.down || in.held || touching || in.tapped ? 0 : idle + 1;
         /* While a recording is converted (prepare.c) and nobody touches the console, the UI draws
            3 times a second instead of 60: drawing takes much of the core the encoder runs on.
@@ -150,6 +156,7 @@ int main(int argc, char **argv)
         C3D_FrameEnd(0);
     }
 
+    lid_exit();
     app_exit(&app);
     ui_exit();
     C2D_Fini();

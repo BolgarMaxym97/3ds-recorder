@@ -41,6 +41,7 @@ static u32 g_oldLimit;
 static bool g_limitSet;
 static int g_shareGot;
 static volatile bool g_busy;        /* a job is open and not held */
+static volatile u64 g_idleSince;    /* nothing to do (or held) since then, ms; 0 while working */
 #define CORE1_IDLE 5     /* % of core 1 with no job: the least APT takes (0 is refused, E0E01BF4) */
 #define CORE1_HELD 5     /* a job open but held: the producer must still reach its wait (a thread
                             frozen inside malloc or a file call would block the others) */
@@ -609,6 +610,12 @@ static bool join_one(void)
     return true;
 }
 
+static void mark_idle(void)
+{
+    if (!g_idleSince)
+        g_idleSince = osGetTime();
+}
+
 static void sleep_us(u32 us)
 {
     svcSleepThread((s64)us * 1000);
@@ -746,12 +753,14 @@ static void thread_main(void *arg)
             continue;
         }
         if (held()) { /* the producer stops by itself once the queue is full */
+            mark_idle();
             set_busy(false);
             svcSleepThread(200 * 1000 * 1000);
             continue;
         }
         if (!job && osGetTime() - clipLook > 5000) { /* clips first: they are recordings only after this */
             if (unwrap_clip()) {
+                g_idleSince = 0;
                 scanned = 0;
                 continue;
             }
@@ -759,6 +768,7 @@ static void thread_main(void *arg)
         }
         if (!job && osGetTime() - joinLook > 5000) { /* then continuations: one recording before its MP4 */
             if (join_one()) {
+                g_idleSince = 0;
                 scanned = 0;
                 continue;
             }
@@ -770,10 +780,12 @@ static void thread_main(void *arg)
         }
         if (!job) {
             if (!pick(name)) {
+                mark_idle();
                 set_busy(false);
                 svcSleepThread(500 * 1000 * 1000);
                 continue;
             }
+            g_idleSince = 0;
             char src[96], base[96], err[128];
             prepare_path(src, sizeof(src), name, "r3d");
             base_of(base, sizeof(base), name);
@@ -928,6 +940,14 @@ void prepare_stop(void)
 bool prepare_busy(void)
 {
     return g_busy;
+}
+
+u32 prepare_idle_ms(void)
+{
+    const u64 since = g_idleSince;
+    if (!g_thread)
+        return UINT32_MAX;
+    return since ? (u32)(osGetTime() - since) : 0;
 }
 
 void prepare_hold(u32 bit, bool on)
