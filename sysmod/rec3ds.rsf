@@ -110,6 +110,7 @@ AccessControlInfo:
     - mcu::HWC
     - ptm:u   # the lid (shell) state: no screen reads while the console sleeps
     - ptm:sysm # New 3DS: 804 MHz + L2 while recording (CpuBoost)
+    - APT:U    # the applet in front: the game back after HOME (no plugin of ours there)
   FileSystemAccess:
     - DirectSdmc
     - DirectSdmcWrite

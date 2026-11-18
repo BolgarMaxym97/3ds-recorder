@@ -391,6 +391,8 @@
       this.done = false;
       this.emitted = 0;
       this.lastUs = 0;
+      this.endUs = 0;        // the end record's time (the recording's length)
+      this.lastFrameUs = 0;  // vfr: the last frame's time
       this.lastWritten = null;
     }
 
@@ -429,7 +431,8 @@
           magic: d.getUint32(p, true), len: d.getUint32(p + 4, true), timeUs: d.getUint32(p + 8, true),
           screen: d.getUint8(p + 12), srcFormat: d.getUint8(p + 13), cols: d.getUint16(p + 14, true),
         };
-        if (h.magic === M.END) { this.done = true; break; }
+        // the end record's time is the recording's length (a still, silent tail included, as prep.c reads it)
+        if (h.magic === M.END) { if (h.timeUs > this.endUs) this.endUs = h.timeUs; this.done = true; break; }
         const delta = h.magic === M.XFRAME || h.magic === M.YFRAME || h.magic === M.HFRAME || h.magic === M.QFRAME ||
           h.magic === M.CFRAME;
         const known = delta || h.magic === M.FRAME || h.magic === M.PAD || h.magic === M.AUDIO || h.magic === M.DSPMEM;
@@ -494,7 +497,7 @@
           this.emitted++;
         }
       }
-      this.lastUs = h.timeUs;
+      if (h.timeUs > this.lastUs) this.lastUs = h.timeUs;
       const key = (h.screen & SCREEN_KEY) !== 0;
       let ok;
       if (h.magic === M.FRAME) {
@@ -522,6 +525,7 @@
 
     emitVfr() {
       this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture, this.dirtySince);
+      this.lastFrameUs = this.dirtySince;
       this.emitted++;
       this.dirty = false;
     }
@@ -573,8 +577,21 @@
       this.done = true;
       if (!this.hdr) return;
       if (this.vfr && this.dirty) this.emitVfr();
-      if (this.hdr.audio) this.silence(this.placer.padTo(this.lastUs));
-      this.cb.onEnd && this.cb.onEnd({ frames: this.emitted, seconds: this.lastUs / 1e6, audioSamples: this.audioSamples });
+      const endUs = Math.max(this.lastUs, this.endUs || 0);
+      const frameUs = 1000000 / this.hdr.fps;
+      if (this.vfr) { // the last picture held to the end: one more frame near it
+        if (this.emitted && endUs - frameUs > (this.lastFrameUs || 0) + frameUs) {
+          this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture, endUs - frameUs);
+          this.emitted++;
+        }
+      } else {
+        while (this.emitted && this.emitted * frameUs < endUs) {
+          this.cb.onFrame && this.cb.onFrame(this.rgba, this.emitted, this.picture);
+          this.emitted++;
+        }
+      }
+      if (this.hdr.audio) this.silence(this.placer.padTo(endUs));
+      this.cb.onEnd && this.cb.onEnd({ frames: this.emitted, seconds: endUs / 1e6, audioSamples: this.audioSamples });
     }
   }
 

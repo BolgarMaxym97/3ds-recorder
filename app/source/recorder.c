@@ -20,18 +20,26 @@ Result svcUnmapProcessMemoryEx(Handle process, u32 destAddress, u32 size);
 static FS_Archive g_sd;
 
 static LightLock g_logLock;   /* the UI, server and conversion threads all log */
+static LightLock g_mapLock;   /* MAP_VA is one page: one thread maps the module's shared page at a time */
 static char g_about[256];
 
 void recorder_init(FS_Archive sd)
 {
     g_sd = sd;
     LightLock_Init(&g_logLock);
+    LightLock_Init(&g_mapLock);
 }
 FS_Archive recorder_archive(void) { return g_sd; }
+
+static volatile bool g_logOff;   /* uninstall: app.log is gone and must not come back */
 
 void app_log(const char *fmt, ...)
 {
     LightLock_Lock(&g_logLock);
+    if (g_logOff) { /* under the lock: a line being written finishes before app.log goes */
+        LightLock_Unlock(&g_logLock);
+        return;
+    }
     FILE *f = fopen(REC_APP_LOG, "a");
     if (!f) {
         LightLock_Unlock(&g_logLock);
@@ -157,19 +165,27 @@ static bool FindShared(Handle module)
     return false;
 }
 
-/* Maps the module's shared page at MAP_VA; caller unmaps. */
+/* Maps the module's shared page at MAP_VA; caller unmaps (UnmapShared), which also lets the next
+   thread map it. Two threads at once (prepare's status every 2 s, the UI, the worker's stop): the
+   loser got NULL and a command such as REC_CMD_EXIT was lost. */
 static volatile RecShared *MapShared(Handle module)
 {
+    LightLock_Lock(&g_mapLock);
     MemInfo mi;
     PageInfo pi;
-    if (R_FAILED(svcQueryMemory(&mi, &pi, MAP_VA)) || mi.state != MEMSTATE_FREE)
+    if (R_FAILED(svcQueryMemory(&mi, &pi, MAP_VA)) || mi.state != MEMSTATE_FREE ||
+        (!MapPage(module, g_sharedVa) && !FindShared(module))) {
+        LightLock_Unlock(&g_mapLock);
         return NULL;
-    if (!MapPage(module, g_sharedVa) && !FindShared(module))
-        return NULL;
+    }
     return (volatile RecShared *)MAP_VA;
 }
 
-static void UnmapShared(void) { svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000); }
+static void UnmapShared(void)
+{
+    svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, MAP_VA, 0x1000);
+    LightLock_Unlock(&g_mapLock);
+}
 
 bool recorder_take_system_stop(char *name, size_t cap, bool *game)
 {
@@ -546,11 +562,18 @@ bool recorder_uninstall(bool recordings, const char *selfPath)
     RemoveLauncherOrder();
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_CXI_FS));
     FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, REC_DIR_FS "/config.ini"));
+    LightLock_Lock(&g_logLock);
+    g_logOff = true;
+    LightLock_Unlock(&g_logLock);
     static const char *const files[] = {REC_DIR_FS "/recorder.log", REC_DIR_FS "/recorder.old.log", REC_DIR_FS "/.system_stop",
                                         REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log",
                                         REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on",
                                         REC_DIR_FS "/.autostart", REC_DIR_FS "/.boot_try", REC_DIR_FS "/.autostart_failed",
-                                        REC_FILES_FS "/.next.tmp", REC_FILES_FS "/.next.info"};
+                                        REC_DIR_FS "/no_launcher.txt", REC_DIR_FS "/.launcher_try",
+                                        REC_FILES_FS "/.next.tmp", REC_FILES_FS "/.next.info",
+                                        /* the replay buffer's 2 x 256 MB: the module removes them only when it exits
+                                           cleanly (not after a power-off, nor when it was not running) */
+                                        REC_FILES_FS "/.replay0.tmp", REC_FILES_FS "/.replay1.tmp"};
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, files[i]));
     if (recordings)
@@ -574,5 +597,8 @@ bool recorder_uninstall(bool recordings, const char *selfPath)
         } else
             appLeft = true;
     }
-    return !appLeft && !FileExists(REC_CXI_FS);
+    const bool ok = !appLeft && !FileExists(REC_CXI_FS);
+    if (!ok) /* the app stays: its log too */
+        g_logOff = false;
+    return ok;
 }

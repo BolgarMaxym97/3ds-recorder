@@ -108,13 +108,25 @@ static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LIT
 #define MAX_REC_US      3600000000ull  /* a recording goes on in a new file after an hour: timeUs (32 bits) wraps at 71.6 min */
 #define KEEP_FREE      (4u * MB)      /* never leave less SYSTEM memory than this */
 #define KEEP_FREE_LITE (1u * MB)      /* the same in an extended-memory game (Old 3DS): no applets open there */
-#define LITE_BELOW     (12u * MB)     /* SYSTEM free under this at start: the light profile (normally ~23 MB) */
+/* The normal profile (a recording or the replay buffer goes on in HOME): HOME Menu takes ~6 MB when
+   it opens (O3DS 2026-11-08). With KEEP_FREE it crashed: MH3G with a CTRPF plugin (5 MB) and the
+   replay buffer left 5.9 MB (menu data abort, issue #7, O3DS 2026-11-17); 11 MB was fine. */
+#define KEEP_FREE_HOME (8u * MB)
+/* SYSTEM free under this at start: the light profile (normally ~23 MB). Above KEEP_FREE_HOME + a
+   normal start's ~5.2 MB (arena, reference frames, audio queue, the smallest ring): at 12 MB a
+   start between 12 and ~13.5 MB free was refused once KEEP_FREE_HOME became 8 MB. */
+#define LITE_BELOW     (14u * MB)
 /* Light profile ring: HOME Menu takes ~6 MB of the ~7.4 MB an extended-memory game leaves, as soon as
    0.15 s after the button (O3DS 2026-11-08). The capture buffers go back at once on HOME; the ring
    only after the writer's current block, so it must be small enough for HOME without it. */
 #define LITE_RING_MAX  (1u * MB)
+/* The replay buffer in an extended-memory game with no launcher plugin of ours (the no-plugin list):
+   light, in SYSTEM memory, stopped on HOME as a light recording is. MH4G left 7304 KB free, a light
+   recording took 2880 KB of it (O3DS 2026-11-17). */
+#define REPLAY_EXT_MIN (5u * MB)
+#define HOME_POLL_US   500000ull      /* APT is asked this often whether HOME Menu has left the screen */
 #define BLOCK_LITE     (128u * KB)    /* the writer's block there: the ring goes back sooner */
-#define MAX_SLOTS      6u
+#define MAX_SLOTS      9u   /* RGB565 frames: 9 fit the arena made for 6 BGR8 ones */
 #define BIG_VA         0x0C000000u
 #define REG32(a)       (*(volatile u32 *)(a))
 #define PDC_VA(screen) (0x1EF00400u + 0x100u * (screen))
@@ -172,6 +184,7 @@ typedef struct {
        each recording takes the next of TEST_VARS (codec, cores). One session of a tester's gives
        what the New 3DS defaults need. */
     bool n3dsTest;
+    s8 o3dsCore;        /* o3ds_core=0 or 1 (a test, not in the app): the Old 3DS converter always on that core; -1 auto */
     u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
@@ -180,7 +193,7 @@ typedef struct {
     bool autostart;  /* autostart=on: the recorder starts with the console (launch on startup, AutoApply) */
 } Config;
 
-static Config g_cfg = { .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
+static Config g_cfg = { .o3dsCore = -1, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
                         .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false,
                         .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
@@ -633,6 +646,7 @@ static void LoadConfig(void)
         return;
     }
     char line[128];
+    g_cfg.o3dsCore = -1;   /* a test key: auto again once it is gone from the file */
     while (fgets(line, sizeof(line), f))
     {
         char *p = line;
@@ -643,15 +657,25 @@ static void LoadConfig(void)
         char *eq = strchr(p, '=');
         if (!eq)
             continue;
+        /* spaces around the key and the value are allowed ("hotkey = R + SELECT"): the value was cut
+           at the first one, and that hotkey became R alone */
+        for (char *e = eq; e > p && (e[-1] == ' ' || e[-1] == '\t'); e--)
+            e[-1] = 0;
         *eq = 0;
         char *v = eq + 1;
-        v[strcspn(v, "\r\n ;#")] = 0;
+        while (*v == ' ' || *v == '\t')
+            v++;
+        v[strcspn(v, "\r\n;#")] = 0;
+        for (size_t l = strlen(v); l && (v[l - 1] == ' ' || v[l - 1] == '\t'); l--)
+            v[l - 1] = 0;
         if (strcasecmp(p, "hotkey") == 0 || strcasecmp(p, "replay_hotkey") == 0)
         {
             const bool save = strcasecmp(p, "replay_hotkey") == 0;
             u32 mask = 0;
-            for (char *tok = strtok(v, "+"); tok; tok = strtok(NULL, "+"))
+            for (char *tok = strtok(v, "+ \t"); tok; tok = strtok(NULL, "+ \t"))
                 mask |= KeyByName(tok);
+            if (__builtin_popcount(mask) < 2)   /* one button alone would start and stop at every press */
+                mask = 0;
             if (mask && save)
                 g_cfg.saveKey = mask;
             else if (mask)
@@ -684,6 +708,8 @@ static void LoadConfig(void)
             g_cfg.lossless = strcasecmp(v, "lossless") == 0;
         else if (strcasecmp(p, "c420") == 0)
             g_cfg.c420 = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
+        else if (strcasecmp(p, "o3ds_core") == 0)
+            g_cfg.o3dsCore = strcmp(v, "0") == 0 ? 0 : strcmp(v, "1") == 0 ? 1 : -1;
         else if (strcasecmp(p, "n3ds_test") == 0)
             g_cfg.n3dsTest = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "sd_limit_kb") == 0)
@@ -1189,6 +1215,11 @@ static void ReplayPrepare(void)
     }
     if (!g_cfg.replay || !g_sd || g_shutdownSeen || g_lidShut || (g_rpReady[0] && g_rpReady[1]))
         return;
+    /* a recording runs and the buffer has a file for when it ends: the other one after it. Made
+       next to a recording, a file's steps held the card for up to 2 s and cost it frames (Pokémon
+       Ultra Moon, "waited for the ring 6 times", O3DS 2026-11-17). */
+    if (g_recording && !g_replay && (g_rpReady[0] || g_rpReady[1]))
+        return;
     if (g_rpNoSpace && Ticks() - g_rpRetryTick < 30ull * SYSCLOCK_ARM11)
         return;   /* a full card: looked at again now and then (recordings get deleted) */
     g_rpRetryTick = Ticks();
@@ -1596,7 +1627,10 @@ static void EncodeSlot(Slot *s, bool busy)
 {
     const int sc = s->screen;
     const u32 cols = sc == 0 ? 400 : 320, rows = 240, words = cols * rows;
-    const u32 maxLen = ((u32)codec_xr32_max_size(words) + 15u) & ~15u;
+    /* no reference frame (g_c420Always, the launcher plugin's memory): every frame is C420 or an
+       empty record, so no room for XR32's worst case (~192 KB against 96 KB) is held back */
+    const u32 maxLen = g_prev[sc] ? ((u32)codec_xr32_max_size(words) + 15u) & ~15u
+                                  : ((u32)codec_c420_size(cols, rows) + 15u) & ~15u;
     const u32 need = sizeof(R3dRecHeader) + maxLen;
     const u32 audio = g_audioReserve ? g_audioReserveBytes : 0u;
     u32 pos = (u32)(g_w % g_ringSize);
@@ -2212,7 +2246,9 @@ static void ConverterStep(void)
     g_encodeSumUs[next->screen] += us;
     __atomic_store_n(&next->state, 0, __ATOMIC_RELEASE);
     g_convInSlot = false;
-    if (g_boosted)
+    /* only on the system core, where HOME Menu needs it: on core 2 (New 3DS) it cost ~30% of the
+       converter's speed (5 ms frames), and on the game's core the converter is lowest anyway */
+    if (g_boosted && g_convCores[g_convActive] == 1)
         svcSleepThread(BOOST_YIELD_US * 1000ull);
 }
 
@@ -2486,6 +2522,9 @@ static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStat
         return;   /* not a pixel format: a register read while the game set its screens up */
     /* the stride bounded first: a garbage register value times 400 could wrap to a small size */
     if (stride < 240 * Bpp(fmt) || stride > 240u * 4u * 2u)
+        return;
+    /* nor an unaligned one: the encoders read whole words at column starts (a data abort) */
+    if (stride & 7u)
         return;
     /* the top screen's 800 px mode: neither "normal 2D" (bit 6) nor 3D (bit 5) in its format
        register (as Rosalina's screenshots read it); 800 columns, recorded as 400 (pairs averaged) */
@@ -2861,7 +2900,8 @@ static bool g_isNew3ds;
 #define TEST_THREADS_FS DIR_FS "/.n3ds_test_threads"
 #define TEST_BENCH_FS   DIR_FS "/.n3ds_test_bench"
 static bool g_testExtraCores;   /* threads may be made on cores 2 and 3 */
-static bool g_core2Behind;      /* New 3DS: frames were lost with the converter on core 2: the system core from then on */
+static bool g_core2Behind;      /* New 3DS: frames were lost with the converter on core 2: the system core for that program */
+static u32 g_core2BehindPid;
 
 static bool TestMarkerFound(const char *path)
 {
@@ -3009,7 +3049,141 @@ static void LogMemory(const char *when)
 /* ------------------------------------------------------------------ priority boost */
 
 static Thread g_writerThread, g_convThread, g_packThread;
-static bool g_convOnGameCore;   /* Old 3DS: the converter runs on core 0 at the lowest priority */
+static bool g_convOnGameCore;   /* Old 3DS: this recording's converter runs on core 0 at the lowest priority */
+/* Old 3DS: which core encodes faster depends on the game. Side by side (O3DS 2026-11-17): MH4G 6
+   frames a second on the game's core (115-190 ms a top frame in play: the game leaves it hardly
+   idle), 28 on the system core; Kirby 12 against 23; Smash in the launcher plugin a little better
+   on the game's core (13 / 9 against 19 / 16 ms a frame), as 0.9.14 found; but the probe
+   (2026-11-18) gave Smash 142 frames in 3 s on the system core against 102, Ultra Moon 99 against
+   5, so a recording begins on the system core. So each recording (and
+   the replay buffer) measures: PROBE_US on one core, PROBE_US on the other, and keeps the one that
+   stored more frames; again every PROBE_AGAIN_US, as a game's scenes change. The game's core wins
+   a near tie: there the converter only takes time the game leaves idle. */
+#define PROBE_WAIT_US  2000000ull    /* after the start: the first frames (key frames) are not typical */
+#define PROBE_BOOST_US 9000000ull    /* or until the system core is boosted (PRIO_BOOST_AFTER_US): as it will run */
+#define PROBE_SETTLE_US 500000ull    /* after a switch: the backlog and the pacer of the first core go first */
+#define PROBE_US       3000000ull
+#define PROBE_AGAIN_US 90000000ull
+#define PROBE_IDLE_US  10000000ull   /* too few frames in both (a pause, HOME): again this soon */
+static u32 g_probeStep;     /* 0 off; 1 the first window is due; 2 in the first; 3 settling; 4 in the second */
+static u64 g_probeStart;    /* the recording's start (PROBE_BOOST_US) */
+static u64 g_probeAt;       /* the next step's tick */
+static u32 g_probeFrames;   /* stored frames when the window began */
+static u32 g_probeA;        /* frames in the first window */
+static u32 g_probeFrom;     /* the converter (index) of the first window */
+static u32 g_probePace;     /* the pacer's cut when the first window began */
+static u32 g_probeBest = 0xFFFFFFFFu;   /* the last result (index), for g_probePid; none yet */
+static u32 g_probePid;      /* the application it was measured in */
+static bool g_probeSaid;    /* this recording's first verdict was logged (also when it keeps the core) */
+static u32 g_convLogged = 0xFFFFFFFFu;  /* the converter last logged: a line only when it changes */
+
+static u32 ApplicationPid(void);
+
+static void ConvUse(u32 idx, const char *why)
+{
+    if (idx >= g_convCount)
+        return;
+    if (idx != g_convActive)
+    {
+        g_convActive = idx;
+        g_convThread = g_convThreads[idx];
+        g_convOnGameCore = g_convCores[idx] == 0;
+        /* the game's core: always the lowest priority; the system core: as SetBoost has it */
+        const bool sys = g_convCores[idx] == 1;
+        svcSetThreadPriority(threadGetHandle(g_convThread), sys && g_boosted ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+        if (g_packThread)   /* the packer (system core) as SetBoost has it with this converter */
+            svcSetThreadPriority(threadGetHandle(g_packThread), sys && g_boosted ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+    }
+    if (why && idx != g_convLogged)
+    {
+        g_convLogged = idx;
+        Log("converter on core %ld%s: %s", g_convCores[idx], g_convCores[idx] == 0 ? " (the game's, lowest priority)" : "", why);
+    }
+}
+
+/* Old 3DS, a recording or the buffer starts: the converter to begin with (index). */
+static u32 ConvProbeBegin(void)
+{
+    g_probeStep = 0;
+    if (g_isNew3ds || g_convCount < 2)
+        return 0;
+    if (g_cfg.o3dsCore >= 0)
+        return g_cfg.o3dsCore == 0 ? 1u : 0u;   /* forced (o3ds_core=): no probe */
+    const u32 pid = ApplicationPid();
+    /* the system core to begin with: it won in every game measured (Smash and Ultra Moon in the
+       launcher plugin too); the game's core only after a probe chose it in this program */
+    const u32 idx = pid && pid == g_probePid && g_probeBest < 2 ? g_probeBest : 0u;
+    g_probeSaid = false;
+    g_probeStep = 1;
+    g_probeStart = Ticks();
+    g_probeAt = g_probeStart + PROBE_WAIT_US * (SYSCLOCK_ARM11 / 1000000u);
+    return idx;
+}
+
+/* From the main loop while recording: the probe's next step when it is due. */
+static void ConvProbeStep(void)
+{
+    if (!g_probeStep || g_isNew3ds || Ticks() < g_probeAt)
+        return;
+    const u64 now = Ticks();
+    const u64 window = PROBE_US * (SYSCLOCK_ARM11 / 1000000u);
+    const u32 frames = g_shared.framesTop + g_shared.framesBot;
+    if (g_probeStep == 1)
+    {
+        if (!g_boosted && now - g_probeStart < PROBE_BOOST_US * (SYSCLOCK_ARM11 / 1000000u))
+            return;   /* the system core is measured as it runs: boosted */
+        g_probeFrom = g_convActive;
+        g_probePace = g_paceCut;
+        g_probeFrames = frames;
+        g_probeStep = 2;
+        g_probeAt = now + window;
+        return;
+    }
+    if (g_probeStep == 2)
+    {
+        g_probeA = frames - g_probeFrames;
+        g_probeFrames = frames;
+        ConvUse(g_probeFrom ^ 1u, NULL);
+        g_paceCut = g_probePace;   /* the pacer as at the first window's start */
+        g_probeStep = 3;
+        g_probeAt = now + PROBE_SETTLE_US * (SYSCLOCK_ARM11 / 1000000u);
+        return;
+    }
+    if (g_probeStep == 3)
+    {
+        g_probeFrames = frames;
+        g_probeStep = 4;
+        g_probeAt = now + window;
+        return;
+    }
+    const u32 b = frames - g_probeFrames;
+    g_probeStep = 1;
+    if (g_probeA + b < 20u)   /* hardly anything drawn: no verdict, back to where it was */
+    {
+        ConvUse(g_probeFrom, NULL);
+        g_probeAt = now + PROBE_IDLE_US * (SYSCLOCK_ARM11 / 1000000u);
+        return;
+    }
+    const u32 game = g_convCores[g_probeFrom] == 0 ? g_probeA : b;   /* frames with each */
+    const u32 sys = g_convCores[g_probeFrom] == 0 ? b : g_probeA;
+    const u32 gameIdx = g_convCores[0] == 0 ? 0u : 1u;
+    const u32 best = sys > game + game / 8u + 3u ? gameIdx ^ 1u : gameIdx;
+    g_probeBest = best;
+    g_probePid = ApplicationPid();
+    char why[96];
+    snprintf(why, sizeof(why), "%lu frames in %u s on the system core, %lu on the game's", sys,
+             (unsigned)(PROBE_US / 1000000u), game);
+    if (!g_probeSaid)   /* the first verdict always, later ones only when the core changes */
+    {
+        g_probeSaid = true;
+        g_convLogged = 0xFFFFFFFFu;
+    }
+    ConvUse(best, why);
+    /* a clear winner (twice the frames): measured again 4x less often, the losing core's 3 s
+       would show in a clip */
+    const bool clear = sys > 2u * game || game > 2u * sys;
+    g_probeAt = now + (clear ? 4u : 1u) * PROBE_AGAIN_US * (SYSCLOCK_ARM11 / 1000000u);
+}
 
 static void SetBoost(bool on, const char *why)
 {
@@ -3017,7 +3191,9 @@ static void SetBoost(bool on, const char *why)
         return;
     g_boosted = on;
     /* on the game's core a boost would take time from the game itself: the converter stays lowest */
-    if (!g_convOnGameCore)
+    /* only on the system core: on the game's core (Old 3DS) it would take the game's time, on core
+       2 (New 3DS) nothing competes with the converter but a New 3DS game's own threads there */
+    if (g_convCores[g_convActive] == 1)
     {
         svcSetThreadPriority(threadGetHandle(g_convThread), on ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
         if (g_packThread)   /* New 3DS: both on the system core */
@@ -3097,6 +3273,14 @@ static bool ProcessWatch(void)
        kernel panic in ptm (whose start brings the recorder up), O3DS 2026-11-16, cause not known.
        Before this watch the module was quiet then, through many power-offs. */
     static bool teardown;   /* the system is going down (a system module ended) */
+    static u64 teardownAt;
+    /* no power-off nor reboot 10 s after it: modules a New 3DS starts on demand ended, the
+       watch (and the applet guard with it) goes on */
+    if (teardown && !g_shutdownSeen && Ticks() - teardownAt > 10ull * SYSCLOCK_ARM11)
+    {
+        teardown = false;
+        knownN = -1;
+    }
     if (teardown || g_shutdownSeen || g_lidShut || Ticks() - last < SYSCLOCK_ARM11 / 4)
         return false;
     last = Ticks();
@@ -3152,6 +3336,7 @@ static bool ProcessWatch(void)
             if (++endedN >= 2)
             {
                 teardown = true;
+                teardownAt = Ticks();
                 return false;
             }
         }
@@ -3259,6 +3444,7 @@ static void AppletGuardStep(bool lidClosed)
    drop back as soon as it is gone or another one starts (launches happen at low priority). */
 static const char *CpuState(void);
 static void CpuBoost(bool on);
+static bool g_powerOffNow;   /* a power-off is under way: ptm is not asked for the speed back */
 
 static u32 g_frontPid;   /* the application that runs now, 0: none (HOME alone); UpdateBoost while recording, the main loop when idle */
 
@@ -3350,6 +3536,36 @@ static bool g_plgQuiet;            /* PluginLoader: no log line for a port that 
 static bool g_bootStart;           /* pm started the recorder with the console (launch on startup), not the app */
 static bool g_orderKept;           /* such a start left the launcher order for Rosalina (AfterPluginUp) */
 
+/* Games that need all of their memory mode: the plugin's 2 MB taken from the game's region left
+   Monster Hunter 4G / X / XX (80 MB) without memory they ask for at start, and they crashed ~5 s
+   after the plugin (data abort on a null heap, issue #7, O3DS 2026-11-17). No launcher order for
+   them: they run as without the recorder. Built in: the titles seen crashing; NO_PLG_FS: those the
+   recorder finds itself (a game that went down within PLG_TRY_OK_US of our plugin) or the user adds. */
+#define NO_PLG_FS       DIR_FS "/no_launcher.txt"
+#define PLG_TRY_FS      DIR_FS "/.launcher_try"    /* our plugin is in this game, not yet 30 s */
+#define PLG_TRY_OK_US   30000000ull
+#define NO_PLG_MAX      32u
+static const u32 NO_PLG_BUILTIN[] = {
+    0x0011D700u,   /* Monster Hunter 4G (JPN) */
+    0x00155400u,   /* Monster Hunter X (JPN) */
+    0x00197100u,   /* Monster Hunter XX (JPN) */
+};
+static u32 g_noPlg[NO_PLG_MAX];
+static u32 g_noPlgCount;
+static u32 g_plgTid;               /* this start's game gets our launcher plugin: its low title id; 0 none */
+static u64 g_plgTryAt;             /* our plugin got into the game then (PLG_TRY_FS written); 0 not watched */
+
+static bool NoPlugin(u32 tidLow)
+{
+    for (u32 i = 0; i < sizeof(NO_PLG_BUILTIN) / sizeof(NO_PLG_BUILTIN[0]); i++)
+        if (NO_PLG_BUILTIN[i] == tidLow)
+            return true;
+    for (u32 i = 0; i < g_noPlgCount; i++)
+        if (g_noPlg[i] == tidLow)
+            return true;
+    return false;
+}
+
 static const char *MemModeName(u32 mode)
 {
     switch (mode)
@@ -3408,6 +3624,31 @@ static int PluginLoader(int set)
     return state;
 }
 
+/* The applet APT has in front (GetAppletManInfo): 0x101 HOME Menu, 0x300 the application; 0 not
+   known. Back from HOME in a game with no launcher plugin of ours: Rosalina's plugin status word
+   does not change there (it stays 0), so it cannot say that. */
+static u32 AptActiveApplet(void)
+{
+    static bool failLogged;
+    Handle h = 0;
+    const Result rc = srvGetServiceHandle(&h, "APT:U");
+    if (R_FAILED(rc))
+    {
+        if (!failLogged)
+            Log("APT: no session (rc %08lX): no way to see the game back after HOME", (u32)rc);
+        failLogged = true;
+        return 0;
+    }
+    u32 *cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(5, 1, 0);   /* GetAppletManInfo */
+    cmd[1] = 0xFFFFFFFFu;               /* APTPOS_NONE */
+    u32 active = 0;
+    if (R_SUCCEEDED(svcSendSyncRequest(h)) && R_SUCCEEDED((Result)cmd[1]))
+        active = cmd[5];
+    svcCloseHandle(h);
+    return active;
+}
+
 static bool SdFileExists(const char *path)
 {
     Handle f = 0;
@@ -3443,17 +3684,16 @@ static bool AfterReboot(void)
     u32 tidLow = 0;
     bool resume = false;
     const int order = ReadUserParam(&tidLow, &resume);
-    /* started with the console: the game and its plugin come later, AfterPluginUp cleans up */
+    /* started with the console: the game and its plugin come later, AfterPluginUp cleans up
+       (EarlyLoader has already taken back an order for a game in the no-plugin list) */
     const bool keep = g_bootStart && mode != 0 && mode < 6 && order > 0;
     g_orderKept = keep;
+    g_plgTid = order > 0 && mode != 0 && mode < 6 ? tidLow : 0;
     if (order > 0 && !keep)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
     const bool weTurnedOn = !keep && SdFileExists(PLG_BY_US_FS);
-    if (weTurnedOn)
-    {
+    if (weTurnedOn && PluginLoader(0) == 0)   /* the record goes only once the loader is off */
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
-        PluginLoader(0);
-    }
     Log("memory mode %lu (%s): APPLICATION %lu KB, SYSTEM free %lu KB of %lu KB, BASE free %lu KB; launcher order %s%s",
         mode, MemModeName(mode), OS_KernelConfig->memregion_sz[0] / KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
         OS_KernelConfig->memregion_sz[1] / KB, osGetMemRegionFree(MEMREGION_BASE) / KB,
@@ -3515,6 +3755,11 @@ static void WriteGameOrder(bool wasRecording)
         g_order.skip = "not into a game";
         return;
     }
+    if (NoPlugin((u32)g_order.tid))
+    {
+        g_order.skip = "the game needs all of its memory: no-plugin list";
+        return;
+    }
     if (!SdFileExists(LAUNCH_3GX_FS))
     {
         g_order.skip = "no launcher plugin " LAUNCH_3GX_FS;
@@ -3565,13 +3810,12 @@ static void LogGameOrder(bool wasRecording)
     const int loader = PluginLoader(-1);
     if (loader == 0)
     {
+        Handle f = 0;   /* the record first: pm can end the module right after the loader is on */
+        if (R_SUCCEEDED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS), FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
+            FSFILE_Close(f);
         const int now = PluginLoader(1);
-        if (now == 1)
-        {
-            Handle f = 0;
-            if (R_SUCCEEDED(FSUSER_OpenFile(&f, g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS), FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
-                FSFILE_Close(f);
-        }
+        if (now != 1)
+            FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
         Log("reboot: plugin loader was off, turned on: %s", now == 1 ? "ok" : "failed");
     }
     else
@@ -3681,6 +3925,130 @@ static bool WriteSmall(const char *path, const void *buf, u32 size)
     const Result rc = size ? FSFILE_Write(f, &done, 0, buf, size, FS_WRITE_FLUSH) : 0;
     FSFILE_Close(f);
     return R_SUCCEEDED(rc) && done == size;
+}
+
+/* ------------------------------------------------------------------ games without the launcher plugin */
+
+/* NO_PLG_FS: a title id a line (16 or 8 hex digits), ';' or '#' starts a comment line. */
+static void LoadNoPlugin(void)
+{
+    static char buf[1024];
+    const u32 n = ReadSmall(NO_PLG_FS, buf, sizeof(buf) - 1u, false);
+    buf[n] = 0;
+    g_noPlgCount = 0;
+    for (char *p = buf; *p && g_noPlgCount < NO_PLG_MAX;)
+    {
+        char *end = strchr(p, '\n');
+        if (end)
+            *end = 0;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p && *p != ';' && *p != '#')
+        {
+            char *e = NULL;
+            const u32 v = (u32)strtoull(p, &e, 16);
+            if (e != p && v)
+                g_noPlg[g_noPlgCount++] = v;
+        }
+        if (!end)
+            break;
+        p = end + 1;
+    }
+}
+
+static void AddNoPlugin(u32 tidLow)
+{
+    if (NoPlugin(tidLow))
+        return;
+    static char buf[1024 + 64];
+    u32 n = ReadSmall(NO_PLG_FS, buf, 1024u, false);
+    if (n >= 1024u)   /* a long list of the user's: not rewritten (it could lose its end); this start only */
+    {
+        if (g_noPlgCount < NO_PLG_MAX)
+            g_noPlg[g_noPlgCount++] = tidLow;
+        Log("launcher plugin: %s is full, game %08lX left out of it", NO_PLG_FS, tidLow);
+        return;
+    }
+    if (!n)
+        n = (u32)snprintf(buf, sizeof(buf), "; Games 3DS Recorder does not load its launcher plugin into (Old 3DS, games that need\n"
+                                           "; extra memory). One title id a line. Delete a line to try that game with it again.\n");
+    if (buf[n - 1] != '\n')
+        buf[n++] = '\n';
+    n += (u32)snprintf(buf + n, sizeof(buf) - n, "%016llX\n", 0x0004000000000000ULL | tidLow);
+    WriteSmall(NO_PLG_FS, buf, n);
+    if (g_noPlgCount < NO_PLG_MAX)
+        g_noPlg[g_noPlgCount++] = tidLow;
+}
+
+/* At start: the list, and whether the last game with our plugin went down within 30 s of it with
+   no power-off and no closing (a crash or a hang: the console was turned off by force). */
+static void PluginTryCheck(void)
+{
+    if (!g_sd)
+        return;
+    LoadNoPlugin();
+    char buf[24];
+    const u32 n = ReadSmall(PLG_TRY_FS, buf, sizeof(buf) - 1u, false);
+    if (!n)
+        return;
+    buf[n] = 0;
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_TRY_FS));
+    const u32 tid = (u32)strtoull(buf, NULL, 16);
+    if (!tid)
+        return;
+    AddNoPlugin(tid);
+    Log("launcher plugin: game %08lX went down within %lu s of it: no launcher plugin for it from now on (%s)",
+        tid, (u32)(PLG_TRY_OK_US / 1000000u), NO_PLG_FS);
+}
+
+/* Our plugin is in the game: watched until the game has run 30 s with it. */
+static void PluginTryStart(void)
+{
+    static bool tried;   /* once a start: status 1 comes again after each HOME */
+    if (!g_plgTid || tried)
+        return;
+    tried = true;
+    char buf[24];
+    const int n = snprintf(buf, sizeof(buf), "%08lX\n", g_plgTid);
+    if (WriteSmall(PLG_TRY_FS, buf, (u32)n))
+        g_plgTryAt = Ticks();
+}
+
+static void PluginTryEnd(const char *why)
+{
+    if (!g_plgTryAt)
+        return;
+    g_plgTryAt = 0;
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_TRY_FS));
+    Log("launcher plugin: game %08lX %s", g_plgTid, why);
+}
+
+/* Rosalina read our order at its own start: new load parameters for no title take it back
+   (plg:ldr 4, SetPluginLoadParameters; file_loader.c uses them only for a matching title, so the
+   game gets its own plugins, if any, as without the recorder). True: taken back. */
+static bool PluginOrderCancel(void)
+{
+    Handle h = 0;
+    Result rc = -1;
+    for (u32 i = 0; i < 10 && R_FAILED(rc = svcConnectToPort(&h, "plg:ldr")); i++)
+        svcSleepThread(20 * 1000 * 1000);
+    if (R_FAILED(rc))
+        return false;
+    static char path[256];
+    static u32 config[32];
+    u32 *cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(4, 2, 4);
+    cmd[1] = 0u | (0u << 8) | (0u << 16);   /* noFlash 0, strategy swap (Rosalina's default, not mode3), not persistent */
+    cmd[2] = 0xFFFFFFFFu;                    /* no title has it */
+    cmd[3] = IPC_Desc_Buffer(sizeof(path), IPC_BUFFER_R);
+    cmd[4] = (u32)path;
+    cmd[5] = IPC_Desc_Buffer(sizeof(config), IPC_BUFFER_R);
+    cmd[6] = (u32)config;
+    rc = svcSendSyncRequest(h);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)cmd[1];
+    svcCloseHandle(h);
+    return R_SUCCEEDED(rc);
 }
 
 /* The file at `path` is an exheader override that lists the recorder. */
@@ -3957,6 +4325,17 @@ static void EarlyLoader(void)
     bool resume = false;
     if (!g_bootStart || !g_sd || mode == 0 || mode >= 6 || ReadUserParam(&tidLow, &resume) <= 0)
         return;
+    if (NoPlugin(tidLow))   /* the game needs all of its memory: the order is taken back */
+    {
+        u32 tries = 0;
+        bool ok = false;
+        for (; tries < 60 && !(ok = PluginOrderCancel()); tries++)   /* Rosalina's port: see below */
+            svcSleepThread(100 * 1000 * 1000);
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
+        Log("start with the console in memory mode %lu: game %08lX needs all of its memory: launcher order taken back (%s, %lu tries)",
+            mode, tidLow, ok ? "ok" : "FAILED: the plugin may still go in", tries);
+        return;
+    }
     /* Rosalina makes its port once mcu is up (its main(): LumaConfig_LoadMcuConfig before the
        services): not there 5 s after the kernel (rc D88007FA), there at 5.5 s; the game starts
        ~10 s later (O3DS 2026-11-15). */
@@ -3967,8 +4346,12 @@ static void EarlyLoader(void)
         svcSleepThread(100 * 1000 * 1000);
     g_plgQuiet = false;
     int now = was;
-    if (was == 0 && (now = PluginLoader(1)) == 1)
-        WriteSmall(PLG_BY_US_FS, "", 0);
+    if (was == 0)
+    {
+        WriteSmall(PLG_BY_US_FS, "", 0);   /* first: a kill right after turning it on keeps the record */
+        if ((now = PluginLoader(1)) != 1)
+            FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
+    }
     Log("start with the console in memory mode %lu: launcher order for %08lX, plugin loader was %s, now %s, %lu ms after the kernel (%lu tries)",
         mode, tidLow, was == 1 ? "on" : was == 0 ? "off" : "unknown", now == 1 ? "on" : now == 0 ? "off" : "unknown",
         (u32)(TicksToUs64(Ticks()) / 1000u), tries);
@@ -3984,11 +4367,8 @@ static void AfterPluginUp(const char *why)
     if (order > 0)
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
     const bool weTurnedOn = SdFileExists(PLG_BY_US_FS);
-    if (weTurnedOn)
-    {
+    if (weTurnedOn && PluginLoader(0) == 0)   /* the record goes only once the loader is off */
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, PLG_BY_US_FS));
-        PluginLoader(0);
-    }
     Log("launcher order %s (%s)%s", order > 0 ? "removed" : "already gone", why, weTurnedOn ? "; plugin loader turned off again" : "");
 }
 
@@ -4163,6 +4543,8 @@ static bool MapPluginMemory(void)
     const u32 mode = OS_KernelConfig->app_memtype;
     if (mode == 0 || mode >= 6 || (*(const volatile u32 *)0x1FF800F0 & 0xFFFFu) == 0)
         return false;   /* not an extended-memory game on an Old 3DS, or no plugin in it */
+    if (!g_plgTid)
+        return false;   /* a plugin of someone else's (no order of ours this start): its heap is its own */
     const u32 pid = ApplicationPid();
     Handle game = 0;
     if (!pid || R_FAILED(svcOpenProcess(&game, pid)))
@@ -4346,13 +4728,16 @@ static bool StartRecordingAs(bool replay)
        Smash 18 + 15 frames a second there, as a recording of its own gets (O3DS 2026-11-15). */
     const bool extMem = memMode != 0 && memMode < 6;
     const u32 plgNow = *(const volatile u32 *)0x1FF800F0 & 0xFFFFu;
-    if (replay && (extMem ? plgNow != 1 || g_plgNoGood : osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW))
+    /* no launcher plugin of ours in it (the no-plugin list): the buffer light in SYSTEM memory */
+    const bool sysExt = extMem && !g_plgTid;
+    const u32 sysFree = osGetMemRegionFree(MEMREGION_SYSTEM);
+    if (replay && (sysExt ? sysFree < REPLAY_EXT_MIN : extMem ? plgNow != 1 || g_plgNoGood : sysFree < LITE_BELOW))
     {
         g_shared.replayError = REC_REPLAY_NO_MEMORY;
         return false;
     }
     g_inPlg = MapPluginMemory();
-    if (replay && extMem && !g_inPlg)
+    if (replay && extMem && !sysExt && !g_inPlg)
     {
         g_plgNoGood = true;   /* until the plugin's status changes: no try (and log line) every 3 s */
         g_shared.replayError = REC_REPLAY_NO_MEMORY;
@@ -4361,10 +4746,10 @@ static bool StartRecordingAs(bool replay)
     g_plgTop = 0;
     /* next to an applet: light, and 4 MB always left (appletguard.h) */
     const bool agLite = ag_lite(&g_guard) && !g_inPlg && !IsNew3ds();
-    const bool lite = g_inPlg || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW || agLite;
+    const bool lite = g_inPlg || sysExt || osGetMemRegionFree(MEMREGION_SYSTEM) < LITE_BELOW || agLite;
     g_lite = lite;
     const u32 ringMax = lite ? LITE_RING_MAX : 8u * MB;
-    g_keepFree = lite && !agLite ? KEEP_FREE_LITE : KEEP_FREE;
+    g_keepFree = lite && !agLite ? KEEP_FREE_LITE : lite ? KEEP_FREE : KEEP_FREE_HOME;
     g_aqCap = g_inPlg ? AUDIO_QUEUE_PLG : lite ? AUDIO_QUEUE_LITE : AUDIO_QUEUE;
     /* A/B test: this recording's variant (the writer is idle: it is not recording) */
     const u32 ab = g_cfg.abTest ? g_abNext++ % AB_VARIANTS : AB_DEFAULT;
@@ -4401,8 +4786,23 @@ static bool StartRecordingAs(bool replay)
                 g_testVar = v;   /* a variant for extra cores is left out where there are none */
         }
     }
-    /* New 3DS: the converter on core 2 when there is one, unless it fell behind there before */
-    g_convActive = g_convCount > 1 && !g_core2Behind ? 1u : 0u;
+    /* New 3DS: the converter on core 2 when there is one, unless it fell behind there before.
+       Old 3DS: on the system core (index 0), but on the game's core (index 1) in the launcher
+       plugin's memory. Side by side, O3DS 2026-11-17: MH4G 6 -> 28 fps on the system core (115-190
+       ms a top frame on the game's core in play, which leaves it hardly idle), Kirby 12 -> 23;
+       Smash in the plugin a little better on the game's core (13 / 9 against 19 / 16 ms a frame,
+       242 against 425 drops in ~45 s), as 0.9.14 found. */
+    if (isN3ds)
+        g_convActive = g_convCount > 1 && !(g_core2Behind && g_core2BehindPid == ApplicationPid()) ? 1u : 0u;
+    else
+    {
+        g_convActive = ConvProbeBegin();
+        for (u32 i = 0; i < g_convCount; i++)   /* not boosted yet (SetBoost after 8 s) */
+            svcSetThreadPriority(threadGetHandle(g_convThreads[i]), CONVERTER_PRIO);
+    }
+    g_convOnGameCore = g_convCores[g_convActive] == 0;
+    if (!isN3ds && g_convCount > 1)
+        ConvUse(g_convActive, g_cfg.o3dsCore >= 0 ? "o3ds_core in config.ini" : "to begin with, the cores are measured next");
     g_packActive = 0;
     if (g_testVar)
     {
@@ -4683,6 +5083,11 @@ static void CpuBoost(bool on)
         g_cpuWait = false;
         if (g_cpuBefore < 0)
             return;
+        if (g_powerOffNow)   /* ptm is powering off: not asked now (the next start resets the speed) */
+        {
+            g_cpuBefore = -1;
+            return;
+        }
         s64 mhz = 0, l2 = 0;
         const bool known = R_SUCCEEDED(svcGetSystemInfo(&mhz, 0x10001, 0)) && R_SUCCEEDED(svcGetSystemInfo(&l2, 0x10001, 2));
         const int state = known ? (mhz > 300 ? 1 : 0) | (l2 ? 2 : 0) : -1;
@@ -4849,6 +5254,26 @@ static bool CloseReplay(bool save, u64 endUs, char *name, u32 nameSize)
     return ok;
 }
 
+/* The converter leaves the frame it is in. It used to be given 10 s, and the buffers were freed
+   under it after that (a data abort in the module): on the game's core, at the lowest priority, a
+   busy game can keep it out that long. Raised for the rest of that frame, then lowered again. */
+static void ConvWaitOut(void)
+{
+    for (u32 i = 0; i < 400 && g_convInSlot; i++)
+        svcSleepThread(5 * 1000 * 1000);
+    if (!g_convInSlot)
+        return;
+    /* the thread inside the frame: after a probe's switch it is the one before g_convThread */
+    const u32 owner = __atomic_load_n(&g_convOwner, __ATOMIC_SEQ_CST);
+    const Handle t = threadGetHandle(owner >= 1 && owner <= g_convCount ? g_convThreads[owner - 1] : g_convThread);
+    svcSetThreadPriority(t, CONVERTER_PRIO_BOOST);
+    for (u32 i = 0; i < 6000 && g_convInSlot; i++)
+        svcSleepThread(5 * 1000 * 1000);
+    const bool sysCore = t == threadGetHandle(g_convThreads[0]) && g_convCores[0] == 1;
+    svcSetThreadPriority(t, g_boosted && sysCore && t == threadGetHandle(g_convThread) ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+    Log("stop: the converter took over 2 s to leave its frame%s", g_convInSlot ? ", still in it after 30 s more" : "");
+}
+
 static void StopRecording(const char *why, bool releaseFirst)
 {
     g_savedOk = false;
@@ -4858,8 +5283,18 @@ static void StopRecording(const char *why, bool releaseFirst)
     g_shared.state = REC_STATE_SAVING;
     g_recording = false;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    /* pending DMAs finish or time out, the converter empties the slots, the packer the stages */
-    for (u32 i = 0; i < 400 && (!SlotsIdle() || !StagesIdle()); i++)
+    /* pending DMAs finish or time out, the converter empties the slots, the packer the stages.
+       Not for releaseFirst (HOME, an applet): their memory is wanted within ~0.15 s, the frames
+       still queued (up to 4, 35-190 ms each to encode) are dropped instead */
+    for (u32 i = 0; i < (releaseFirst ? 0u : 400u) && (!SlotsIdle() || !StagesIdle()); i++)
+    {
+        ReapDmas();   /* this thread closes finished DMAs */
+        LightEvent_Signal(&g_packEvent);
+        svcSleepThread(5 * 1000 * 1000);
+    }
+    /* releaseFirst: the packer's stages (Huffman on) still go into the ring, briefly; the memory
+       is given back at once only with them empty */
+    for (u32 i = 0; releaseFirst && i < 40u && !StagesIdle(); i++)
     {
         ReapDmas();   /* this thread closes finished DMAs */
         LightEvent_Signal(&g_packEvent);
@@ -4872,8 +5307,7 @@ static void StopRecording(const char *why, bool releaseFirst)
            with the DMA still writing into them, the handles left open) */
         g_convHold = true;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        for (u32 i = 0; i < 2000 && g_convInSlot; i++)
-            svcSleepThread(5 * 1000 * 1000);
+        ConvWaitOut();
         u32 stopped = 0;
         for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
         {
@@ -4891,11 +5325,11 @@ static void StopRecording(const char *why, bool releaseFirst)
             g_convInSlot ? " (converter still inside a frame)" : "");
     }
     /* the replay buffer's converter may be storing a still screen's picture again (StoreAgain) */
-    for (u32 i = 0; i < 2000 && replay && g_convInSlot; i++)
-        svcSleepThread(5 * 1000 * 1000);
+    if (replay)
+        ConvWaitOut();
     while (g_audioInPoll)   /* the audio thread sees g_recording == false from its next poll */
         svcSleepThread(1 * 1000 * 1000);
-    for (u32 i = 0; i < 100 && g_aq && g_aqTail != g_aqHead; i++)   /* queued audio into the ring */
+    for (u32 i = 0; i < (releaseFirst ? 0u : 100u) && g_aq && g_aqTail != g_aqHead; i++)   /* queued audio into the ring */
     {
         LightEvent_Signal(&g_convEvent);
         LightEvent_Signal(&g_packEvent);
@@ -4961,7 +5395,7 @@ static void StopRecording(const char *why, bool releaseFirst)
     char name[32] = "";
     Result rn = 0;
     const u32 seconds = (u32)(endUs / 1000000u);
-    const Battery batEnd = BatteryNow();
+    const Battery batEnd = g_shutdownSeen ? g_batStart : BatteryNow();   /* no mcu call while the system goes down */
     if (replay)
     {
         const bool clip = CloseReplay(saveClip, endUs, name, sizeof(name));
@@ -5021,6 +5455,15 @@ static void StopRecording(const char *why, bool releaseFirst)
     FSFILE_Close(g_file);
     g_file = 0;
     rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
+    /* the name taken (two recordings in one second, the clock set back): a second later, up to 9
+       (the same yyyymmdd_hhmmss.r3d form the app and the joins know), else the next file made over
+       NEXT_FS would take this recording with it */
+    for (u32 i = 1; R_FAILED(rn) && i < 10; i++)
+    {
+        FormatName(name, sizeof(name), g_recStartMs + 1000ull * i);
+        snprintf(path, sizeof(path), REC_DIR_FS "/%s", name);
+        rn = FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, NEXT_FS), g_sd, fsMakePath(PATH_ASCII, path));
+    }
     CloseInfo();   /* saved: nothing to recover */
     if (R_SUCCEEDED(rn) && strlen(name) == JOIN_NAME_LEN)
     {
@@ -5171,6 +5614,20 @@ static bool AppOnScreen(void)
     return seen && now - at < REPLAY_BEAT_US * (SYSCLOCK_ARM11 / 1000000u);
 }
 
+/* The game is in front again after HOME: a recording saved for it goes on in a new file in 1 s, a
+   replay buffer starts again in 1.5 s. */
+static void HomeBack(bool *homeResume, bool replay, bool *lidResume, u64 *resumeAt, u64 *replayAt)
+{
+    *homeResume = false;
+    if (replay)
+    {
+        *replayAt = Ticks() + SYSCLOCK_ARM11 * 3 / 2;
+        return;
+    }
+    *lidResume = true;
+    *resumeAt = Ticks() + SYSCLOCK_ARM11;
+}
+
 int main(void)
 {
     svcGetProcessId(&g_ownPid, CUR_PROCESS_HANDLE);
@@ -5188,6 +5645,7 @@ int main(void)
     InitFs();
     BootGuard();
     BootWaitServices();
+    PluginTryCheck();   /* before EarlyLoader: it reads the no-plugin list */
     EarlyLoader();
     if (g_bootStart)   /* the rest of the system is still starting */
         svcSleepThread(2000 * 1000 * 1000);
@@ -5206,17 +5664,20 @@ int main(void)
        system core keeps up; a game can also leave its core with little idle time there. */
     s64 isNew3ds = 0;
     svcGetSystemInfo(&isNew3ds, 0x10000, 0x201);
-    Thread conv = NULL;
     g_isNew3ds = isNew3ds != 0;
-    if (!isNew3ds && (conv = threadCreate(ConverterMain, (void *)0, 8 * KB, CONVERTER_PRIO, 0, false)) != NULL)
-        g_convOnGameCore = true;
-    if (!conv)
-        conv = threadCreate(ConverterMain, (void *)0, 8 * KB, CONVERTER_PRIO, 1, false);
+    Thread conv = threadCreate(ConverterMain, (void *)0, 8 * KB, CONVERTER_PRIO, 1, false);
     g_writerThread = writer;
     g_convThread = conv;
     g_convThreads[0] = conv;
-    g_convCores[0] = g_convOnGameCore ? 0 : 1;
+    g_convCores[0] = 1;
     g_convCount = 1;
+    /* Old 3DS: a second converter on the game's core; each recording takes one of the two
+       (StartRecordingAs) */
+    if (!isNew3ds && conv && (g_convThreads[1] = threadCreate(ConverterMain, (void *)1, 8 * KB, CONVERTER_PRIO, 0, false)) != NULL)
+    {
+        g_convCores[1] = 0;
+        g_convCount = 2;
+    }
     /* the packer on the system core at the converter's priority (the writer stays above it) */
     Thread pack = threadCreate(PackerMain, (void *)0, 8 * KB, CONVERTER_PRIO, 1, false);
     g_packThread = pack;
@@ -5369,15 +5830,18 @@ int main(void)
     u64 replayAt = 0;        /* no try to start the replay buffer before this tick */
     u64 lastBattery = 0, lastAppCheck = 0, noAppSince = 0;
     bool homeResume = false, homeSeen = false;   /* a recording saved for HOME goes on after it */
+    bool homeReplay = false;                     /* ... or it was the replay buffer: that starts again */
+    u32 homePid = 0;                             /* the game HOME was pressed in */
+    u64 lastHomePoll = 0;
+    u32 homeActive = 0;                          /* APT's applet in front at the last look */
+    u64 homePressAt = 0;
     u32 lastPlg = 0;
     bool reloadPending = false;
     u64 lastSdCheck = 0;
     u64 startedLogAt = 0;    /* an application started: its log line is due at this tick */
     for (;;)
     {
-        u32 cmd = g_shared.cmd;
-        if (cmd != REC_CMD_NONE)
-            g_shared.cmd = REC_CMD_NONE;
+        u32 cmd = __atomic_exchange_n(&g_shared.cmd, (u32)REC_CMD_NONE, __ATOMIC_SEQ_CST);   /* none lost between */
         u32 nid = 0;
         if (notif && svcWaitSynchronization(notif, 0) == 0 && R_FAILED(srvReceiveNotification(&nid)))
             nid = 0;
@@ -5396,7 +5860,12 @@ int main(void)
             }
         }
         if (g_orderKept && Ticks() - g_startTick > 120ull * SYSCLOCK_ARM11)
+        {
             AfterPluginUp("no plugin after 2 minutes");
+            resumeOnPlg = false;   /* a plugin much later is not the reboot's: no recording out of nowhere */
+        }
+        if (g_plgTryAt && Ticks() - g_plgTryAt > PLG_TRY_OK_US * (SYSCLOCK_ARM11 / 1000000u))
+            PluginTryEnd("runs 30 s with the launcher plugin");
         if (Ticks() - lastBattery > 600ull * SYSCLOCK_ARM11)   /* every ten minutes, whatever runs */
         {
             lastBattery = Ticks();
@@ -5459,12 +5928,41 @@ int main(void)
         {
             Log("HOME pressed: SYSTEM free %lu KB%s", osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
                 g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard) ? ", the recording is saved to give HOME Menu its memory" : "");
-            /* not a light recording next to an applet (appletguard.h): that one is the guard's */
+            /* not a light recording next to an applet (appletguard.h): that one is the guard's.
+               A light replay buffer (no-plugin list) ends as well and starts again in the game. */
             if (g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard))
             {
-                PauseStop("HOME in a game that needs extra memory", true);
+                homeReplay = g_replay;
+                if (homeReplay)   /* its memory first: HOME Menu takes ~6 MB within ~0.15 s */
+                    StopRecording("HOME in a game that needs extra memory", true);
+                else
+                    PauseStop("HOME in a game that needs extra memory", true);
                 homeResume = true;
                 homeSeen = false;
+                homePid = ApplicationPid();
+                homeActive = 0;
+                lastHomePoll = Ticks();
+                homePressAt = Ticks();
+            }
+            /* nothing records yet, but the buffer would start in HOME Menu's SYSTEM memory: its
+               restart 1.5 s after a recording or a clip, or a game's first seconds. It started 3 s
+               after HOME and HOME Menu crashed (ErrDisp 0xD8C3FBF3, MH4G, O3DS 2026-11-18): it
+               waits for the game as a buffer saved for HOME does */
+            else if (!g_recording && !homeResume && g_cfg.replay && !g_plgTid &&
+                     OS_KernelConfig->app_memtype != 0 && OS_KernelConfig->app_memtype < 6)
+            {
+                const u32 pid = ApplicationPid();
+                if (pid)
+                {
+                    Log("the replay buffer waits for the game (HOME in a game that needs extra memory)");
+                    homeReplay = true;
+                    homeResume = true;
+                    homeSeen = false;
+                    homePid = pid;
+                    homeActive = 0;
+                    lastHomePoll = Ticks();
+                    homePressAt = Ticks();
+                }
             }
         }
         {
@@ -5478,7 +5976,10 @@ int main(void)
                 lastPlg = plg;
                 g_plgNoGood = false;
                 if (plg == 1)
+                {
                     AfterPluginUp("the plugin is in the game");
+                    PluginTryStart();
+                }
                 if (plg == 1 && resumeOnPlg)   /* started with the console: the game draws a moment after its plugin starts */
                 {
                     resumeOnPlg = false;
@@ -5488,14 +5989,11 @@ int main(void)
                 if (homeResume && plg == 2)
                     homeSeen = true;
                 if (homeResume && homeSeen && plg == 1)   /* back in the game: new file in 1 s */
-                {
-                    homeResume = false;
-                    lidResume = true;
-                    resumeAt = Ticks() + SYSCLOCK_ARM11;
-                }
+                    HomeBack(&homeResume, homeReplay, &lidResume, &resumeAt, &replayAt);
                 if (plg == 3 || plg == 0)   /* the game closes: Rosalina frees the plugin's memory after it */
                 {
                     homeResume = false;
+                    PluginTryEnd("closes normally");
                     if (g_recording && g_inPlg)
                     {
                         const bool buffer = g_replay;
@@ -5505,6 +6003,35 @@ int main(void)
                     }
                     UnmapPluginMemory();
                 }
+            }
+        }
+        /* Back from HOME where the plugin status cannot say it (no plugin of ours, or a 64 MB game):
+           APT's applet in front, HOME Menu first, then the same game again. Another game, or none:
+           nothing goes on (an extended-memory game's close restarts the console anyway). */
+        if (homeResume && !lidClosed && !g_shutdownSeen && Ticks() - lastHomePoll > HOME_POLL_US * (SYSCLOCK_ARM11 / 1000000u))
+        {
+            lastHomePoll = Ticks();
+            const u32 active = AptActiveApplet();
+            if (active != homeActive)   /* each change while it waits: what APT says on this console */
+                Log("APT: applet in front %03lX (waiting for the game after HOME)", active);
+            homeActive = active;
+            if (active == 0x101)
+                homeSeen = true;
+            /* HOME Menu never came (the game held it back, e.g. while saving): the game is still in
+               front 3 s after the button, so the recording or the buffer goes on */
+            else if (active == 0x300 && !homeSeen && Ticks() - homePressAt > 3ull * SYSCLOCK_ARM11 && ApplicationPid() == homePid)
+            {
+                Log("HOME pressed, but HOME Menu did not open (APT): the game goes on");
+                HomeBack(&homeResume, homeReplay, &lidResume, &resumeAt, &replayAt);
+            }
+            else if (homeSeen && active == 0x300)
+            {
+                const u32 pid = ApplicationPid();
+                Log("back from HOME (APT): %s", pid == homePid ? "the same game" : "another program, nothing goes on");
+                if (pid == homePid)
+                    HomeBack(&homeResume, homeReplay, &lidResume, &resumeAt, &replayAt);
+                else
+                    homeResume = false;
             }
         }
         if (lidResume && resumeAt && !lidClosed && Ticks() >= resumeAt)
@@ -5533,13 +6060,20 @@ int main(void)
         }
         if (nid == PTMNOTIFID_SHUTDOWN || nid == 0x100)
         {
+            g_powerOffNow = nid == PTMNOTIFID_SHUTDOWN || g_powerOffSeen;
             BootTryDone(NULL);   /* a power-off or a game's reboot soon after the start is not a failed start */
+            PluginTryEnd(nid == 0x100 ? "ends (reboot)" : "ends (power-off)");   /* nor a game that went down */
             Log("system notification %03lX: %s", nid, nid == 0x100 ? "the recorder must end" : "power-off or reboot");
             g_shutdownSeen = true;   /* no new recording and no file prepared from now on */
+            g_prepStop = g_rpStop = true;   /* a file being made stops growing: the card is left alone */
             const bool wasRecording = g_recording && !g_replay;
             const bool gameReboot = nid == 0x100 && !g_powerOffSeen;   /* a game's memory mode, System Settings... */
             if (gameReboot)
+            {
                 WriteGameOrder(wasRecording);
+                /* the plugin loader on before the recording's save, which can outlast pm's ~1.5 s */
+                LogGameOrder(wasRecording);
+            }
             if (g_recording && g_replay)
                 StopRecording(nid == 0x100 ? "the system ends the recorder" : "power-off or reboot", false);
             else if (g_recording)
@@ -5552,8 +6086,6 @@ int main(void)
                 g_powerOffSeen = true;
             if (nid == 0x100)
             {
-                if (gameReboot)
-                    LogGameOrder(wasRecording);
                 systemEnd = true;
                 cmd = REC_CMD_EXIT;
             }
@@ -5614,16 +6146,41 @@ int main(void)
             UpdateBoost();
             if (g_cpuWait && !FrontQuiet())   /* the program that was starting has loaded */
                 CpuBoost(true);
+            ConvProbeStep();
             /* New 3DS: a program that keeps core 2 busy itself starves the converter there (lowest
                priority) and frames find no free slot: back to the system core, as before 0.12.6,
                for the rest of this recording and the next ones */
-            if (g_convActive == 1 && !g_testVar && g_drops[DROP_NO_SLOT] + g_drops[DROP_DMA_LIMIT] >= 8u)
+            /* (rate-based: 8 "no free slot" drops within 2 s, after the first 3 s; a loading spike
+               or the first key frames moved it off core 2 for good before, in every game) */
+            bool core2Behind = false;
+            if (g_isNew3ds && g_convActive == 1 && !g_testVar)
+            {
+                static u64 winAt;
+                static u32 winDrops;
+                const u64 t = Ticks();
+                if (t - g_recStartTick < 3ull * SYSCLOCK_ARM11)
+                {
+                    winAt = 0;
+                }
+                else if (!winAt || t - winAt > 2ull * SYSCLOCK_ARM11)
+                {
+                    winAt = t;
+                    winDrops = g_drops[DROP_NO_SLOT];
+                }
+                else
+                    core2Behind = g_drops[DROP_NO_SLOT] - winDrops >= 8u;
+            }
+            if (core2Behind)
             {
                 g_core2Behind = true;
+                g_core2BehindPid = ApplicationPid();
+                svcSetThreadPriority(threadGetHandle(g_convThreads[1]), CONVERTER_PRIO);   /* not left boosted */
                 g_convActive = 0;
                 g_convThread = g_convThreads[0];
                 svcSetThreadPriority(threadGetHandle(g_convThread), g_boosted ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
-                Log("converter on core %ld fell behind: the system core from now on", g_convCores[1]);
+                if (g_packThread)
+                    svcSetThreadPriority(threadGetHandle(g_packThread), g_boosted ? CONVERTER_PRIO_BOOST : CONVERTER_PRIO);
+                Log("converter on core %ld fell behind: the system core while this program runs", g_convCores[1]);
             }
             const u64 now = Ticks();
             g_shared.recSeconds = (u32)(TicksToUs64(now - g_recStartTick) / 1000000u);

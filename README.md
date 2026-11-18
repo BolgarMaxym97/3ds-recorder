@@ -170,6 +170,11 @@ recorder by itself. Settings and recordings stay.
   recording only the top screen (Settings → Screens → Top) makes it smoother. When such a game closes, the
   recording is saved; open 3DS Recorder to record again, or use Launch On Startup: the recorder then comes back
   by itself.
+  Some games need every bit of that memory and crash with 2 MB less (Monster Hunter 4G, X and XX): the recorder
+  loads no plugin into them, so they run as without it (and the recorder is not there, unless Launch On Startup
+  brought it back with the console; it then records and keeps Replay in a smaller buffer, paused while HOME Menu
+  is open). A game that goes down within 30 s of the plugin is added to
+  `/3ds/recorder/no_launcher.txt` by itself; delete its line there to try it again.
   A New 3DS does not restart for these games.
 - On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: only the left half.
 
@@ -385,6 +390,10 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   екрана (Налаштування → Екрани → Верхній) робить його плавнішим. Коли така гра закривається, запис
   зберігається; щоб писати далі, відкрийте 3DS Recorder або ввімкніть запуск з консоллю — тоді рекордер
   повернеться сам. New 3DS для цих ігор не перезапускається.
+  Деяким іграм потрібна вся ця пам'ять, і з 2 МБ менше вони падають (Monster Hunter 4G, X і XX): у них рекордер
+  плагін не завантажує, і вони працюють як без нього (а рекордера там немає, якщо його не повернув запуск з
+  консоллю; тоді він пише і тримає Повтор у меншому буфері, з паузою, поки відкрите HOME-меню). Гру, яка впала протягом 30 с після плагіна, рекордер сам дописує в `/3ds/recorder/no_launcher.txt`;
+  щоб спробувати її знову, видаліть її рядок там.
 - На New 3DS кілька ігор із **широким верхнім екраном 800 пікселів** записуються у 400 пікселях: лише ліва половина.
 
 ### Видалення

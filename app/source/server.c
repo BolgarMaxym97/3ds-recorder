@@ -539,8 +539,20 @@ static void thread_main(void *arg)
 {
     (void)arg;
     while (!g_quit) {
+        /* idle and finished connections go before the poll list is made: closed after it, their
+           entries came back as POLLNVAL and could close a new connection in the same slot */
+        const u64 now = osGetTime();
+        for (int i = 0; i < SRV_CLIENTS; i++) /* idle and finished connections go */
+            if ((g_cl[i].state == C_READ && now - g_cl[i].since > IDLE_MS) ||
+                (g_cl[i].state == C_DRAIN && now - g_cl[i].since > DRAIN_MS) ||
+                (g_cl[i].state == C_SEND && g_cl[i].file && now - g_cl[i].lastSend > STALL_MS)) {
+                if (g_cl[i].state == C_SEND)
+                    g_cl[i].err = -1000; /* stalled */
+                close_client(&g_cl[i]);
+            }
         struct pollfd pf[SRV_CLIENTS + 1];
         int idx[SRV_CLIENTS + 1], n = 0, busy = 0;
+        bool fresh[SRV_CLIENTS] = {false}; /* taken by accept() in this round: its poll entry (if any) is stale */
         pf[n].fd = g_srv;
         pf[n].events = POLLIN;
         idx[n++] = -1;
@@ -554,15 +566,6 @@ static void thread_main(void *arg)
         LightLock_Lock(&g_lock);
         g_stats.connections = busy;
         LightLock_Unlock(&g_lock);
-        const u64 now = osGetTime();
-        for (int i = 0; i < SRV_CLIENTS; i++) /* idle and finished connections go */
-            if ((g_cl[i].state == C_READ && now - g_cl[i].since > IDLE_MS) ||
-                (g_cl[i].state == C_DRAIN && now - g_cl[i].since > DRAIN_MS) ||
-                (g_cl[i].state == C_SEND && g_cl[i].file && now - g_cl[i].lastSend > STALL_MS)) {
-                if (g_cl[i].state == C_SEND)
-                    g_cl[i].err = -1000; /* stalled */
-                close_client(&g_cl[i]);
-            }
         if (poll(pf, n, 50) <= 0)
             continue;
         for (int k = 0; k < n; k++) {
@@ -619,9 +622,12 @@ static void thread_main(void *arg)
                 c->reqLen = 0;
                 c->state = C_READ;
                 c->since = osGetTime();
+                fresh[c - g_cl] = true;
                 continue;
             }
             Client *c = &g_cl[idx[k]];
+            if (fresh[idx[k]] || c->state == C_FREE || c->fd != pf[k].fd)
+                continue; /* closed or reused earlier in this round */
             if (pf[k].revents & (POLLERR | POLLHUP | POLLNVAL)) {
                 c->err = -(int)pf[k].revents; /* negative: poll flags, not errno */
                 close_client(c);
