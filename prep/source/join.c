@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+_Static_assert(sizeof(off_t) == 8, "joins up to 3900 MB need a 64-bit off_t");
 
 #define BUF    (1024u * 1024u)   /* 1 MB at a time: reading and writing take turns on one card */
 #define REPORT (1024u * 1024u)

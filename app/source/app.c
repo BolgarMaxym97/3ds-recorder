@@ -182,7 +182,9 @@ static void autostart_tick(App *a)
                 say(a, T(S_MSG_AUTO_ON));
                 return;
             }
-            say(a, T(a->st.autoState == REC_AUTO_NO_PATCHING ? S_MSG_AUTO_PATCHING : S_MSG_AUTO_UNSUPPORTED));
+            say(a, T(a->st.autoState == REC_AUTO_NO_PATCHING ? S_MSG_AUTO_PATCHING
+                     : a->st.autoState == REC_AUTO_ERROR     ? S_MSG_AUTO_SD_ERROR
+                                                             : S_MSG_AUTO_UNSUPPORTED));
             apply_setting(a, "autostart", "off");
         } else if (a->frame > a->autoWait) {   /* the recorder is off, or a recording runs: set up after it */
             a->autoWait = 0;
@@ -207,9 +209,10 @@ static void refresh(App *a, bool files)
         snprintf(msg, sizeof(msg), T(S_MSG_CLIPS), prepare_clips(NULL));
         say(a, msg);
     }
-    if (a->st.replayOn && a->st.replayError == REC_REPLAY_NO_SPACE && !a->replayWarned) {
+    if (a->st.replayOn && (a->st.replayError == REC_REPLAY_NO_SPACE || a->st.replayError == REC_REPLAY_WRITE_ERROR) &&
+        !a->replayWarned) {
         a->replayWarned = true;
-        say(a, T(S_MSG_REPLAY_SPACE));
+        say(a, T(a->st.replayError == REC_REPLAY_NO_SPACE ? S_MSG_REPLAY_SPACE : S_MSG_REPLAY_WRITE));
     }
     char rec[32];
     if (a->st.running && recorder_take_recovered(rec, sizeof(rec))) {
@@ -389,8 +392,9 @@ static void worker_main(void *arg)
         g_workRc = recorder_install_and_start(&g_workStep);
     else if (g_workAct == ACT_STOP)
         g_workOk = recorder_stop();
-    else if (g_workAct == ACT_UNINSTALL)
+    else if (g_workAct == ACT_UNINSTALL) {
         g_workOk = recorder_uninstall(g_workApp->deleteRecordings, g_workApp->selfPath);
+    }
     g_workDone = true;
 }
 
@@ -398,6 +402,11 @@ static void worker_main(void *arg)
 static bool run_pending(App *a)
 {
     if (!g_worker) {
+        /* uninstall: the conversion and info threads stop first, here on the UI thread (APT's hook
+           list is changed by it): their open .part / .jpart files and their log lines (app.log
+           made again) kept /3ds/recorder from being removed */
+        if (a->pending == ACT_UNINSTALL)
+            app_exit(a);
         g_workAct = a->pending;
         g_workApp = a;
         g_workDone = false;

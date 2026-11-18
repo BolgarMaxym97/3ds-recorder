@@ -182,16 +182,18 @@ static bool recording(void)
     return was;
 }
 
-static void delete_made(const char *name)
+static void delete_outputs(const char *name, int n)
 {
     /* "join": its link to the recording it continues (join.h), which goes with it */
     static const char *const ext[] = {"mp4", "mp4.part", "ptbl", "prep", "join"};
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < n; i++) {
         char path[96];
         prepare_path(path, sizeof(path), name, ext[i]);
         remove(path);
     }
 }
+
+static void delete_made(const char *name) { delete_outputs(name, 5); }
 
 /* A request to forget `name` (gallery delete): answered when its job is not open. */
 static bool take_forget(const char *open)
@@ -465,6 +467,35 @@ static void joined(const char *first, const char *next, const char *link)
     g_clipsDone++;   /* the gallery reads its list again */
 }
 
+/* The newest recording named after `first` and before `next` (out: its name), if any: a part of
+   the same session whose own join failed. A later part's link still names the session's first file,
+   and joining that one to it left the failed part out, in the wrong order. */
+static bool part_between(const char *first, const char *next, char *out)
+{
+    Handle dir = 0;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, recorder_archive(), fsMakePath(PATH_ASCII, REC_FILES_FS))))
+        return false;
+    static FS_DirectoryEntry e[16];
+    u32 got = 0;
+    out[0] = 0;
+    while (R_SUCCEEDED(FSDIR_Read(dir, &got, 16, e)) && got > 0)
+        for (u32 i = 0; i < got; i++) {
+            if ((e[i].attributes & FS_ATTRIBUTE_DIRECTORY) || strcmp(e[i].shortExt, "R3D") != 0)
+                continue;
+            char it[24];
+            u32 k = 0;
+            for (; k + 1 < sizeof(it) && e[i].name[k]; k++)
+                it[k] = (char)e[i].name[k];
+            it[k] = 0;
+            if (k != 19 || !is_rec_name(it))
+                continue;
+            if (strcmp(it, first) > 0 && strcmp(it, next) < 0 && strcmp(it, out) > 0)
+                memcpy(out, it, 20);   /* k == 19: the name and its 0 */
+        }
+    FSDIR_Close(dir);
+    return out[0] != 0;
+}
+
 /* One link handled; true when there was one. Nothing is changed in place (join.h): both
    recordings stay as they are until the joined one is whole and checked. */
 static bool join_one(void)
@@ -481,6 +512,22 @@ static bool join_one(void)
         kept_apart(next);
         app_log("join %s: the link names \"%s\": not now", next, first);
         return true;
+    }
+    {
+        char mid[20];
+        if (part_between(first, next, mid)) {
+            /* the link names the part before it instead: joined in order, after that one */
+            FILE *f = fopen(link, "wb");
+            const bool ok = f && fwrite(mid, 1, 19, f) == 19;
+            if (f)
+                fclose(f);
+            app_log("join %s: %s lies between it and %s: linked to it instead%s", next, mid, first, ok ? "" : " (NOT WRITTEN)");
+            if (!ok) {
+                join_fail(next);
+                kept_apart(next);
+            }
+            return true;
+        }
     }
     prepare_path(a, sizeof(a), first, "r3d");
     prepare_path(b, sizeof(b), next, "r3d");
@@ -529,7 +576,7 @@ static bool join_one(void)
         if (g_quit || join_forgotten()) {
             remove(part);
             rc = JOIN_STOPPED;
-        } else if (r3d_join_commit(a, b, part, old, mark) == 0) {
+        } else if ((delete_outputs(first, 4), delete_outputs(next, 4), r3d_join_commit(a, b, part, old, mark) == 0)) {
             joined(first, next, link);
             app_log("join %s + %s: one recording now, %llu MB, %llu s", first, next, (unsigned long long)(need >> 20),
                     (unsigned long long)((osGetTime() - t0) / 1000));

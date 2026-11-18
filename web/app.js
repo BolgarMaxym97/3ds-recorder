@@ -357,7 +357,8 @@
       firstTimestampBehavior: 'offset',
     });
     let error = null;
-    const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { error = e; } });
+    // a muxer error inside the callback (a timestamp going back) is kept, not lost: the file would be broken
+    const venc = new VideoEncoder({ output: (c, m) => { try { muxer.addVideoChunk(c, m); } catch (e) { error = error || e; } }, error: (e) => { error = e; } });
     // the upscaled pixels are flat blocks: they need far less than scale^2 times the bits
     venc.configure({ codec, width: W, height: H, bitrate: [0, 3500000, 8000000, 12000000][scale], framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
     // 2x / 3x: each picture drawn bigger with no smoothing (nearest neighbour), on the GPU
@@ -371,7 +372,7 @@
         output: (c, m) => {
           if (m && m.decoderConfig && m.decoderConfig.description)
             m = { ...m, decoderConfig: { ...m.decoderConfig, description: asc(m.decoderConfig.description) } };
-          muxer.addAudioChunk(c, m);
+          try { muxer.addAudioChunk(c, m); } catch (e) { error = error || e; }
         },
         error: (e) => { error = e; },
       });
@@ -612,7 +613,8 @@
     const url = '/rec/' + encodeURIComponent(name);
     let enc = null, hdr = null, firstErr = null;
     const conv = new R3D.Converter({
-      onHeader: (h) => { hdr = h; },
+      // the encoder at once: the first piece's frames and sound (~1 s) were decoded before it existed and lost
+      onHeader: (h) => { hdr = h; ensureEnc(); },
       onFrame: (rgba, i, pic, timeUs) => {
         if (!enc) return;
         enc.frame(rgba, i, pic, timeUs);
