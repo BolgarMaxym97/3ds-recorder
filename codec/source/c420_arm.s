@@ -5,7 +5,7 @@
 @
 @   size_t codec_c420_encode_bgr8_arm(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride,
 @                                     uint8_t *out);
-@   rows % 4 == 0, src and stride multiples of 4, out 4-byte aligned (the caller checks: codec.h).
+@   rows % 4 == 0, src and stride multiples of 4, out 4-byte aligned (the caller checks: codec_c420_arm_fits).
 @
 @ Two blocks per iteration in 16-bit lanes: low lane = rows r, r+1, high lane = rows r+2, r+3.
 @ 4 rows of a column = 12 bytes = 3 words w0 w1 w2:
@@ -138,3 +138,4 @@ codec_c420_encode_bgr8_arm:
     pop     {r4-r11, pc}
     .ltorg
     .size codec_c420_encode_bgr8_arm, . - codec_c420_encode_bgr8_arm
+

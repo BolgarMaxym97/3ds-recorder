@@ -150,9 +150,10 @@ size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, u
                              uint8_t *out);
 #ifdef __3DS__
 /* BGR8 (bpp 3) in ARM assembly for the ARM11 (codec/source/c420_arm.s): the same bytes, about twice as
-   fast. Only where codec_c420_bgr8_arm_fits(); the recorder also checks it against the C one first. */
+   fast. Only where codec_c420_arm_fits(); the recorder also checks it against the C one first. (RGB565 in
+   ARM assembly was no faster than codec_c420_encode on an Old 3DS: the memory, not the instructions.) */
 size_t codec_c420_encode_bgr8_arm(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out);
-static inline int codec_c420_bgr8_arm_fits(const uint8_t *src, uint32_t rows, uint32_t stride, const uint8_t *out)
+static inline int codec_c420_arm_fits(const uint8_t *src, uint32_t rows, uint32_t stride, const uint8_t *out)
 {
     return (rows & 3u) == 0 && (((uintptr_t)src | stride | (uintptr_t)out) & 3u) == 0;
 }
