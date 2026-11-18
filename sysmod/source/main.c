@@ -179,6 +179,9 @@ typedef struct {
        auto: frames of a picture that changes all over are stored as C420 (codec.h). */
     bool lossless;
     s8 c420;         /* c420=on / off (not in the app): overrides the console's default, -1: default */
+    /* c420_arm=on / off (not in the app): C420 from BGR8 in ARM assembly (codec/source/c420_arm.s).
+       -1 default: Old 3DS only (not tested on a New 3DS yet); off: always the C encoder */
+    s8 c420Arm;
     /* n3ds_test=on (a test build has it on: make REC_TESTBUILD=1), New 3DS only: benches at start-up
        (per core, at both processor speeds), an idle probe of every core around each recording, and
        each recording takes the next of TEST_VARS (codec, cores). One session of a tester's gives
@@ -194,7 +197,7 @@ typedef struct {
 } Config;
 
 static Config g_cfg = { .o3dsCore = -1, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
-                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .bench = false, .abTest = false,
+                        .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .c420Arm = -1, .bench = false, .abTest = false,
                         .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
                         .n3dsTest = true,
@@ -708,6 +711,8 @@ static void LoadConfig(void)
             g_cfg.lossless = strcasecmp(v, "lossless") == 0;
         else if (strcasecmp(p, "c420") == 0)
             g_cfg.c420 = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
+        else if (strcasecmp(p, "c420_arm") == 0)
+            g_cfg.c420Arm = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
         else if (strcasecmp(p, "o3ds_core") == 0)
             g_cfg.o3dsCore = strcmp(v, "0") == 0 ? 0 : strcmp(v, "1") == 0 ? 1 : -1;
         else if (strcasecmp(p, "n3ds_test") == 0)
@@ -893,6 +898,12 @@ static u32    g_c420Hot[2], g_c420Calm[2];
 static bool   g_sampled[2];              /* g_samples holds the last frame's sample */
 static u32    g_samples[2][CODEC_SAMPLES(400u, 240u)];
 static u32    g_c420Frames[2], g_c420Switches;
+/* C420 from BGR8 in ARM assembly: set by C420ArmSelect (config, console, the same bytes as
+   the C encoder) and cleared by CodecBench if a whole frame differs */
+static bool   g_c420Arm;
+static bool   g_c420ArmBad;      /* a check found it differs from C: C for good */
+static u32    g_c420ArmFrames;   /* this recording's frames from it */
+static bool   g_isNew3ds;
 /* encode time by codec: [0] XR32 (and Q565), [1] C420; per screen */
 static u64    g_codecUs[2][2];
 static u32    g_codecN[2][2];
@@ -1576,6 +1587,8 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
         {
             const u32 len = fmt & WIDE_FMT ? (u32)codec_c420_encode_conv(src, cols, rows, 2u * stride, fmt, WideColumn, dst)
                             : f == FB_RGB565 ? (u32)codec_c420_encode(src, cols, rows, stride, dst)
+                            : f == FB_BGR8 && g_c420Arm && codec_c420_bgr8_arm_fits(src, rows, stride, dst)
+                                ? (g_c420ArmFrames++, (u32)codec_c420_encode_bgr8_arm(src, cols, rows, stride, dst))
                             : f == FB_BGR8 || f == FB_RGBA8 ? (u32)codec_c420_encode_888(src, cols, rows, stride, bpp, dst)
                             : (u32)codec_c420_encode_conv(src, cols, rows, stride, fmt, fb_column_to_rgb565, dst);
             if (len)
@@ -2794,6 +2807,50 @@ static u32 PollScreens(void)
     return wakeUs > after + POLL_REC_US ? (u32)(wakeUs - after) : POLL_REC_US;
 }
 
+/* C420 from BGR8 in ARM assembly (codec/source/c420_arm.s) against the C encoder, once, on a small
+   synthetic picture with every case its arithmetic has: black, white (the fields saturate), pure
+   channels, noise, gradients. Any difference: the C encoder for good. ~0.1 ms. */
+static bool C420ArmSame(void)
+{
+    enum { COLS = 8, ROWS = 64, STRIDE = ROWS * 3 + 12 };
+    static u8 src[COLS * STRIDE] __attribute__((aligned(4)));
+    static u32 a[COLS * ROWS / 4 + 4], b[COLS * ROWS / 4 + 4];
+    u32 seed = 7;
+    for (u32 i = 0; i < sizeof(src); i++)
+    {
+        seed = seed * 1103515245u + 12345u;
+        const u32 c = i / STRIDE, r = i % STRIDE / 3, n = seed >> 16;
+        src[i] = c == 0 ? 0 : c == 1 ? 255 : c == 2 ? (r & 1 ? 255 : 0) : c == 3 ? (u8)(i % 3 == r % 3 ? 255 : 0)
+               : c == 4 ? (u8)(r * 4 + (n & 3)) : c == 5 ? (u8)(n % 3 ? 255 : n) : (u8)n;
+    }
+    memset(b, 0x55, sizeof(b));
+    const size_t la = codec_c420_encode_888(src, COLS, ROWS, STRIDE, 3, (u8 *)a);
+    const size_t lb = codec_c420_encode_bgr8_arm(src, COLS, ROWS, STRIDE, (u8 *)b);
+    return la == lb && memcmp(a, b, la) == 0 && b[lb / 4] == 0x55555555u;
+}
+
+/* g_c420Arm from the config, the console and the check (after each LoadConfig, and when CodecBench
+   finds a difference). */
+static void C420ArmSelect(void)
+{
+    const bool want = g_cfg.c420Arm >= 0 ? g_cfg.c420Arm != 0 : !g_isNew3ds;
+    static bool checked;
+    if (want && !checked)   /* not run at all where it is not wanted (a New 3DS by default) */
+    {
+        checked = true;
+        if (!C420ArmSame())
+            g_c420ArmBad = true;
+    }
+    const bool was = g_c420Arm;
+    g_c420Arm = want && !g_c420ArmBad;
+    static bool logged;
+    if (!logged || was != g_c420Arm)
+        Log("C420 from BGR8: %s", g_c420Arm ? "ARM assembly (checked: the same bytes as C)"
+                                  : g_c420ArmBad ? "C (THE ARM ENCODER DIFFERS FROM C)"
+                                  : g_cfg.c420Arm == 0 ? "C (c420_arm=off)" : "C (New 3DS: c420_arm=on to try ARM)");
+    logged = true;
+}
+
 /* Once at start-up (HOME, nothing recording): the encoders' own speed on this console, without a
    game taking the processor, on a synthetic 3D-like frame (smooth shading with noise) against
    itself panned by one column. Checks the ARM Q565 encoder against the C one. config codec_bench=on.
@@ -2825,8 +2882,9 @@ static void CodecBench(void)
             if (c > 0)
                 ref[(c - 1) * rows + r] = v;
         }
-    u32 best[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
+    u32 best[7] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
     u32 lenX = 0, lenC = 0, lenA = 0, pct = 0;
+    bool bgr8Same = true;
     for (u32 k = 0; k < 3; k++)
     {
         memcpy(prev, ref, words * 2);
@@ -2839,9 +2897,15 @@ static void CodecBench(void)
         t1 = Ticks();
         if (TicksToUs(t1 - t0) < best[4]) best[4] = TicksToUs(t1 - t0);
         t0 = Ticks();
-        codec_c420_encode_888((const u8 *)src, 255, rows, rows * 3, 3, outA);   /* the same memory read as BGR8 (255 columns of it) */
+        const size_t lenB = codec_c420_encode_888((const u8 *)src, 255, rows, rows * 3, 3, outA);   /* the same memory read as BGR8 (255 columns of it) */
         t1 = Ticks();
         if (TicksToUs(t1 - t0) * 400u / 255u < best[5]) best[5] = TicksToUs(t1 - t0) * 400u / 255u;
+        t0 = Ticks();
+        const size_t lenBa = codec_c420_encode_bgr8_arm((const u8 *)src, 255, rows, rows * 3, outB);   /* the same in ARM assembly */
+        t1 = Ticks();
+        if (TicksToUs(t1 - t0) * 400u / 255u < best[6]) best[6] = TicksToUs(t1 - t0) * 400u / 255u;
+        /* the bytes written: 255 columns code as 254 (column pairs), not codec_c420_size(255, rows) */
+        bgr8Same = bgr8Same && lenBa == lenB && memcmp(outA, outB, lenB) == 0;
         t0 = Ticks();
         lenC = (u32)codec_q565_encode((const u8 *)src, cols, rows, rows * 2, outA, cap);
         t1 = Ticks();
@@ -2866,8 +2930,14 @@ static void CodecBench(void)
             lx / KB, lh / KB);
     }
     Log("codec bench (no game, synthetic panned frame, %lu%% changed): XR32 %lu us %lu KB; Q565 C %lu us, ARM %lu us, "
-        "%lu KB (%s); C420 %lu us, from BGR8 %lu us (scaled to 400 columns); change check %lu us", pct, best[0], lenX / KB, best[1], best[2], lenA / KB,
-        same ? "ARM = C" : "ARM DIFFERS FROM C", best[4], best[5], best[3]);
+        "%lu KB (%s); C420 %lu us, from BGR8 C %lu us, ARM %lu us (scaled to 400 columns, %s); change check %lu us", pct, best[0],
+        lenX / KB, best[1], best[2], lenA / KB, same ? "ARM = C" : "ARM DIFFERS FROM C", best[4], best[5], best[6],
+        bgr8Same ? "ARM = C" : "ARM DIFFERS FROM C", best[3]);
+    if (!bgr8Same)
+    {
+        g_c420ArmBad = true;
+        C420ArmSelect();
+    }
     if (!same)
         g_q565ArmBad = true;
     BigFreeAll();
@@ -2892,7 +2962,6 @@ static const TestVar TEST_VARS[] = {
 #define TEST_VAR_COUNT (sizeof(TEST_VARS) / sizeof(TEST_VARS[0]))
 static u32 g_testNext;
 static const TestVar *g_testVar;   /* this recording's, NULL: not a test */
-static bool g_isNew3ds;
 /* A step of the test that may take the console down (threads on cores 2 and 3, the benches) leaves
    a marker file while it runs; a marker found at start-up means that step did so last time, and it
    is left out from then on: the console starts normally again after one bad start. Deleting the
@@ -4828,6 +4897,7 @@ static bool StartRecordingAs(bool replay)
         g_codecN[0][sc] = g_codecN[1][sc] = 0;
     }
     g_c420Switches = 0;
+    g_c420ArmFrames = 0;
     /* Half in the plugin's small ring: with the full 256 KB Smash lost as much sound (queue full 376
        vs 364: the converter's stalls, not the ring) and 2.4x more video frames (ring full 851 vs 361),
        O3DS 2026-11-08. */
@@ -5509,9 +5579,9 @@ static void StopRecording(const char *why, bool releaseFirst)
             g_huffIn ? (u32)(g_huffOut * 100u / g_huffIn) : 0u, packed ? packUs / packed : 0u, g_ringSize / KB,
             g_ringOver / KB, g_block / KB, g_writeFlags ? "" : " (no flush)", g_torn[0], g_torn[1]);
 #define AVG(sum, n) ((n) ? (u32)((sum) / (n)) : 0u)
-        Log("codecs: C420 %s, %lu + %lu frames (top / bottom), %lu switches; encode XR32 %lu / %lu us (%lu + %lu frames), "
+        Log("codecs: C420 %s, %lu + %lu frames (top / bottom), %lu from BGR8 in ARM assembly, %lu switches; encode XR32 %lu / %lu us (%lu + %lu frames), "
             "C420 %lu / %lu us; capture to encode %lu / %lu ms on average, longest %lu / %lu ms",
-            g_c420On ? "on" : "off", g_c420Frames[0], g_c420Frames[1], g_c420Switches,
+            g_c420On ? "on" : "off", g_c420Frames[0], g_c420Frames[1], g_c420ArmFrames, g_c420Switches,
             AVG(g_codecUs[0][0], g_codecN[0][0]), AVG(g_codecUs[0][1], g_codecN[0][1]), g_codecN[0][0], g_codecN[0][1],
             AVG(g_codecUs[1][0], g_codecN[1][0]), AVG(g_codecUs[1][1], g_codecN[1][1]),
             AVG(g_waitUs[0], g_waitN[0]) / 1000u, AVG(g_waitUs[1], g_waitN[1]) / 1000u,
@@ -5650,6 +5720,7 @@ int main(void)
     if (g_bootStart)   /* the rest of the system is still starting */
         svcSleepThread(2000 * 1000 * 1000);
     LoadConfig();
+    C420ArmSelect();
     InitLed();
     g_shared.initStage = 4;
 
@@ -6096,6 +6167,7 @@ int main(void)
         {
             reloadPending = false;
             LoadConfig();
+            C420ArmSelect();
             AutoApply();
             g_replayFailed = false;
             if (!g_cfg.replay)
