@@ -104,7 +104,7 @@ recorder by itself. Settings and recordings stay.
   the lid. The screens go dark, the work goes on, and the console goes to sleep by itself once everything is done
   (or when the battery is nearly empty). Settings → **Work With Lid Closed** (on at first) switches it off.
 - **Settings:** frame rate (15 / 20 / 30 fps), both screens, the top one or the bottom one only, quality, sound on or off, the LED,
-  Launch On Startup, Work With Lid Closed, the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
+  Launch On Startup, Work With Lid Closed, Share Statistics, the language and the two button combinations (**Hotkeys**: first the one for recordings, then the one that saves a
   Replay clip).
 - **Quality:** with **Auto** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
   the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay exact.
@@ -184,7 +184,8 @@ recorder by itself. Settings and recordings stay.
 ### Remove
 
 Settings → **Uninstall recorder**. It removes the recorder, its settings and logs, and the app itself. Your recordings
-stay unless you tick the box. The Launch On Startup file goes too. Luma settings are not changed.
+stay unless you tick the box. The Launch On Startup file goes too, and so does the statistics ID. Luma settings are
+not changed.
 
 ### Problems and feedback
 
@@ -192,11 +193,29 @@ stay unless you tick the box. The Launch On Startup file goes too. Luma settings
 card. Replay has been tested on an Old 3DS only so far. If something goes wrong, please open an [issue](../../issues/new), say what you did and what happened
 (console model, game), and attach the log: on the phone page (the QR code) tap
 **Log for the developer** at the bottom, or copy `/3ds/recorder/app.log` and `recorder.log` from the SD card.
+With **Share Statistics** on, the logs reach us by themselves (see below); an issue still helps, it says what you saw.
 
 **A game does not start or freezes while the recorder runs?** Switch **Recorder** off on the app's panel and play
 without it: nothing of the recorder runs then. Please open an [issue](../../issues/new) with the game's name, the
 console model and both logs, so it can be fixed. This was reported for Pokémon Ultra Moon and Smash Bros on a New 3DS;
 1.2.0 is more careful while a game starts, but the cause has not been confirmed yet.
+
+### Anonymous statistics
+
+There are many consoles and games we cannot test ourselves, the New 3DS above all. So when the app opens and the
+console is on Wi-Fi, it quietly sends what its logs gained since the last time. Settings → **Share Statistics** is
+on at first and can be switched off at any time; with it off, or without Wi-Fi, the app does not even try to connect.
+Nothing is shown and nothing waits for it: if sending fails, the same lines go next time.
+
+**What is sent:** the new lines of `app.log` and `recorder.log` (at most 48 KB per launch), the newest Luma crash
+report from `/luma/dumps/arm11/` that was not sent yet, `config.ini`, the console model, region, system, Luma and
+kernel versions, the app version and a random console ID. The logs say which games ran (title IDs), how recordings
+went (frame rate, dropped frames, errors) and what the console did (HOME, sleep, power-off).
+
+**What is not:** IP address (it is not stored, and LAN addresses in the logs are blanked on the console), country,
+serial number, Friend Code, name, Mii. Log text and crash reports are deleted after 180 days. The ID is shown in
+Settings next to the switch; to have your records deleted, write it in an [issue](../../issues/new) or on
+Telegram (t.me/side_quest_ua). Deleting `/3ds/recorder/stats.ini` makes a new ID.
 
 ### Building from source
 
@@ -328,7 +347,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
   можна закрити. Екрани згаснуть, робота продовжиться, а коли все буде готово (або батарея майже сяде), консоль сама
   засне. Вимкнути: Налаштування → **Робота з закритою кришкою** (спершу ввімкнено).
 - **Налаштування:** частота кадрів (15 / 20 / 30 fps), обидва екрани, лише верхній чи лише нижній, якість, звук, LED, запуск
-  з консоллю, робота з закритою кришкою, мова і
+  з консоллю, робота з закритою кришкою, «Ділитись статистикою», мова і
   дві комбінації кнопок (**Хоткеї**: спершу для запису, потім для збереження кліпу Повтору).
 - **Якість:** в режимі **Авто** картинка, яка змінюється вся (3D-гра в русі), зберігається як у відео — колір із половинною
   роздільністю, тому на Old 3DS обидва екрани тримають до 30 кадрів на секунду; меню, 2D-ігри й нерухомі картинки лишаються
@@ -406,7 +425,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 ### Видалення
 
 Налаштування → **Видалити рекордер**. Видаляє рекордер, його налаштування й журнали та сам додаток. Записи
-лишаються, якщо не поставити позначку. Файл запуску з консоллю теж зникає. Налаштування Luma не змінюються.
+лишаються, якщо не поставити позначку. Файл запуску з консоллю теж зникає, як і ID статистики. Налаштування Luma не
+змінюються.
 
 ### Проблеми і відгуки
 
@@ -415,11 +435,30 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 пішло не так, будь ласка, створіть [issue](../../issues/new), напишіть, що робили і що сталося
 (модель консолі, гра), і додайте журнал: на сторінці в телефоні (через QR-код) унизу натисніть
 **Журнал для розробника**, або скопіюйте з SD-картки `/3ds/recorder/app.log` і `recorder.log`.
+Якщо ввімкнено **Ділитись статистикою**, журнали дійдуть до нас самі (див. нижче); issue все одно допомагає — у ньому
+видно, що саме ви бачили.
 
 **Гра не запускається або зависає, поки працює рекордер?** Вимкніть **Рекордер** на пульті додатка й грайте без
 нього: тоді від рекордера нічого не працює. Будь ласка, створіть [issue](../../issues/new) з назвою гри, моделлю
 консолі й обома журналами, щоб це можна було виправити. Про таке повідомили для Pokémon Ultra Moon і Smash Bros на
 New 3DS; 1.2.0 обережніший під час запуску гри, але причину ще не підтверджено.
+
+### Анонімна статистика
+
+Багато консолей та ігор ми не можемо перевірити самі, насамперед New 3DS. Тож коли додаток відкривається, а консоль
+під'єднана до Wi-Fi, він тихо надсилає те, що додалося в журналах з минулого разу. Налаштування → **Ділитись
+статистикою** спершу ввімкнено, вимкнути можна будь-коли; коли вимкнено або немає Wi-Fi, додаток навіть не пробує
+з'єднатися. Нічого не показується і нічого не чекає на це: якщо надіслати не вдалося, ці рядки підуть наступного разу.
+
+**Що надсилається:** нові рядки `app.log` і `recorder.log` (до 48 КБ за запуск), найновіший ще не надісланий звіт Luma
+про збій із `/luma/dumps/arm11/`, `config.ini`, модель консолі, регіон, версії системи, Luma і ядра, версія додатка та
+випадковий ID консолі. З журналів видно, які ігри запускались (title ID), як ішов запис (частота кадрів, пропущені
+кадри, помилки) і що робила консоль (HOME, сон, вимкнення).
+
+**Чого немає:** IP-адреси (вона не зберігається, а адреси локальної мережі в журналах затираються ще на консолі),
+країни, серійного номера, Friend Code, імені, Mii. Текст журналів і звіти про збої видаляються через 180 днів. ID
+показано в Налаштуваннях біля перемикача; щоб видалити свої записи, напишіть його в [issue](../../issues/new) або в
+Telegram (t.me/side_quest_ua). Якщо видалити `/3ds/recorder/stats.ini`, з'явиться новий ID.
 
 ### Збірка з кодів
 

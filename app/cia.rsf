@@ -203,3 +203,5 @@ AccessControlInfo:
     - soc:U
     - ac:u
     - ptm:u   # the lid (shell) state and the battery: work goes on with the lid closed (lid.c)
+    - http:C  # "Share statistics": the logs to the Worker in stats/ (stats.c)
+    - ps:ps   # its random console id

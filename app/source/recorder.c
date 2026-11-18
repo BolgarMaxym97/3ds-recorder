@@ -61,6 +61,9 @@ void app_log(const char *fmt, ...)
 
 const char *app_about(void) { return g_about; }
 
+static AppConsole g_console;
+const AppConsole *app_console(void) { return &g_console; }
+
 void app_log_start(void)
 {
     struct stat st;
@@ -88,6 +91,12 @@ void app_log_start(void)
              (unsigned long)GET_VERSION_MAJOR(fv), (unsigned long)GET_VERSION_MINOR(fv),
              (unsigned long)GET_VERSION_REVISION(fv), (unsigned long)(__ctru_heap_size / 1024),
              (unsigned long)(linearSpaceFree() / 1024));
+    snprintf(g_console.model, sizeof(g_console.model), "%s", model < 6 ? models[model] : "unknown");
+    snprintf(g_console.region, sizeof(g_console.region), "%s", region < 7 ? regions[region] : "unknown");
+    snprintf(g_console.luma, sizeof(g_console.luma), "%lu.%lu.%lu", (unsigned long)(luma >> 16),
+             (unsigned long)(luma >> 8 & 0xFF), (unsigned long)(luma & 0xFF));
+    snprintf(g_console.kernel, sizeof(g_console.kernel), "%lu.%lu-%lu", (unsigned long)GET_VERSION_MAJOR(kv),
+             (unsigned long)GET_VERSION_MINOR(kv), (unsigned long)GET_VERSION_REVISION(kv));
     s64 mhz = 0, l2 = 0; /* New 3DS only (Luma): did the speed-up take? */
     if (R_SUCCEEDED(svcGetSystemInfo(&mhz, 0x10001, 0)) && R_SUCCEEDED(svcGetSystemInfo(&l2, 0x10001, 2))) {
         const size_t n = strlen(g_about);
@@ -566,7 +575,7 @@ bool recorder_uninstall(bool recordings, const char *selfPath)
     g_logOff = true;
     LightLock_Unlock(&g_logLock);
     static const char *const files[] = {REC_DIR_FS "/recorder.log", REC_DIR_FS "/recorder.old.log", REC_DIR_FS "/.system_stop",
-                                        REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log",
+                                        REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log", REC_DIR_FS "/stats.ini",
                                         REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on",
                                         REC_DIR_FS "/.autostart", REC_DIR_FS "/.boot_try", REC_DIR_FS "/.autostart_failed",
                                         REC_DIR_FS "/no_launcher.txt", REC_DIR_FS "/.launcher_try",

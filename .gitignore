@@ -50,3 +50,4 @@ tests/host/test_front
 tests/host/test_plgring
 tests/host/test_appletguard
 tests/host/test_join
+tests/host/test_stats

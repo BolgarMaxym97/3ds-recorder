@@ -1,0 +1,28 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	// Statistics and logs from the 3DS Recorder app: one POST of new log lines per app launch,
+	// plus at most one new Luma crash dump. See README.md.
+	"name": "3ds-recorder-stats",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	// The app talks to the workers.dev address over plain HTTP; it is built into the CIA.
+	"workers_dev": true,
+	"preview_urls": false,
+	// Off on purpose: Workers Logs would keep each request's metadata, client IP included,
+	// and the app promises that no IP is stored.
+	"observability": {
+		"enabled": false
+	},
+	// Daily: drop log text and dumps older than 180 days, keep the short columns.
+	"triggers": {
+		"crons": ["0 3 * * *"]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "3ds-recorder-stats",
+			"database_id": "fa9cd684-a279-48db-babc-24237c032a13",
+			"migrations_dir": "migrations"
+		}
+	]
+}

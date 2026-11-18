@@ -3,6 +3,7 @@
  * Files it owns:
  *   sdmc:/luma/sysmodules/0004013000F1D302.cxi   the recorder module (copied from romfs)
  *   sdmc:/3ds/recorder/config.ini, recorder.log  settings and log
+ *   sdmc:/3ds/recorder/stats.ini                 what "Share statistics" has sent (stats.c)
  *   sdmc:/3ds/recorder/recordings/                recordings
  *   sdmc:/3ds/recorder/rec3ds-launch.3gx         launcher plugin (sysmod: extended-memory games)
  *   sdmc:/luma/titles/<ptm>/exheader.bin         launch on startup (written by the module; its path
@@ -28,6 +29,14 @@ void app_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void app_log_start(void);
 /* That console line, for the phone page's diagnostics file. */
 const char *app_about(void);
+/* The same facts one by one (for the statistics), set by app_log_start. */
+typedef struct {
+    char model[24];   /* "New 3DS XL" */
+    char region[8];   /* "EUR" */
+    char luma[16];    /* "13.5.0" */
+    char kernel[16];  /* "2.58-0" */
+} AppConsole;
+const AppConsole *app_console(void);
 
 typedef enum { MODULE_MISSING, MODULE_DIFFERENT, MODULE_SAME } ModuleFile;
 
