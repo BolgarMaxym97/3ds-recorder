@@ -3317,8 +3317,11 @@ static bool g_convOnGameCore;   /* Old 3DS: this recording's converter runs on c
    (2026-11-18) gave Smash 142 frames in 3 s on the system core against 102, Ultra Moon 99 against
    5, so a recording begins on the system core. So each recording (and
    the replay buffer) measures: PROBE_US on one core, PROBE_US on the other, and keeps the one that
-   stored more frames; again every PROBE_AGAIN_US, as a game's scenes change. The game's core wins
-   a near tie: there the converter only takes time the game leaves idle. */
+   stored more frames; again every PROBE_AGAIN_US, as a game's scenes change. The system core wins
+   a near tie: a light scene (a menu) measures both cores alike, and the next recording in that
+   program starts on the probe's verdict, so a tie given to the game's core put a whole MH4G
+   recording there when the fight began (O3DS 2026-11-19: 116 / 111 in the buffer, then 39 frames
+   in 3 s on the game's core, 12 fps). The game's core only when it stores clearly more. */
 #define PROBE_WAIT_US  2000000ull    /* after the start: the first frames (key frames) are not typical */
 #define PROBE_BOOST_US 9000000ull    /* or until the system core is boosted (PRIO_BOOST_AFTER_US): as it will run */
 #define PROBE_SETTLE_US 500000ull    /* after a switch: the backlog and the pacer of the first core go first */
@@ -3427,7 +3430,7 @@ static void ConvProbeStep(void)
     const u32 game = g_convCores[g_probeFrom] == 0 ? g_probeA : b;   /* frames with each */
     const u32 sys = g_convCores[g_probeFrom] == 0 ? b : g_probeA;
     const u32 gameIdx = g_convCores[0] == 0 ? 0u : 1u;
-    const u32 best = sys > game + game / 8u + 3u ? gameIdx ^ 1u : gameIdx;
+    const u32 best = game > sys + sys / 8u + 3u ? gameIdx : gameIdx ^ 1u;
     g_probeBest = best;
     g_probePid = ApplicationPid();
     char why[96];
