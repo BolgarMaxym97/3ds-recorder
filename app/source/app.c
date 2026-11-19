@@ -347,7 +347,9 @@ void app_init(App *a, const char *selfPath)
         C3D_TexSetFilter(&g_lastTex, GPU_LINEAR, GPU_LINEAR);
     g_info = threadCreate(info_main, NULL, 16 * 1024, prio + 2, -2, false);
     prepare_start(n3ds, n3ds && a->cfg.mp4Slices, a->cfg.convertAuto); /* recordings become MP4s for the phone in the background */
+#ifndef UI_TOUR /* the screen tour runs in Azahar: its logs are no console's */
     stats_start(a->cfg.stats); /* new log lines to the developer, quietly (stats.h) */
+#endif
     /* The recorder starts with the app. Only when Luma cannot load it does the first-run
        screen come up, to say what to change. */
     /* After an app update the running module is the older one: it is restarted with the new one
