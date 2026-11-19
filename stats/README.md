@@ -101,6 +101,13 @@ Settings in use (fps, replay, autostart …):
 SELECT config, COUNT(DISTINCT install_id) AS consoles FROM reports GROUP BY config ORDER BY consoles DESC;
 ```
 
+Languages: the app's (Settings → Language) against the console's own (which translation to make next):
+
+```sql
+SELECT lang, sys_lang, COUNT(DISTINCT install_id) AS consoles FROM reports
+WHERE id IN (SELECT MAX(id) FROM reports GROUP BY install_id) GROUP BY lang, sys_lang ORDER BY consoles DESC;
+```
+
 Crash dumps; save one to a file to read it with Luma's `luma3ds_exception_dump_parser.py`:
 
 ```sql

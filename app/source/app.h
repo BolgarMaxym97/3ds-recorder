@@ -74,5 +74,8 @@ void app_update(App *a, const Input *in);
 void app_draw_top(App *a);
 void app_draw_bottom(App *a);
 void app_exit(App *a);
+#ifdef UI_TOUR
+int app_tour(App *a, int lang, int step, char *name, size_t cap);
+#endif
 
 #endif

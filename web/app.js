@@ -22,10 +22,10 @@
   const $ = (id) => document.getElementById(id);
   const TEXT = {
     en: {
-      length: 'Length', size: 'Size', eta: 'Transfer', s1: 'Download from the console', s2: 'Make the video',
+      mb: 'MB', gb: 'GB', length: 'Length', size: 'Size', eta: 'Transfer time', s1: 'Download from the console', s2: 'Make the video',
       s3: 'Save', waiting: 'waiting', fast: 'fast: the phone\'s video encoder',
       live: 'in real time: keep this page open and the screen on', none: 'this browser cannot make videos',
-      start: 'Start', startHint: 'Tap Start: the browser lets a page record sound only after a tap.',
+      start: 'Start', startHint: 'Tap Start: the browser lets a page use sound only after a tap.',
       keep: 'Keep this page open and the screen on until the video is ready. If the page is hidden, the video waits.',
       long: 'A long recording: about %1 over the 3DS Wi-Fi. For long ones the SD card is faster.',
       save: 'Save the video', share: 'Share / save to Photos', raw: 'or the original .r3d, for a computer',
@@ -46,16 +46,16 @@
       privacy: 'The file stays on your computer: the browser makes the video, nothing is uploaded.',
       read: 'Read the file', notR3d: 'This is not a 3DS Recorder recording (.r3d).',
       rpl: 'This is a Replay buffer, not a recording. Save the clip on the console (Replay hotkey) and convert the .r3d it makes.',
-      optScale: 'Size', optAudio: 'Sound', eqOn: 'Like the speaker', eqOff: 'As recorded',
+      optScale: 'Scale', optAudio: 'Sound', eqOn: 'Like the console', eqOff: 'As recorded',
       scaleHint: '1× is the 3DS\'s own size (400×480). 2× and 3× keep the pixels sharp in editors and on big screens; the file is bigger.',
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
       webm: 'This browser can only make WebM videos. For an MP4, open this page in Chrome, Edge or Safari.',
     },
     uk: {
-      length: 'Тривалість', size: 'Розмір', eta: 'Передача', s1: 'Завантаження з консолі', s2: 'Робимо відео',
+      mb: 'МБ', gb: 'ГБ', length: 'Тривалість', size: 'Розмір', eta: 'Час передачі', s1: 'Завантаження з консолі', s2: 'Робимо відео',
       s3: 'Зберегти', waiting: 'чекає', fast: 'швидко: відеокодер телефона',
       live: 'у реальному часі: тримайте сторінку відкритою, а екран увімкненим', none: 'цей браузер не вміє робити відео',
-      start: 'Почати', startHint: 'Натисніть «Почати»: браузер дозволяє сторінці записувати звук лише після дотику.',
+      start: 'Почати', startHint: 'Натисніть «Почати»: браузер дозволяє сторінці працювати зі звуком лише після дотику.',
       keep: 'Тримайте сторінку відкритою, а екран увімкненим, доки відео не буде готове. Якщо сторінку сховати, відео чекає.',
       long: 'Довгий запис: ≈ %1 через Wi-Fi 3DS. Довгі записи швидше забрати з SD-картки.',
       save: 'Зберегти відео', share: 'Поділитися / зберегти у Фото', raw: 'або оригінал .r3d — для комп\'ютера',
@@ -67,7 +67,7 @@
       notFound: 'Цей запис уже не пропонується. Виберіть його на консолі ще раз (Галерея → Y).',
       noFile: 'У посиланні немає запису. Відскануйте код на консолі ще раз.',
       failed: 'Не вдалося зробити відео (%1). Нижче — оригінал .r3d.', paused: 'пауза: чекаємо завантаження',
-      hidden: 'пауза: сторінку сховано', min: 'хв', sec: 'с', left: 'ще %1', mbs: 'MB/с',
+      hidden: 'пауза: сторінку сховано', min: 'хв', sec: 'с', left: 'ще %1', mbs: 'МБ/с',
       c1: 'Конвертація на консолі', c1x: 'конвертую в невелике MP4: Wi-Fi 3DS передасть його швидко', c1q: 'чекає черги',
       c2: 'Завантаження на телефон', direct: 'Завантажити напряму', directLink: 'або завантажити напряму',
       big: 'Довге відео (%1): браузер телефона сам його завантажить — дивіться в його завантаженнях. Тримайте консоль на екрані «Завантажити» з відкритою кришкою.',
@@ -76,13 +76,280 @@
       privacy: 'Файл лишається на вашому комп\'ютері: відео робить браузер, нічого не вивантажується.',
       read: 'Читаємо файл', notR3d: 'Це не запис 3DS Recorder (.r3d).',
       rpl: 'Це буфер Повтору, а не запис. Збережіть кліп на консолі (комбінація Повтору) і сконвертуйте .r3d, який вона створить.',
-      optScale: 'Розмір', optAudio: 'Звук', eqOn: 'Як у динаміку', eqOff: 'Як записано',
+      optScale: 'Масштаб', optAudio: 'Звук', eqOn: 'Як на консолі', eqOff: 'Як записано',
       scaleHint: '1× — рідний розмір 3DS (400×480). 2× і 3× зберігають чіткі пікселі в редакторах і на великих екранах; файл більший.',
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
       webm: 'Цей браузер уміє робити лише відео WebM. Для MP4 відкрийте цю сторінку в Chrome, Edge чи Safari.',
     },
+    es: {
+      mb: 'MB', gb: 'GB', length: 'Duración', size: 'Tamaño', eta: 'Tiempo de transferencia', s1: 'Descarga desde la consola', s2: 'Creación del video',
+      s3: 'Guardar', waiting: 'en espera', fast: 'rápido: codificador de video del teléfono',
+      live: 'en tiempo real: mantén esta página abierta y la pantalla encendida', none: 'este navegador no puede crear videos',
+      start: 'Empezar', startHint: 'Toca “Empezar”: el navegador solo deja que una página use el sonido después de un toque.',
+      keep: 'Mantén esta página abierta y la pantalla encendida hasta que el video esté listo. Si la página queda oculta, el video espera.',
+      long: 'Grabación larga: tardará unos %1 por la conexión Wi-Fi de la 3DS. Para las largas, la tarjeta SD es más rápida.',
+      save: 'Guardar el video', share: 'Compartir / guardar en Fotos', raw: 'o el .r3d original, para PC',
+      sd: 'Las grabaciones también se pueden sacar de la tarjeta SD: apaga la consola y pon la tarjeta en tu PC; están en /3ds/recorder/recordings.',
+      howIos: 'Toca “Guardar el video” y luego abre Archivos → Descargas → el video → Compartir → Guardar video: irá a Fotos.',
+      howAndroid: 'Toca “Guardar el video”: irá a Descargas y aparecerá en la Galería.',
+      howOther: 'Toca “Guardar el video”: irá a tu carpeta de descargas.',
+      ready: 'listo', retry: 'Reintentar', lost: 'Se perdió la conexión con la consola. ¿Sigue la consola abierta y en la pantalla “Descargar”?',
+      notFound: 'Esta grabación ya no está disponible. Vuelve a elegirla en la consola (Galería → Y).',
+      noFile: 'El enlace no incluye ninguna grabación. Vuelve a escanear el código en la consola.',
+      failed: 'No se pudo crear el video (%1). Abajo tienes el .r3d original.', paused: 'en pausa: esperando la descarga',
+      hidden: 'en pausa: la página está oculta', min: 'min', sec: 's', left: 'faltan %1', mbs: 'MB/s',
+      c1: 'Conversión en la consola', c1x: 'convirtiendo en un MP4 pequeño, que la conexión Wi-Fi de la 3DS envía rápido', c1q: 'esperando su turno',
+      c2: 'Descarga al teléfono', direct: 'Descargar directamente', directLink: 'o descargar directamente',
+      big: 'Video largo (%1): el navegador del teléfono lo descarga solo; búscalo en sus descargas. Mantén la consola abierta y en la pantalla “Descargar”.',
+      diag: 'Registro para el desarrollador (.txt)',
+      pick: 'Suelta aquí un .r3d o haz clic para elegirlo', pickHint: 'De la tarjeta SD: /3ds/recorder/recordings',
+      privacy: 'El archivo no sale de tu PC: el navegador crea el video y no se sube nada.',
+      read: 'Lectura del archivo', notR3d: 'Esto no es una grabación de 3DS Recorder (.r3d).',
+      rpl: 'Esto es un búfer de la repetición, no una grabación. Guarda el clip en la consola (combinación de la repetición) y convierte el .r3d que se crea.',
+      optScale: 'Escala', optAudio: 'Sonido', eqOn: 'Como en la consola', eqOff: 'Tal como se grabó',
+      scaleHint: '1× es el tamaño original de la 3DS (400×480). 2× y 3× mantienen los píxeles nítidos en editores y pantallas grandes; el archivo ocupa más.',
+      fastPc: 'rápido: codificador de video de tu PC', readErr: 'No se pudo leer el archivo (%1).', failedLocal: 'No se pudo crear el video (%1).', again: 'Convertir otro archivo',
+      webm: 'Este navegador solo puede crear videos WebM. Para obtener un MP4, abre esta página en Chrome, Edge o Safari.',
+    },
+    pt: {
+      mb: 'MB', gb: 'GB', length: 'Duração', size: 'Tamanho', eta: 'Tempo de transferência', s1: 'Download do console', s2: 'Criação do vídeo',
+      s3: 'Salvar', waiting: 'aguardando', fast: 'rápido: codificador de vídeo do celular',
+      live: 'em tempo real: mantenha esta página aberta e a tela ligada', none: 'este navegador não consegue criar vídeos',
+      start: 'Começar', startHint: 'Toque em “Começar”: o navegador só deixa uma página usar o som depois de um toque.',
+      keep: 'Mantenha esta página aberta e a tela ligada até o vídeo ficar pronto. Se a página ficar oculta, o vídeo espera.',
+      long: 'Gravação longa: vai levar cerca de %1 pelo Wi-Fi do 3DS. Para as longas, o cartão SD é mais rápido.',
+      save: 'Salvar o vídeo', share: 'Compartilhar / salvar em Fotos', raw: 'ou o original .r3d, para o computador',
+      sd: 'As gravações também podem ser tiradas do cartão SD: desligue o console e coloque o cartão no computador; elas estão em /3ds/recorder/recordings.',
+      howIos: 'Toque em “Salvar o vídeo” e depois abra Arquivos → Downloads → o vídeo → Compartilhar → Salvar Vídeo: ele vai para Fotos.',
+      howAndroid: 'Toque em “Salvar o vídeo”: ele vai para Downloads e aparece na Galeria.',
+      howOther: 'Toque em “Salvar o vídeo”: ele vai para a sua pasta de downloads.',
+      ready: 'pronto', retry: 'Tentar de novo', lost: 'A conexão com o console caiu. O console ainda está aberto e na tela “Baixar”?',
+      notFound: 'Esta gravação não está mais disponível. Escolha-a de novo no console (Galeria → Y).',
+      noFile: 'Não há gravação no link. Escaneie o código no console de novo.',
+      failed: 'Não foi possível criar o vídeo (%1). O original .r3d está abaixo.', paused: 'pausado: aguardando o download',
+      hidden: 'pausado: a página está oculta', min: 'min', sec: 's', left: 'faltam %1', mbs: 'MB/s',
+      c1: 'Conversão no console', c1x: 'convertendo em um MP4 pequeno: o Wi-Fi do 3DS o envia rápido', c1q: 'aguardando a vez',
+      c2: 'Download para o celular', direct: 'Baixar diretamente', directLink: 'ou baixar diretamente',
+      big: 'Um vídeo longo (%1): o navegador do celular o baixa sozinho; procure nos downloads dele. Mantenha o console aberto e na tela “Baixar”.',
+      diag: 'Registro para o desenvolvedor (.txt)',
+      pick: 'Solte um .r3d aqui ou clique para escolher', pickHint: 'Do cartão SD: /3ds/recorder/recordings',
+      privacy: 'O arquivo fica no seu computador: o navegador cria o vídeo, nada é enviado.',
+      read: 'Leitura do arquivo', notR3d: 'Isto não é uma gravação do 3DS Recorder (.r3d).',
+      rpl: 'Isto é um buffer da repetição, não uma gravação. Salve o clipe no console (combinação da repetição) e converta o .r3d criado.',
+      optScale: 'Escala', optAudio: 'Som', eqOn: 'Como no console', eqOff: 'Como gravado',
+      scaleHint: '1× é o tamanho original do 3DS (400×480). 2× e 3× mantêm os pixels nítidos em editores e telas grandes; o arquivo fica maior.',
+      fastPc: 'rápido: codificador de vídeo do computador', readErr: 'Não foi possível ler o arquivo (%1).', failedLocal: 'Não foi possível criar o vídeo (%1).', again: 'Converter outro arquivo',
+      webm: 'Este navegador só consegue criar vídeos WebM. Para um MP4, abra esta página no Chrome, Edge ou Safari.',
+    },
+    it: {
+      mb: 'MB', gb: 'GB', length: 'Durata', size: 'Dimensione', eta: 'Tempo di trasferimento', s1: 'Download dalla console', s2: 'Creazione del video',
+      s3: 'Salvataggio', waiting: 'in attesa', fast: 'veloce: codificatore video del telefono',
+      live: 'in tempo reale: tieni aperta questa pagina e lo schermo acceso', none: 'questo browser non può creare video',
+      start: 'Inizia', startHint: 'Tocca “Inizia”: il browser permette a una pagina di usare l\'audio solo dopo un tocco.',
+      keep: 'Tieni aperta questa pagina e lo schermo acceso finché il video non è pronto. Se la pagina è nascosta, il video resta in attesa.',
+      long: 'Registrazione lunga: ci vorranno circa %1 con il Wi-Fi del 3DS. Per quelle lunghe la scheda SD è più veloce.',
+      save: 'Salva il video', share: 'Condividi / salva in Foto', raw: 'oppure il file .r3d originale, per il computer',
+      sd: 'Le registrazioni si possono prendere anche dalla scheda SD: spegni la console e inserisci la scheda in un computer; si trovano in /3ds/recorder/recordings.',
+      howIos: 'Tocca “Salva il video”, poi apri File → Download → il video → Condividi → Salva video: finirà in Foto.',
+      howAndroid: 'Tocca “Salva il video”: finirà in Download e comparirà nella galleria del telefono.',
+      howOther: 'Tocca “Salva il video”: finirà nella tua cartella dei download.',
+      ready: 'pronto', retry: 'Riprova', lost: 'La connessione con la console si è interrotta. La console è ancora aperta e sulla schermata “Scarica”?',
+      notFound: 'Questa registrazione non è più disponibile. Selezionala di nuovo sulla console (Galleria → Y).',
+      noFile: 'Il link non contiene nessuna registrazione. Scansiona di nuovo il codice sulla console.',
+      failed: 'Impossibile creare il video (%1). Qui sotto trovi il file .r3d originale.', paused: 'in pausa: in attesa del download',
+      hidden: 'in pausa: la pagina è nascosta', min: 'min', sec: 's', left: 'mancano %1', mbs: 'MB/s',
+      c1: 'Conversione sulla console', c1x: 'conversione in un piccolo MP4, che il Wi-Fi del 3DS invia rapidamente', c1q: 'in attesa del suo turno',
+      c2: 'Download sul telefono', direct: 'Scarica direttamente', directLink: 'oppure scarica direttamente',
+      big: 'Video lungo (%1): il browser del telefono lo scarica da solo, cercalo tra i suoi download. Tieni la console aperta e sulla schermata “Scarica”.',
+      diag: 'Log per lo sviluppatore (.txt)',
+      pick: 'Trascina qui un file .r3d o fai clic per sceglierlo', pickHint: 'Dalla scheda SD: /3ds/recorder/recordings',
+      privacy: 'Il file resta sul tuo computer: il video lo crea il browser e non viene caricato nulla.',
+      read: 'Lettura del file', notR3d: 'Questa non è una registrazione di 3DS Recorder (.r3d).',
+      rpl: 'Questo è il buffer del replay, non una registrazione. Salva la clip sulla console (combinazione del replay) e converti il file .r3d che viene creato.',
+      optScale: 'Scala', optAudio: 'Audio', eqOn: 'Come sulla console', eqOff: 'Come registrato',
+      scaleHint: '1× è la dimensione originale del 3DS (400×480). 2× e 3× mantengono i pixel nitidi negli editor e sugli schermi grandi; il file è più pesante.',
+      fastPc: 'veloce: codificatore video del computer', readErr: 'Impossibile leggere il file (%1).', failedLocal: 'Impossibile creare il video (%1).', again: 'Converti un altro file',
+      webm: 'Questo browser può creare solo video WebM. Per un MP4, apri questa pagina in Chrome, Edge o Safari.',
+    },
+    fr: {
+      mb: 'Mo', gb: 'Go', length: 'Durée', size: 'Taille', eta: 'Durée du transfert', s1: 'Téléchargement depuis la console',
+      s2: 'Création de la vidéo', s3: 'Sauvegarde', waiting: 'en attente',
+      fast: 'rapide : encodeur vidéo du téléphone',
+      live: 'en temps réel : laissez cette page ouverte et l’écran allumé',
+      none: 'ce navigateur ne peut pas créer de vidéos', start: 'Commencer',
+      startHint: 'Appuyez sur « Commencer » : le navigateur n’autorise une page à utiliser le son qu’après un appui.',
+      keep: 'Laissez cette page ouverte et l’écran allumé jusqu’à ce que la vidéo soit prête. Si la page est masquée, la vidéo attend.',
+      long: 'Enregistrement long : environ %1 de transfert via le Wi-Fi de la 3DS. Pour les enregistrements longs, passer par la carte SD est plus rapide.',
+      save: 'Sauvegarder la vidéo', share: 'Partager / ajouter à Photos',
+      raw: 'ou le .r3d original, pour un ordinateur',
+      sd: 'Les enregistrements peuvent aussi être récupérés sur la carte SD : éteignez la console et insérez la carte dans un ordinateur, ils sont dans /3ds/recorder/recordings.',
+      howIos: 'Appuyez sur « Sauvegarder la vidéo », puis ouvrez Fichiers → Téléchargements → la vidéo → Partager → Enregistrer la vidéo : elle arrive dans Photos.',
+      howAndroid: 'Appuyez sur « Sauvegarder la vidéo » : elle arrive dans Téléchargements et apparaît dans votre galerie.',
+      howOther: 'Appuyez sur « Sauvegarder la vidéo » : elle arrive dans votre dossier de téléchargements.',
+      ready: 'terminé', retry: 'Réessayer',
+      lost: 'La connexion avec la console a été perdue. La console est-elle toujours ouverte, sur l’écran « Télécharger » ?',
+      notFound: 'Cet enregistrement n’est plus proposé. Sélectionnez-le de nouveau sur la console (Galerie → Y).',
+      noFile: 'Aucun enregistrement dans le lien. Scannez de nouveau le code sur la console.',
+      failed: 'Impossible de créer la vidéo (%1). Le .r3d original est ci-dessous.',
+      paused: 'en pause : en attente du téléchargement', hidden: 'en pause : la page est masquée', min: 'min',
+      sec: 's', left: 'encore %1', mbs: 'Mo/s', c1: 'Conversion sur la console',
+      c1x: 'conversion en petit MP4 : le Wi-Fi de la 3DS l’envoie vite', c1q: 'en attente de son tour',
+      c2: 'Téléchargement sur le téléphone', direct: 'Télécharger directement',
+      directLink: 'ou télécharger directement',
+      big: 'Vidéo volumineuse (%1) : le navigateur du téléphone la télécharge tout seul, regardez dans ses téléchargements. Laissez la console ouverte, sur l’écran « Télécharger ».',
+      diag: 'Journal pour le développeur (.txt)', pick: 'Déposez un .r3d ici ou cliquez pour en choisir un',
+      pickHint: 'Sur la carte SD : /3ds/recorder/recordings',
+      privacy: 'Le fichier reste sur votre ordinateur : c’est le navigateur qui crée la vidéo, rien n’est mis en ligne.',
+      read: 'Lecture du fichier', notR3d: 'Ce n’est pas un enregistrement de 3DS Recorder (.r3d).',
+      rpl: 'C’est une mémoire tampon de la relecture, pas un enregistrement. Sauvegardez le clip sur la console (combinaison de la relecture) et convertissez le .r3d ainsi créé.',
+      optScale: 'Échelle', optAudio: 'Son', eqOn: 'Comme sur la console', eqOff: 'Tel qu’enregistré',
+      scaleHint: '1× est la taille d’origine de la 3DS (400×480). 2× et 3× gardent des pixels nets dans les logiciels de montage et sur les grands écrans ; le fichier est plus lourd.',
+      fastPc: 'rapide : encodeur vidéo de l’ordinateur', readErr: 'Impossible de lire le fichier (%1).',
+      failedLocal: 'Impossible de créer la vidéo (%1).', again: 'Convertir un autre fichier',
+      webm: 'Ce navigateur ne peut créer que des vidéos WebM. Pour un MP4, ouvrez cette page dans Chrome, Edge ou Safari.',
+    },
+    de: {
+      mb: 'MB', gb: 'GB', length: 'Dauer', size: 'Größe', eta: 'Übertragungsdauer', s1: 'Download von der Konsole', s2: 'Video erstellen',
+      s3: 'Speichern', waiting: 'wartet', fast: 'schnell: Video-Encoder des Handys',
+      live: 'in Echtzeit: Lass diese Seite offen und den Bildschirm an', none: 'Dieser Browser kann keine Videos erstellen',
+      start: 'Starten', startHint: 'Tippe auf „Starten“: Der Browser lässt eine Seite Ton erst nach einem Tippen nutzen.',
+      keep: 'Lass diese Seite offen und den Bildschirm an, bis das Video fertig ist. Ist die Seite verborgen, wartet das Video.',
+      long: 'Eine lange Aufnahme: Über das Wi-Fi des 3DS dauert es etwa %1. Bei langen Aufnahmen ist die SD Card schneller.',
+      save: 'Video speichern', share: 'Teilen / in Fotos sichern', raw: 'oder die Original-.r3d für den Computer',
+      sd: 'Aufnahmen kannst du auch von der SD Card holen: Schalte die Konsole aus und stecke die Karte in einen Computer, sie liegen in /3ds/recorder/recordings.',
+      howIos: 'Tippe auf „Video speichern“, dann öffne Dateien → Downloads → das Video → Teilen → Video sichern: Es landet in Fotos.',
+      howAndroid: 'Tippe auf „Video speichern“: Es landet in Downloads und erscheint in der Galerie.',
+      howOther: 'Tippe auf „Video speichern“: Es landet in deinem Download-Ordner.',
+      ready: 'fertig', retry: 'Erneut versuchen', lost: 'Die Verbindung zur Konsole ist abgebrochen. Ist die Konsole noch aufgeklappt und auf dem Bildschirm „Herunterladen“?',
+      notFound: 'Diese Aufnahme wird nicht mehr angeboten. Wähle sie auf der Konsole erneut aus (Galerie → Y).',
+      noFile: 'Der Link enthält keine Aufnahme. Scanne den Code auf der Konsole erneut.',
+      failed: 'Das Video konnte nicht erstellt werden (%1). Die Original-.r3d findest du unten.', paused: 'pausiert: wartet auf den Download',
+      hidden: 'pausiert: Die Seite ist verborgen', min: 'Min.', sec: 's', left: 'noch %1', mbs: 'MB/s',
+      c1: 'Umwandlung auf der Konsole', c1x: 'wird in eine kleine MP4-Datei umgewandelt, die das Wi-Fi des 3DS schnell sendet', c1q: 'in der Warteschlange',
+      c2: 'Download aufs Handy', direct: 'Direkt herunterladen', directLink: 'oder direkt herunterladen',
+      big: 'Ein langes Video (%1): Der Browser des Handys lädt es von selbst herunter, sieh in seinen Downloads nach. Lass die Konsole aufgeklappt auf dem Bildschirm „Herunterladen“.',
+      diag: 'Protokoll für den Entwickler (.txt)',
+      pick: 'Ziehe eine .r3d hierher oder klicke zum Auswählen', pickHint: 'Von der SD Card: /3ds/recorder/recordings',
+      privacy: 'Die Datei bleibt auf deinem Computer: Der Browser erstellt das Video, nichts wird hochgeladen.',
+      read: 'Datei lesen', notR3d: 'Das ist keine Aufnahme von 3DS Recorder (.r3d).',
+      rpl: 'Das ist ein Replay-Puffer, keine Aufnahme. Speichere den Clip auf der Konsole (Replay-Kombination) und wandle die dabei erstellte .r3d um.',
+      optScale: 'Skalierung', optAudio: 'Ton', eqOn: 'Wie auf der Konsole', eqOff: 'Wie aufgenommen',
+      scaleHint: '1× ist die Originalgröße des 3DS (400×480). 2× und 3× halten die Pixel in Schnittprogrammen und auf großen Bildschirmen scharf; die Datei wird größer.',
+      fastPc: 'schnell: Video-Encoder des Computers', readErr: 'Die Datei konnte nicht gelesen werden (%1).', failedLocal: 'Das Video konnte nicht erstellt werden (%1).', again: 'Weitere Datei umwandeln',
+      webm: 'Dieser Browser kann nur WebM-Videos erstellen. Für eine MP4-Datei öffne diese Seite in Chrome, Edge oder Safari.',
+    },
+    'zh-Hans': {
+      mb: 'MB', gb: 'GB', length: '时长', size: '大小', eta: '传输时间', s1: '从主机下载', s2: '生成视频',
+      s3: '保存', waiting: '等待中', fast: '快速：使用手机的视频编码器',
+      live: '实时：请保持此页面打开、屏幕常亮', none: '此浏览器无法生成视频',
+      start: '开始', startHint: '请点按“开始”：浏览器只允许页面在点按后使用声音。',
+      keep: '视频完成之前，请保持此页面打开、屏幕常亮。页面被隐藏时，视频会暂停等待。',
+      long: '录像较长：通过3DS的Wi-Fi传输约需%1。长录像用SD卡更快。',
+      save: '保存视频', share: '共享／存储到“照片”', raw: '或下载原始.r3d文件，供电脑使用',
+      sd: '也可以通过SD卡获取录像：关闭主机，把SD卡插到电脑上，录像位于/3ds/recorder/recordings。',
+      howIos: '点按“保存视频”，然后打开“文件”→“下载”→该视频→“共享”→“存储视频”：视频会存入“照片”。',
+      howAndroid: '点按“保存视频”：视频会存入“下载”文件夹，并出现在相册中。',
+      howOther: '点按“保存视频”：视频会存入下载文件夹。',
+      ready: '完成', retry: '重试', lost: '与主机的连接已断开。主机是否仍停留在“下载”画面，且没有合上？',
+      notFound: '此录像已不再提供。请在主机上重新选择（图库→Y）。',
+      noFile: '链接中没有录像。请在主机上重新扫描二维码。',
+      failed: '无法生成视频（%1）。原始.r3d文件在下方。', paused: '已暂停：等待下载',
+      hidden: '已暂停：页面被隐藏', min: '分钟', sec: '秒', left: '剩余%1', mbs: 'MB/s',
+      c1: '在主机上转换', c1x: '正在转换为体积较小的MP4：3DS的Wi-Fi能很快传完', c1q: '排队等待中',
+      c2: '下载到手机', direct: '直接下载', directLink: '或直接下载',
+      big: '视频较大（%1）：手机浏览器会自动下载，请在浏览器的下载内容中查找。请让主机停留在“下载”画面，不要合上主机。',
+      diag: '开发者日志（.txt）',
+      pick: '将.r3d文件拖放到此处，或点击选择', pickHint: '位于SD卡：/3ds/recorder/recordings',
+      privacy: '文件不会离开您的电脑：视频由浏览器生成，不会上传任何内容。',
+      read: '读取文件', notR3d: '这不是3DS Recorder的录像（.r3d）。',
+      rpl: '这是即时回放的缓存，不是录像。请在主机上保存片段（即时回放组合键），然后转换由此生成的.r3d文件。',
+      optScale: '缩放', optAudio: '声音', eqOn: '模拟主机音色', eqOff: '原声',
+      scaleHint: '1×是3DS的原始尺寸（400×480）。2×和3×可在剪辑软件和大屏幕上保持像素清晰，但文件更大。',
+      fastPc: '快速：使用电脑的视频编码器', readErr: '无法读取文件（%1）。', failedLocal: '无法生成视频（%1）。', again: '转换其他文件',
+      webm: '此浏览器只能生成WebM视频。如需MP4，请在Chrome、Edge或Safari中打开此页面。',
+    },
+    'zh-Hant': {
+      mb: 'MB', gb: 'GB', length: '長度', size: '大小', eta: '傳輸時間', s1: '從主機下載', s2: '製作影片',
+      s3: '儲存', waiting: '等待中', fast: '快速：使用手機的影片編碼器',
+      live: '即時處理：請保持此頁面開啟並讓螢幕亮著', none: '此瀏覽器無法製作影片',
+      start: '開始', startHint: '請點一下「開始」：瀏覽器只允許網頁在點觸後使用聲音。',
+      keep: '影片完成前，請保持此頁面開啟並讓螢幕亮著。頁面被隱藏時，影片製作會暫停。',
+      long: '較長的錄影：透過 3DS 的 Wi-Fi 約需 %1。這類錄影從 SD 卡取出會更快。',
+      save: '儲存影片', share: '分享／儲存到「照片」', raw: '或下載原始 .r3d 檔，供電腦使用',
+      sd: '也可以從 SD 卡取出錄影：關閉主機電源，將 SD 卡插入電腦，錄影位於 /3ds/recorder/recordings。',
+      howIos: '點一下「儲存影片」，然後開啟「檔案」→「下載項目」→ 影片 →「分享」→「儲存影片」：影片會存到「照片」。',
+      howAndroid: '點一下「儲存影片」：影片會存到「下載」資料夾，並出現在圖庫中。',
+      howOther: '點一下「儲存影片」：影片會存到您的下載資料夾。',
+      ready: '完成', retry: '重試', lost: '與主機的連線已中斷。主機是否仍停留在「下載」畫面，且沒有合上？',
+      notFound: '已無法提供此錄影。請在主機上重新選擇（圖庫 → Y）。',
+      noFile: '連結中沒有錄影。請重新掃描主機上的 QR Code。',
+      failed: '無法製作影片（%1）。原始 .r3d 檔在下方。', paused: '已暫停：等待下載',
+      hidden: '已暫停：頁面已隱藏', min: '分鐘', sec: '秒', left: '剩餘 %1', mbs: 'MB/s',
+      c1: '在主機上轉換', c1x: '正在轉換為較小的 MP4：3DS 的 Wi-Fi 能很快傳完', c1q: '排隊等候中',
+      c2: '下載到手機', direct: '直接下載', directLink: '或直接下載',
+      big: '較長的影片（%1）：手機的瀏覽器會自動下載，請到瀏覽器的下載項目中查看。請讓主機停留在「下載」畫面，不要合上。',
+      diag: '給開發者的記錄檔（.txt）',
+      pick: '將 .r3d 拖放到這裡，或點擊選擇檔案', pickHint: '位於 SD 卡：/3ds/recorder/recordings',
+      privacy: '檔案只會留在您的電腦上：影片由瀏覽器製作，不會上傳任何資料。',
+      read: '讀取檔案', notR3d: '這不是 3DS Recorder 的錄影（.r3d）。',
+      rpl: '這是即時重播的暫存檔，不是錄影。請在主機上儲存片段（即時重播快捷鍵），再轉換它產生的 .r3d。',
+      optScale: '縮放', optAudio: '聲音', eqOn: '與主機相同', eqOff: '原始錄音',
+      scaleHint: '1× 為 3DS 的原始尺寸（400×480）。2× 和 3× 可在編輯軟體和大螢幕上保持像素清晰；檔案會較大。',
+      fastPc: '快速：使用電腦的影片編碼器', readErr: '無法讀取檔案（%1）。', failedLocal: '無法製作影片（%1）。', again: '轉換其他檔案',
+      webm: '此瀏覽器只能製作 WebM 影片。若要 MP4，請在 Chrome、Edge 或 Safari 中開啟此頁面。',
+    },
+    ja: {
+      mb: 'MB', gb: 'GB', length: '長さ', size: 'サイズ', eta: '転送時間', s1: '本体からダウンロード', s2: '動画を作成',
+      s3: '保存', waiting: '待機中', fast: '高速：スマートフォンの動画エンコーダー',
+      live: 'リアルタイム：このページを開いたまま、画面をつけておいてください', none: 'このブラウザーでは動画を作成できません',
+      start: '開始', startHint: '「開始」をタップしてください。ブラウザーは、タップされたあとでないとページに音声を使わせません。',
+      keep: '動画ができるまで、このページを開いたまま画面をつけておいてください。ページが隠れると、動画の作成は待機します。',
+      long: '長い録画です：3DSのWi-Fiで約%1かかります。長い録画はSDカードから取り出すほうが速いです。',
+      save: '動画を保存', share: '共有／「写真」に保存', raw: 'または元の.r3d（パソコン用）',
+      sd: '録画はSDカードからも取り出せます。本体の電源を切ってカードをパソコンに入れてください。録画は/3ds/recorder/recordingsにあります。',
+      howIos: '「動画を保存」をタップし、「ファイル」→「ダウンロード」→動画→共有→「ビデオを保存」の順に進むと、「写真」に保存されます。',
+      howAndroid: '「動画を保存」をタップすると「ダウンロード」に保存され、ギャラリーにも表示されます。',
+      howOther: '「動画を保存」をタップすると、ダウンロードフォルダーに保存されます。',
+      ready: '完了', retry: 'もう一度', lost: '本体との接続が切れました。本体は開いたまま「ダウンロード」の画面になっていますか？',
+      notFound: 'この録画はもうダウンロードできません。本体でもう一度選んでください（ギャラリー→Y）。',
+      noFile: 'リンクに録画が含まれていません。本体のコードをもう一度読み取ってください。',
+      failed: '動画を作成できませんでした（%1）。元の.r3dは下にあります。', paused: '一時停止中：ダウンロードを待っています',
+      hidden: '一時停止中：ページが隠れています', min: '分', sec: '秒', left: '残り%1', mbs: 'MB/s',
+      c1: '本体で変換', c1x: '小さなMP4に変換中：3DSのWi-Fiでもすばやく送れます', c1q: '順番待ち',
+      c2: 'スマートフォンにダウンロード', direct: '直接ダウンロード', directLink: 'または直接ダウンロード',
+      big: '長い動画です（%1）：スマートフォンのブラウザーが自動でダウンロードするので、ブラウザーのダウンロードを確認してください。本体は開いたまま「ダウンロード」の画面にしておいてください。',
+      diag: '開発者向けログ（.txt）',
+      pick: '.r3dをここにドロップするか、クリックして選択', pickHint: 'SDカード内：/3ds/recorder/recordings',
+      privacy: 'ファイルはパソコンから出ません。動画はブラウザーが作成し、何もアップロードされません。',
+      read: 'ファイルを読み込み中', notR3d: '3DS Recorderの録画（.r3d）ではありません。',
+      rpl: 'これはリプレイのバッファーで、録画ではありません。本体でクリップを保存し（リプレイの組み合わせ）、作られた.r3dを変換してください。',
+      optScale: '倍率', optAudio: '音声', eqOn: '本体スピーカー風', eqOff: '録音のまま',
+      scaleHint: '1×は3DS本来のサイズ（400×480）です。2×と3×では、編集ソフトや大きな画面でもドットがくっきりしますが、ファイルが大きくなります。',
+      fastPc: '高速：パソコンの動画エンコーダー', readErr: 'ファイルを読み込めませんでした（%1）。', failedLocal: '動画を作成できませんでした（%1）。', again: 'ほかのファイルを変換',
+      webm: 'このブラウザーではWebM動画しか作成できません。MP4にするには、このページをChrome、Edge、Safariで開いてください。',
+    },
   };
   let L = TEXT.en;
+  let locale = 'en-GB';
+  // the dates' form for each language (Intl), the TEXT key for each
+  const LOCALE = { en: 'en-GB', uk: 'uk-UA', de: 'de-DE', es: 'es-ES', fr: 'fr-FR', it: 'it-IT', pt: 'pt-BR',
+    ja: 'ja-JP', 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW' };
+  function setLang(code) {
+    if (!code || !TEXT[code]) return false;
+    L = TEXT[code];
+    locale = LOCALE[code] || code;
+    document.documentElement.lang = code;
+    return true;
+  }
+  // the browser's languages, in its order: zh-TW / zh-HK / zh-MO / zh-Hant -> zh-Hant, other zh -> zh-Hans
+  function browserLang() {
+    for (const tag of navigator.languages || [navigator.language || '']) {
+      const l = String(tag).toLowerCase();
+      const code = /^zh-(tw|hk|mo|hant)/.test(l) ? 'zh-Hant' : /^zh/.test(l) ? 'zh-Hans' : l.split('-')[0];
+      if (TEXT[code]) return code;
+    }
+    return 'en';
+  }
   const t = (k, ...a) => a.reduce((s, v, i) => s.replace('%' + (i + 1), v), L[k] || TEXT.en[k] || k);
 
   const CHUNK = 512 << 10;      // bytes per request (~1-2 s each on the 3DS Wi-Fi: progress moves)
@@ -126,13 +393,16 @@
     const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
     return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(s).padStart(2, '0');
   }
-  function mb(bytes) { return bytes >= 1 << 30 ? (bytes / (1 << 30)).toFixed(1) + ' GB' : Math.round(bytes / (1 << 20)) + ' MB'; }
+  function mb(bytes) {
+    return bytes >= 1 << 30 ? (bytes / (1 << 30)).toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ' + t('gb')
+      : Math.round(bytes / (1 << 20)) + ' ' + t('mb');
+  }
   function duration(sec) { return sec >= 90 ? '≈ ' + Math.round(sec / 60) + ' ' + t('min') : '≈ ' + Math.round(sec) + ' ' + t('sec'); }
   function when(n) { // yyyymmdd_hhmmss.r3d
     const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(n || '');
     if (!m) return n || '';
     const d = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
-    return d.toLocaleDateString(L === TEXT.uk ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) +
+    return d.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' }) +
       ' · ' + m[4] + ':' + m[5];
   }
   function step(i, state, pct, text, extra) {
@@ -755,7 +1025,7 @@
     if (!name) name = info.name;
     if (!name) { fail(t('noFile')); return; }
     report(`rec ${info.name} ${info.size} B ${info.ms} ms ok ${info.ok} closed ${info.closed} | prep ${info.prep} ${info.prepPct} mp4 ${info.mp4}`);
-    if (info.lang === 'uk') { L = TEXT.uk; document.documentElement.lang = 'uk'; }
+    setLang(info.lang); // the console's language
     document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = t(el.dataset.t); });
     if (info.name !== name || !info.ok) { fail(t('notFound')); return; }
     $('console').textContent = info.console || '';
@@ -776,7 +1046,7 @@
   /* ------------------------------------------------------------ local mode: a file on the computer */
 
   function localMain() {
-    if (/^uk\b/i.test(navigator.language || '')) { L = TEXT.uk; document.documentElement.lang = 'uk'; }
+    setLang(browserLang());
     document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = t(el.dataset.t); });
     for (const id of ['card', 'steps', 'raw', 'sd', 'diag']) $(id).hidden = true;
     $('s1').querySelector('b').textContent = t('read');

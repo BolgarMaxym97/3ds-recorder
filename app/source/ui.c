@@ -1,8 +1,10 @@
 #include "ui.h"
 
 #include "i18n.h"
+#include "textbreak.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Drawing primitives for the control app. Taken from 3ds-ua-hub's ui.c (same author, checked on an
@@ -15,27 +17,110 @@
 #define UI_DEPTH 0.5f
 #define TEXT_BUF_GLYPHS 4096
 
-static C2D_Font fonts[2];
+/* base: Inter with the Latin and Cyrillic the app's texts need, plus the language names and the
+ * first-run language screen in every language. script: the font of a language written otherwise
+ * (Japanese, Chinese: Inter + Noto), loaded only while that language is on (ui_set_script). */
+static C2D_Font base[2], script[2];
+static Script script_on = SCRIPT_LATIN;
+static bool base_only; /* the language list: every language's name in the base font */
 static C2D_TextBuf text_buf;
-/* Measuring parses text too; a buffer of its own, emptied per call, keeps word wrap from
- * eating the frame's buffer one trial line at a time. */
-static C2D_TextBuf measure_buf;
+
+static C2D_Font font_of(FontWeight weight) { return !base_only && script[weight] ? script[weight] : base[weight]; }
+
+/* citro2d sizes a font by its cell height (C2D_Font's textScale = 30 / cellHeight), and mkbcfnt
+ * makes the cell as tall as the font's tallest glyph: a font with kanji, or with a few more
+ * letters, would come out smaller and sit lower. Every font is drawn as Inter's own cut was
+ * (inter_*.bcfnt: cells 45 high, baseline at 34), which the design is measured with. */
+#define REF_CELL 45.0f
+#define REF_BASELINE 34.0f
+static float font_adj(C2D_Font f, float *dy_em)
+{
+    const FINF_s *fi = C2D_FontGetInfo(f);
+    if (!fi || !fi->tglp || !fi->tglp->cellHeight) {
+        *dy_em = 0;
+        return 1;
+    }
+    *dy_em = ((float)fi->tglp->baselinePos - REF_BASELINE) * 30.0f / REF_CELL;
+    return fi->tglp->cellHeight / REF_CELL;
+}
+
+/* A character's advance at FONT_EM, cached: the font's own code point lookup can walk a long list
+ * (Japanese, Chinese), and word wrap asks for every character of a paragraph each frame. */
+#define WIDTH_CACHE 512
+static struct {
+    C2D_Font font;
+    float scale;
+    u32 cp[WIDTH_CACHE];
+    float w[WIDTH_CACHE];
+} width_cache[2];
+
+static float char_width(void *ctx, uint32_t cp)
+{
+    const FontWeight weight = (FontWeight)(uintptr_t)ctx;
+    C2D_Font f = font_of(weight);
+    typeof(&width_cache[0]) c = &width_cache[weight];
+    if (c->font != f) {
+        memset(c->cp, 0xFF, sizeof(c->cp));
+        c->font = f;
+        /* textScale (30 / cellHeight) times font_adj (cellHeight / REF_CELL) */
+        c->scale = 30.0f / REF_CELL;
+    }
+    const unsigned slot = (cp * 2654435761u) >> 23; /* 9 bits */
+    if (c->cp[slot] != cp) {
+        const charWidthInfo_s *cwi = C2D_FontGetCharWidthInfo(f, C2D_FontGlyphIndexFromCodePoint(f, cp));
+        c->cp[slot] = cp;
+        c->w[slot] = cwi ? cwi->charWidth * c->scale : 0;
+    }
+    return c->w[slot];
+}
+
+static const char *const SCRIPT_FONT[] = {[SCRIPT_JA] = "ja", [SCRIPT_ZH_HANS] = "zhs", [SCRIPT_ZH_HANT] = "zht"};
+
+bool ui_set_script(Script s)
+{
+    if (s == script_on)
+        return true;
+    if (script[FONT_BOLD] && script[FONT_BOLD] != script[FONT_REG])
+        C2D_FontFree(script[FONT_BOLD]);
+    if (script[FONT_REG])
+        C2D_FontFree(script[FONT_REG]);
+    script[FONT_REG] = script[FONT_BOLD] = NULL;
+    script_on = SCRIPT_LATIN;
+    if (s == SCRIPT_LATIN || (unsigned)s >= sizeof(SCRIPT_FONT) / sizeof(*SCRIPT_FONT))
+        return true;
+    char path[48];
+    for (int w = 0; w < 2; w++) {
+        snprintf(path, sizeof(path), "romfs:/font/%s_%d.bcfnt", SCRIPT_FONT[s], w == FONT_BOLD ? 700 : 500);
+        script[w] = C2D_FontLoad(path);
+    }
+    if (!script[FONT_REG]) { /* the language's text then shows what the base font has */
+        if (script[FONT_BOLD])
+            C2D_FontFree(script[FONT_BOLD]);
+        script[FONT_BOLD] = NULL;
+        return false;
+    }
+    if (!script[FONT_BOLD]) /* one weight is enough to read */
+        script[FONT_BOLD] = script[FONT_REG];
+    script_on = s;
+    return true;
+}
+
+void ui_base_font(bool on) { base_only = on; }
 
 bool ui_init(void)
 {
-    fonts[FONT_REG] = C2D_FontLoad("romfs:/font/inter_500.bcfnt");
-    fonts[FONT_BOLD] = C2D_FontLoad("romfs:/font/inter_700.bcfnt");
+    base[FONT_REG] = C2D_FontLoad("romfs:/font/inter_500.bcfnt");
+    base[FONT_BOLD] = C2D_FontLoad("romfs:/font/inter_700.bcfnt");
     text_buf = C2D_TextBufNew(TEXT_BUF_GLYPHS);
-    measure_buf = C2D_TextBufNew(512);
-    return fonts[FONT_REG] && fonts[FONT_BOLD] && text_buf && measure_buf;
+    return base[FONT_REG] && base[FONT_BOLD] && text_buf;
 }
 
 void ui_exit(void)
 {
+    ui_set_script(SCRIPT_LATIN);
     C2D_TextBufDelete(text_buf);
-    C2D_TextBufDelete(measure_buf);
-    C2D_FontFree(fonts[FONT_REG]);
-    C2D_FontFree(fonts[FONT_BOLD]);
+    C2D_FontFree(base[FONT_REG]);
+    C2D_FontFree(base[FONT_BOLD]);
 }
 
 void ui_frame_begin(void)
@@ -47,32 +132,29 @@ void ui_frame_begin(void)
 
 static bool parse(C2D_Text *text, FontWeight weight, const char *str)
 {
-    if (!C2D_TextFontParse(text, fonts[weight], text_buf, str))
+    if (!C2D_TextFontParse(text, font_of(weight), text_buf, str))
         return false;
     C2D_TextOptimize(text);
     return true;
 }
 
+/* summed from the font's advances (what citro2d lays text out with), no parsing */
 float ui_text_width(float px, FontWeight weight, const char *str)
 {
-    C2D_Text text;
-    float w = 0, h = 0, s = px / FONT_EM;
-    C2D_TextBufClear(measure_buf);
-    if (C2D_TextFontParse(&text, fonts[weight], measure_buf, str))
-        C2D_TextGetDimensions(&text, s, s, &w, &h);
-    return w;
+    return text_width(str, char_width, (void *)(uintptr_t)weight) * px / FONT_EM;
 }
 
 float ui_text(float x, float y, float px, FontWeight weight, u32 color, const char *str)
 {
     C2D_Text text;
-    float w = 0, h = 0, s = px / FONT_EM;
+    float w = 0, h = 0, dy = 0;
+    const float s = px / FONT_EM * font_adj(font_of(weight), &dy);
     if (!parse(&text, weight, str))
         return 0;
     C2D_TextGetDimensions(&text, s, s, &w, &h);
     /* one depth for everything (UI_DEPTH): text at 0.5 over shapes at 0.3 won the depth test
        against a scrim drawn later, and the white Start button showed through behind its label */
-    C2D_DrawText(&text, C2D_WithColor, x, y + TEXT_NUDGE * px / 12, UI_DEPTH, s, s, color);
+    C2D_DrawText(&text, C2D_WithColor, x, y + TEXT_NUDGE * px / 12 - dy * px / FONT_EM, UI_DEPTH, s, s, color);
     return w;
 }
 
@@ -107,62 +189,46 @@ static void draw_cut(float x, float y, float width, float px, FontWeight weight,
     ui_text(x, y, px, weight, color, buf);
 }
 
-/* Greedy word wrap on spaces and '\n', measured with the font itself; draws only if `draw`. At
- * most `max_lines` lines (0: any), the last cut with "…" when there is more. */
+/* Greedy word wrap (textbreak.c: spaces, '\n', and between Japanese or Chinese characters),
+ * measured with the font's advances; draws only if `draw`. At most `max_lines` lines (0: any), the
+ * last cut with "…" when there is more. */
 static float wrap(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str, bool draw,
                   int max_lines)
 {
-    char line[256], trial[256];
-    size_t line_len = 0;
-    float line_h = px * LINE_HEIGHT, cy = y;
+    char line[256];
+    const float line_h = px * LINE_HEIGHT, em_width = width * FONT_EM / px;
+    float cy = y;
     int lines = 0;
     const char *p = str;
-    line[0] = 0;
-#define EMIT(more)                                                                                         \
-    do {                                                                                                   \
-        if (max_lines && lines + 1 == max_lines && (more)) {                                              \
-            if (draw)                                                                                      \
-                draw_cut(x, cy, width, px, weight, color, line);                                           \
-            return cy + line_h - y;                                                                        \
-        }                                                                                                  \
-        if (draw)                                                                                          \
-            ui_text(x, cy, px, weight, color, line);                                                       \
-        cy += line_h;                                                                                      \
-        lines++;                                                                                           \
-    } while (0)
     while (*p) {
-        const char *end = p;
-        while (*end && *end != ' ' && *end != '\n')
-            end++;
-        size_t word = (size_t)(end - p);
-        if (line_len + word + 2 >= sizeof(trial))
-            word = sizeof(trial) - line_len - 2;
-        memcpy(trial, line, line_len);
-        size_t t = line_len;
-        if (line_len)
-            trial[t++] = ' ';
-        memcpy(trial + t, p, word);
-        trial[t + word] = 0;
-        if (line_len && ui_text_width(px, weight, trial) > width) {
-            EMIT(true);
-            memcpy(line, p, word);
-            line_len = word;
-        } else {
-            memcpy(line, trial, t + word + 1);
-            line_len = t + word;
+        const char *next;
+        size_t n = text_line(p, em_width, char_width, (void *)(uintptr_t)weight, &next, NULL);
+        if (n >= sizeof(line))
+            n = sizeof(line) - 1;
+        const bool more = *next != 0;
+        if (draw) {
+            memcpy(line, p, n);
+            line[n] = 0;
+            if (max_lines && lines + 1 == max_lines && more)
+                draw_cut(x, cy, width, px, weight, color, line);
+            else
+                ui_text(x, cy, px, weight, color, line);
         }
-        line[line_len] = 0;
-        if (*end == '\n') {
-            EMIT(end[1] != 0);
-            line_len = 0;
-            line[0] = 0;
-        }
-        p = *end ? end + 1 : end;
+        cy += line_h;
+        lines++;
+        if (max_lines && lines == max_lines)
+            break;
+        p = next;
     }
-    if (line_len)
-        EMIT(false);
-#undef EMIT
     return cy - y;
+}
+
+float ui_text_fit(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str)
+{
+    if (ui_text_width(px, weight, str) <= width)
+        return ui_text(x, y, px, weight, color, str);
+    draw_cut(x, y, width, px, weight, color, str);
+    return width;
 }
 
 float ui_text_wrap(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str)
@@ -471,20 +537,69 @@ float ui_key_chip(float x, float y, const char *key)
 /* The languages' flags, 21 x 13 (English: US stripes + canton; Ukrainian: blue over yellow). */
 void ui_flag(float x, float y, int lang) { ui_flag_sized(x, y, 21, lang); }
 
+static void stripes(float x, float y, float w, float h, bool vertical, const u32 *colors, const float *parts, int n)
+{
+    float total = 0, at = 0;
+    for (int i = 0; i < n; i++)
+        total += parts[i];
+    for (int i = 0; i < n; i++) {
+        const float len = (vertical ? w : h) * parts[i] / total;
+        if (vertical)
+            ui_rect(x + at, y, len, h, colors[i]);
+        else
+            ui_rect(x, y + at, w, len, colors[i]);
+        at += len;
+    }
+}
+
+/* A language's flag, 21:13. Chinese has none (whose flag would be a statement): its first letter
+   (简 / 繁) on a plain tile instead, from the base font, which has every language's name. */
 void ui_flag_sized(float x, float y, float w, int lang)
 {
     const float h = w * 13 / 21, k = w / 21;
-    if (lang == LANG_UK) {
-        ui_rect(x, y, w, h / 2, COL_FLAG_BLUE);
-        ui_rect(x, y + h / 2, w, h / 2, COL_FLAG_YELLOW);
-        return;
+    const char *code = (unsigned)lang < LANG_COUNT ? LANGS[lang].code : "en";
+    static const float ONE[3] = {1, 1, 1}, SPAIN[3] = {1, 2, 1};
+    if (!strcmp(code, "uk")) {
+        ui_rect(x, y, w, h / 2, RGBA(0x00, 0x57, 0xB7, 0xFF));
+        ui_rect(x, y + h / 2, w, h / 2, RGBA(0xFF, 0xD7, 0x00, 0xFF));
+    } else if (!strcmp(code, "de")) {
+        const u32 c[3] = {RGBA(0x00, 0x00, 0x00, 0xFF), RGBA(0xDD, 0x00, 0x00, 0xFF), RGBA(0xFF, 0xCE, 0x00, 0xFF)};
+        stripes(x, y, w, h, false, c, ONE, 3);
+    } else if (!strcmp(code, "es")) {
+        const u32 c[3] = {RGBA(0xAA, 0x15, 0x1B, 0xFF), RGBA(0xF1, 0xBF, 0x00, 0xFF), RGBA(0xAA, 0x15, 0x1B, 0xFF)};
+        stripes(x, y, w, h, false, c, SPAIN, 3);
+    } else if (!strcmp(code, "fr")) {
+        const u32 c[3] = {RGBA(0x00, 0x55, 0xA4, 0xFF), COL_WHITE, RGBA(0xEF, 0x41, 0x35, 0xFF)};
+        stripes(x, y, w, h, true, c, ONE, 3);
+    } else if (!strcmp(code, "it")) {
+        const u32 c[3] = {RGBA(0x00, 0x92, 0x46, 0xFF), COL_WHITE, RGBA(0xCE, 0x2B, 0x37, 0xFF)};
+        stripes(x, y, w, h, true, c, ONE, 3);
+    } else if (!strcmp(code, "pt")) { /* Portugal: green 2/5, red 3/5, the arms on the line between */
+        const float cx = x + w * 0.4f, cy = y + h / 2, r = h * 0.3f;
+        ui_rect(x, y, w * 0.4f, h, RGBA(0x00, 0x66, 0x00, 0xFF));
+        ui_rect(x + w * 0.4f, y, w * 0.6f, h, RGBA(0xFF, 0x00, 0x00, 0xFF));
+        ui_circle(cx, cy, r, RGBA(0xFF, 0xFF, 0x00, 0xFF));
+        ui_rrect(cx - r * 0.5f, cy - r * 0.55f, r, r * 1.15f, r * 0.25f, COL_WHITE);
+        ui_rrect(cx - r * 0.38f, cy - r * 0.43f, r * 0.76f, r * 0.9f, r * 0.2f, RGBA(0xFF, 0x00, 0x00, 0xFF));
+        ui_rect(cx - r * 0.12f, cy - r * 0.2f, r * 0.24f, r * 0.4f, COL_WHITE);
+    } else if (!strcmp(code, "ja")) {
+        ui_rect(x, y, w, h, COL_WHITE);
+        ui_circle(x + w / 2, y + h / 2, h * 0.3f, RGBA(0xBC, 0x00, 0x2D, 0xFF));
+    } else if (!strncmp(code, "zh", 2)) {
+        char letter[5] = "";
+        const char *p = LANGS[lang].name, *q = p;
+        utf8_next(&q);
+        memcpy(letter, p, (size_t)(q - p) < 4 ? (size_t)(q - p) : 4);
+        ui_rrect(x, y, w, h, 2.5f * k, COL_SURFACE2);
+        ui_text_center(x + w / 2, y + h / 2 - h * 0.42f, h * 0.72f, FONT_BOLD, COL_TEXT, letter);
+    } else { /* en: the United States */
+        for (int i = 0; i < 7; i++)
+            ui_rect(x, y + i * h / 7, w, h / 7, i % 2 ? COL_WHITE : COL_US_RED);
+        ui_rect(x, y, w * 0.42f, h * 4 / 7, COL_US_BLUE);
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++)
+                ui_rect(x + (1.2f + c * 2.1f) * k, y + (1.1f + r * 2.3f) * k, 0.8f * k, 0.8f * k, COL_WHITE);
     }
-    for (int i = 0; i < 7; i++)
-        ui_rect(x, y + i * h / 7, w, h / 7, i % 2 ? COL_WHITE : COL_US_RED);
-    ui_rect(x, y, w * 0.42f, h * 4 / 7, COL_US_BLUE);
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 4; c++)
-            ui_rect(x + (1.2f + c * 2.1f) * k, y + (1.1f + r * 2.3f) * k, 0.8f * k, 0.8f * k, COL_WHITE);
 }
 
 void ui_toggle(float x, float y, bool on)

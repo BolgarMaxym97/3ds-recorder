@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n
 
 .PHONY: test clean
 
@@ -49,3 +49,9 @@ test_join: test_join.c ../../prep/source/join.c ../../prep/include/join.h ../../
 
 test_stats: test_stats.c ../../app/source/stats_core.c ../../app/source/stats_core.h
 	$(CC) $(CFLAGS) -I../../app/source -o $@ test_stats.c ../../app/source/stats_core.c
+
+test_textbreak: test_textbreak.c ../../app/source/textbreak.c ../../app/source/textbreak.h
+	$(CC) $(CFLAGS) -I../../app/source -o $@ test_textbreak.c ../../app/source/textbreak.c
+
+test_i18n: test_i18n.c ../../app/source/i18n.c ../../app/source/i18n.h ../../app/source/lang/*.c
+	$(CC) $(CFLAGS) -I../../app/source -o $@ test_i18n.c ../../app/source/i18n.c ../../app/source/lang/*.c

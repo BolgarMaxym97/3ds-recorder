@@ -32,7 +32,9 @@ const report = {
   system: "11.17.0-50E",
   luma: "13.5.0",
   kernel: "2.58-0",
-  config: "fps=30\nscreens=both\nstats=on\n",
+  config: "fps=30\nscreens=both\nlang=uk\nstats=on\n",
+  lang: "ja",
+  sys_lang: "ja",
   app_log: "[2026-11-14 12:00:00.000] === app start: app 1.5.0 (cia) | New 3DS XL (model 4)\n",
   rec_log: recLog,
 };
@@ -84,8 +86,20 @@ describe("POST /v1/report", () => {
       hangs: 1,
       app_log: report.app_log,
       rec_log: recLog,
+      lang: "ja",
+      sys_lang: "ja",
     });
     expect(row?.received_at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  });
+
+  it.each([
+    ["its config.ini", "fps=30\nlang=uk\r\nstats=on\n", "uk"],
+    ["no lang= line (English)", "fps=30\nstats=on\n", "en"],
+  ])("takes the language of an older app from %s", async (_name, config, lang) => {
+    const { lang: _lang, sys_lang: _sys, ...older } = report;
+
+    expect((await postReport({ ...older, config })).status).toBe(204);
+    expect(await env.DB.prepare("SELECT lang, sys_lang FROM reports").first()).toEqual({ lang, sys_lang: null });
   });
 
   it("accepts a report with only the required fields", async () => {
@@ -101,6 +115,7 @@ describe("POST /v1/report", () => {
     ["a short id", { ...report, id: "K7QM29X" }, "bad id"],
     ["no app", { ...report, app: undefined }, "bad app"],
     ["a number as model", { ...report, model: 4 }, "bad model"],
+    ["a too long language", { ...report, lang: "x".repeat(17) }, "bad lang"],
     ["a too long recorder log", { ...report, rec_log: "x".repeat(48 * 1024 + 1) }, "bad rec_log"],
   ])("rejects %s", async (_name, body, error) => {
     const response = await postReport(body);

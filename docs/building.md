@@ -26,3 +26,18 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 **Screenshots** for the README (`docs/screenshots/`) of screens that do not need the recorder running (settings,
 help, language) come from Azahar: `tools/azahar/azshot.sh capture.png`, then `tools/azahar/az3ds.sh capture.png
 out.png` makes the 400 × 480 picture.
+
+## Languages
+
+The app's texts are `app/source/i18n.h` (the keys and English) and one table per language in
+`app/source/lang/<code>.c`; the phone page's are `TEXT` in `web/app.js`. A new language: its table, an entry in
+`LANGS` (`app/source/i18n.c`), a flag in `ui_flag_sized` (`app/source/ui.c`) and a `TEXT` entry, then:
+
+```sh
+python3 tools/i18n.py check     # every key, the same placeholders and line breaks as English, every character in its font
+tools/make-fonts.sh             # the fonts, cut to the characters the texts use (Japanese, Chinese: Noto Sans JP / SC / TC)
+tools/azahar/tour.sh build/tour es   # every screen in that language, as PNGs (the TOUR=1 build, in Azahar)
+```
+
+`tools/i18n.py widths <code>` lists the texts that grew most against English, `tools/i18n.py table <code>` puts the
+two side by side for a review.

@@ -35,6 +35,8 @@ typedef struct {
     char region[8];   /* "EUR" */
     char luma[16];    /* "13.5.0" */
     char kernel[16];  /* "2.58-0" */
+    char sysLang[4];  /* the console's language: "ja" "en" "fr" "de" "it" "es" "zh" "ko" "nl" "pt" "ru" "tw" */
+    int sysLangId;    /* the same as CFG_LANGUAGE_*, -1 unknown */
 } AppConsole;
 const AppConsole *app_console(void);
 

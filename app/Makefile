@@ -13,7 +13,7 @@ include $(DEVKITARM)/3ds_rules
 TARGET          := 3ds-recorder
 # The CIA's title version: raise it with each build that goes to a console, or the HOME Menu
 # keeps showing the banner it cached for the installed version.
-APP_VERSION := 1.4.0
+APP_VERSION := 1.5.0
 # "beta" for the open beta, empty for a release: shown next to the version on the panel
 APP_CHANNEL     :=
 APP_TITLE       := 3DS Recorder
@@ -21,7 +21,7 @@ APP_DESCRIPTION := Records the whole console
 APP_AUTHOR      := 3ds-screen-recorder
 BUILD           := build
 AAC             := ../third_party/vo-aacenc
-SOURCES         := source ../codec/source ../prep/source ../third_party/qrcodegen \
+SOURCES         := source source/lang ../codec/source ../prep/source ../third_party/qrcodegen \
                    $(AAC)/aacenc/src $(AAC)/aacenc/basic_op $(AAC)/common
 INCLUDES        := source ../codec/include ../prep/include ../tools/r3dconv ../third_party/qrcodegen \
                    ../third_party/minih264 $(AAC)/aacenc/inc $(AAC)/aacenc/basic_op $(AAC)/common/include
@@ -30,6 +30,19 @@ ARCH     := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS   := -g -Wall -Wextra -O2 -mword-relocations -ffunction-sections $(ARCH) -std=gnu11
 CFLAGS   += $(INCLUDE) -D__3DS__ -DAPP_VERSION=\"$(APP_VERSION)\" -DAPP_CHANNEL=\"$(APP_CHANNEL)\"
 ASFLAGS  := -g $(ARCH)
+# make TOUR=1: a build that draws every screen in every language and saves each to
+# sdmc:/3ds/recorder/tour/ (tools/azahar/tour.sh runs it in Azahar), then quits
+# make PERF=1: app.log gets the time each screen takes to draw (main.c perf_frame)
+ifeq ($(PERF),1)
+TARGET   := 3ds-recorder-perf
+BUILD    := build-perf
+CFLAGS   += -DPERF_LOG
+endif
+ifeq ($(TOUR),1)
+TARGET   := 3ds-recorder-tour
+BUILD    := build-tour
+CFLAGS   += -DUI_TOUR
+endif
 LDFLAGS   = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 LIBS     := -lcitro2d -lcitro3d -lctru -lm
 LIBDIRS  := $(CTRULIB) $(PORTLIBS)
@@ -58,7 +71,7 @@ all: $(BUILD)
 	@# the objects that print the version: rebuilt when APP_VERSION / APP_CHANNEL change (make does not
 	@# follow CFLAGS; 0.9.12-0.9.14 showed "0.9.11" on the panel, 2026-11-08)
 	@mkdir -p $(BUILD); if [ "$$(cat $(BUILD)/.app_version 2>/dev/null)" != "$(APP_VERSION) $(APP_CHANNEL)" ]; then \
-		rm -f $(BUILD)/app.o $(BUILD)/recorder.o; echo "$(APP_VERSION) $(APP_CHANNEL)" > $(BUILD)/.app_version; fi
+		rm -f $(BUILD)/app.o $(BUILD)/recorder.o $(BUILD)/stats.o; echo "$(APP_VERSION) $(APP_CHANNEL)" > $(BUILD)/.app_version; fi
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):
