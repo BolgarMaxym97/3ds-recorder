@@ -575,24 +575,30 @@
     if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
     if (audio && (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined')) return null;
     if (width > 400 && typeof OffscreenCanvas === 'undefined') return null; // the upscale draws on one
-    let codec = null;
-    const lv = Math.ceil(width / 16) * Math.ceil(height / 16) > 3600 ? '28' : '1f'; // level 3.1 up to 1280x720, else 4.0
-    for (const c of ['avc1.4d40' + lv, 'avc1.42e0' + lv, 'avc1.640028']) {
-      try {
-        const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate: 2500000, framerate: fps });
-        if (r.supported) { codec = c; break; }
-      } catch (e) { /* next */ }
-    }
-    if (!codec) return null;
-    if (!audio) return { video: codec, audio: null };
     // AAC where the browser has an encoder for it (Safari, Chrome and Edge on Windows and macOS); else
     // Opus, which every browser with WebCodecs encodes (Firefox, Chrome on Linux): still an MP4, made
     // as fast, where it used to be a real-time WebM (issue #17)
     const want = new URLSearchParams(location.search).get('audio'); // tests: ?audio=opus
-    for (const a of want === 'opus' ? ['opus'] : ['mp4a.40.2', 'opus']) {
+    let sound = null;
+    if (typeof AudioEncoder !== 'undefined') {
+      for (const a of want === 'opus' ? ['opus'] : ['mp4a.40.2', 'opus']) {
+        try {
+          const r = await AudioEncoder.isConfigSupported({ codec: a, sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: a === 'opus' ? 128000 : 160000 });
+          if (r.supported) { sound = a; break; }
+        } catch (e) { /* next */ }
+      }
+    }
+    if (audio && !sound) return null;
+    // H.264 Main may come with B-frames, whose pictures leave the encoder out of order, and the muxer
+    // stops at the first time going back ("Timestamps must be monotonically increasing", Firefox on
+    // Windows, issue #28). Constrained Baseline has none: first where there is no AAC (Firefox); the
+    // AAC browsers keep Main, as tested
+    const lv = Math.ceil(width / 16) * Math.ceil(height / 16) > 3600 ? '28' : '1f'; // level 3.1 up to 1280x720, else 4.0
+    const order = sound === 'mp4a.40.2' ? ['avc1.4d40' + lv, 'avc1.42e0' + lv, 'avc1.640028'] : ['avc1.42e0' + lv];
+    for (const c of order) {
       try {
-        const r = await AudioEncoder.isConfigSupported({ codec: a, sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: a === 'opus' ? 128000 : 160000 });
-        if (r.supported) return { video: codec, audio: a };
+        const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate: 2500000, framerate: fps });
+        if (r.supported) return { video: c, audio: audio ? sound : null };
       } catch (e) { /* next */ }
     }
     return null;
