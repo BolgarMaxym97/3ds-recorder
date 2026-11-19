@@ -12,6 +12,11 @@ export default {
     if (pathname !== "/v1/report" && pathname !== "/v1/dump") return new Response(null, { status: 404 });
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
 
+    // An app launch sends one report and at most one dump: more from one address is a script.
+    // The address is only the limiter's key, never stored (429: the app tries again next launch).
+    const { success } = await env.LIMITER.limit({ key: request.headers.get("cf-connecting-ip") ?? "none" });
+    if (!success) return new Response(null, { status: 429 });
+
     const limit = pathname === "/v1/report" ? MAX_REPORT : MAX_DUMP;
     if (Number(request.headers.get("Content-Length") ?? 0) > limit) return new Response(null, { status: 413 });
     const body = await readLimited(request, limit);

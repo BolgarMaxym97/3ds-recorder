@@ -3,7 +3,8 @@
  * the page shows how far that is, downloads the MP4 in pieces and offers it to save. Where the console
  * could not make one, the page downloads the recording itself, turns it into a video in the browser
  * and offers that:
- *   fast  WebCodecs H.264 + AAC -> MP4 (mp4-muxer): Safari and every browser on iOS, also on http
+ *   fast  WebCodecs H.264 + AAC (Opus where the browser has no AAC encoder: Firefox) -> MP4 (mp4-muxer):
+ *         Safari and every browser on iOS, also on http
  *   live  MediaRecorder on a canvas + Web Audio, in real time (Chromium and Firefox give WebCodecs
  *         only to https pages; the console serves http): MP4 where the browser writes it, else WebM
  *   none  only the original .r3d
@@ -48,6 +49,7 @@
       optScale: 'Size', optAudio: 'Sound', eqOn: 'Like the speaker', eqOff: 'As recorded',
       scaleHint: '1× is the 3DS\'s own size (400×480). 2× and 3× keep the pixels sharp in editors and on big screens; the file is bigger.',
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
+      webm: 'This browser can only make WebM videos. For an MP4, open this page in Chrome, Edge or Safari.',
     },
     uk: {
       length: 'Тривалість', size: 'Розмір', eta: 'Передача', s1: 'Завантаження з консолі', s2: 'Робимо відео',
@@ -77,6 +79,7 @@
       optScale: 'Розмір', optAudio: 'Звук', eqOn: 'Як у динаміку', eqOff: 'Як записано',
       scaleHint: '1× — рідний розмір 3DS (400×480). 2× і 3× зберігають чіткі пікселі в редакторах і на великих екранах; файл більший.',
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
+      webm: 'Цей браузер уміє робити лише відео WebM. Для MP4 відкрийте цю сторінку в Chrome, Edge чи Safari.',
     },
   };
   let L = TEXT.en;
@@ -311,13 +314,23 @@
       } catch (e) { /* next */ }
     }
     if (!codec) return null;
-    if (audio) {
+    if (!audio) return { video: codec, audio: null };
+    // AAC where the browser has an encoder for it (Safari, Chrome and Edge on Windows and macOS); else
+    // Opus, which every browser with WebCodecs encodes (Firefox, Chrome on Linux): still an MP4, made
+    // as fast, where it used to be a real-time WebM (issue #17)
+    const want = new URLSearchParams(location.search).get('audio'); // tests: ?audio=opus
+    for (const a of want === 'opus' ? ['opus'] : ['mp4a.40.2', 'opus']) {
       try {
-        const r = await AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 160000 });
-        if (!r.supported) return null;
-      } catch (e) { return null; }
+        const r = await AudioEncoder.isConfigSupported({ codec: a, sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: a === 'opus' ? 128000 : 160000 });
+        if (r.supported) return { video: codec, audio: a };
+      } catch (e) { /* next */ }
     }
-    return codec;
+    return null;
+  }
+
+  function opusHead(desc) {
+    const b = desc instanceof ArrayBuffer ? new Uint8Array(desc) : new Uint8Array(desc.buffer, desc.byteOffset, desc.byteLength);
+    return b.length >= 19 && String.fromCharCode(...b.subarray(0, 8)) === 'OpusHead';
   }
 
   // Streaming resampler, stereo s16 at `from` Hz -> stereo s16 at `to` Hz (Catmull-Rom).
@@ -346,13 +359,15 @@
     }
   }
 
-  function fastConvert(hdr, codec, scale) {
+  function fastConvert(hdr, codecs, scale) {
     const W = 400 * scale, H = hdr.height * scale;
+    const codec = codecs.video, opus = codecs.audio === 'opus';
+    const withAudio = !!(hdr.audio && codecs.audio); // the codec was chosen from the file's details: they agree, but in case
     const target = new Mp4Muxer.ArrayBufferTarget();
     const muxer = new Mp4Muxer.Muxer({
       target,
       video: { codec: 'avc', width: W, height: H, frameRate: hdr.fps },
-      audio: hdr.audio ? { codec: 'aac', numberOfChannels: 2, sampleRate: AAC_RATE } : undefined,
+      audio: withAudio ? { codec: opus ? 'opus' : 'aac', numberOfChannels: 2, sampleRate: AAC_RATE } : undefined,
       fastStart: 'in-memory',
       firstTimestampBehavior: 'offset',
     });
@@ -367,16 +382,20 @@
     const bigCtx = big && big.getContext('2d');
     if (bigCtx) bigCtx.imageSmoothingEnabled = false;
     let aenc = null, rs = null, aOut = 0, pend = [], pendN = 0;
-    if (hdr.audio) {
+    if (withAudio) {
       aenc = new AudioEncoder({
         output: (c, m) => {
-          if (m && m.decoderConfig && m.decoderConfig.description)
+          if (!opus && m && m.decoderConfig && m.decoderConfig.description)
             m = { ...m, decoderConfig: { ...m.decoderConfig, description: asc(m.decoderConfig.description) } };
+          // Opus: the muxer copies an OpusHead from it (and throws on a short one); without it, it writes its own
+          if (opus && m && m.decoderConfig && m.decoderConfig.description && !opusHead(m.decoderConfig.description))
+            m = { ...m, decoderConfig: { ...m.decoderConfig, description: undefined } };
           try { muxer.addAudioChunk(c, m); } catch (e) { error = error || e; }
         },
         error: (e) => { error = e; },
       });
-      aenc.configure({ codec: 'mp4a.40.2', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 160000 });
+      aenc.configure(opus ? { codec: 'opus', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 128000 }
+        : { codec: 'mp4a.40.2', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 160000 });
       rs = new Resampler(hdr.audioRate / 1000, AAC_RATE);
     }
     let picture = -1, base = null;
@@ -412,6 +431,7 @@
         f.close();
       },
       audio(s) {
+        if (!rs) return; // no audio track
         const r = rs.run(s);
         pend.push(r); pendN += r.length;
         if (pendN >= 2048 * 2) {
@@ -705,7 +725,7 @@
     save.href = href;
     save.download = fname;
     save.textContent = t('save') + ' · ' + mb(blob.size);
-    $('howto').textContent = isIOS ? t('howIos') : isAndroid ? t('howAndroid') : t('howOther');
+    $('howto').textContent = (isIOS ? t('howIos') : isAndroid ? t('howAndroid') : t('howOther')) + (ext === 'webm' ? ' ' + t('webm') : '');
     $('keep').hidden = true;
     $('result').hidden = false;
     report(`offer ${fname}: ${blob.type} ${blob.size} B, share ${!!navigator.canShare}`);

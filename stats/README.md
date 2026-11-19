@@ -10,20 +10,25 @@ and the console is on Wi-Fi, and it never shows the result (`app/source/stats.h`
 - `POST /v1/dump` — one Luma ARM11 crash dump as raw bytes, at most 48 KB, with `X-Id` (install
   ID) and `X-Name` (`crash_dump_NNNNNNNN.dmp`). `204` / `400` / `413`.
 - `GET /v1/health` — `ok`.
+- Both POSTs: at most 10 a minute from one client address (Workers Rate Limiting binding
+  `LIMITER`), else `429`. A launch sends 1-2; the counters are per Cloudflare location and
+  approximate, so a burst gets through a little past 10 before the 429s start.
 - Cron `0 3 * * *` — clears `app_log` / `rec_log` and deletes dumps older than 180 days; the short
   columns stay.
 
-The app moves its "sent up to here" marks (`/3ds/recorder/stats.ini`) only on a 2xx, so nothing is
-sent twice and nothing is lost when a send fails. What a report holds is defined in
+The app moves its "sent up to here" marks (`/3ds/recorder/stats.ini`) on a 2xx, so nothing is
+sent twice and nothing is lost when a send fails; on a 4xx other than 429 (and a report too big to
+build) it moves them too, so lines the Worker will never take are not sent at every launch. What a report holds is defined in
 `src/report.ts`; `app/source/stats_core.c` + `stats.c` build it. The Worker also reads a few
 columns out of `rec_log` (`titles`, `starts`, `recordings`, `dropped`, `hangs`) so the statistics
 outlive the log text.
 
-No IP, no country: the Worker never reads them, Workers Logs is off in `wrangler.jsonc`, and the
+No IP, no country: the Worker never stores them (the client address is only the rate limiter's key), Workers Logs is off in `wrangler.jsonc`, and the
 app blanks LAN addresses in the logs before sending. The install ID is random, made on the console,
 and shown in Settings next to the switch (`XXXX-XXXX`; look it up without the dash).
 
-The app talks plain HTTP: the console's TLS does not get through to workers.dev (3ds-ua, 2026-10-23).
+The app talks plain HTTP: the console's TLS does not get through to workers.dev (3ds-ua, 2026-10-23;
+again 2026-11-19: workers.dev has an ECDSA certificate and refuses the RSA / CBC suites the 3DS offers).
 
 ## Develop
 

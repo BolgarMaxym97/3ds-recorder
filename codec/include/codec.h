@@ -155,7 +155,7 @@ size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, u
 size_t codec_c420_encode_bgr8_arm(const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride, uint8_t *out);
 static inline int codec_c420_arm_fits(const uint8_t *src, uint32_t rows, uint32_t stride, const uint8_t *out)
 {
-    return (rows & 3u) == 0 && (((uintptr_t)src | stride | (uintptr_t)out) & 3u) == 0;
+    return rows != 0 && (rows & 3u) == 0 && (((uintptr_t)src | stride | (uintptr_t)out) & 3u) == 0;
 }
 #endif
 /* Decodes into `frame` (cols x rows words, packed column by column). 0, or -1 on a wrong size. */

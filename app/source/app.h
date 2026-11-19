@@ -1,6 +1,6 @@
 /*
  * The control app's screens (design/ui-studio.html, variant B): control panel, first run,
- * help, settings (language + uninstall for now), uninstall, LED test.
+ * help, settings (groups: recording, recorder, app; the language list), uninstall.
  */
 #ifndef APP_H
 #define APP_H
@@ -17,7 +17,7 @@ typedef struct {
     int tap_x, tap_y;
 } Input;
 
-typedef enum { SCR_PANEL, SCR_FIRSTRUN, SCR_HELP, SCR_SETTINGS, SCR_HOTKEY, SCR_GALLERY, SCR_PLAYER, SCR_PHONE, SCR_UNINSTALL, SCR_UNINSTALLED, SCR_GUIDE, SCR_LANG } Screen;
+typedef enum { SCR_PANEL, SCR_FIRSTRUN, SCR_HELP, SCR_SETTINGS, SCR_HOTKEY, SCR_GALLERY, SCR_PLAYER, SCR_PHONE, SCR_UNINSTALL, SCR_UNINSTALLED, SCR_GUIDE, SCR_LANG, SCR_SETGROUP } Screen;
 
 typedef struct {
     Screen screen, back;
@@ -26,6 +26,10 @@ typedef struct {
     int helpTopic;
     int guidePage;
     Screen afterGuide;      /* where the guide goes when it is done */
+    int setGroup;           /* the settings group open in SCR_SETGROUP (GRP_*) */
+    bool langFirst;         /* the language list is the first run's (a Continue button, then the guide) */
+    Screen langBack;        /* where the language list goes back to otherwise */
+    int langBackFocus;
     bool new3ds;
     Config cfg;
     RecStatus st;

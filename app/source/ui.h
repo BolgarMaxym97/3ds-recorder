@@ -92,9 +92,9 @@ float ui_key_hint(float x, float y, const char *key, const char *label);
 float ui_key_hint_width(const char *key, const char *label);
 /* A key chip (R, ↓, SELECT) for the hotkey; returns its width. */
 float ui_key_chip(float x, float y, const char *key);
-/* Language switch flag, 21 x 13. */
-void ui_flag(float x, float y, bool ukraine);
-void ui_flag_sized(float x, float y, float w, bool ukraine); /* w wide, 21:13 */
+/* A language's flag (i18n.h Lang), 21 x 13. */
+void ui_flag(float x, float y, int lang);
+void ui_flag_sized(float x, float y, float w, int lang); /* w wide, 21:13 */
 /* Toggle 32 x 18 at (x, y). */
 void ui_toggle(float x, float y, bool on);
 /* Status pill, right edge at x, 19 high. */

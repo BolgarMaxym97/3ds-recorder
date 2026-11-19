@@ -162,6 +162,7 @@ typedef struct {
     u32 fps;         /* 30 / 20 / 15 */
     bool top;        /* record the top screen */
     bool bottom;     /* record the bottom screen (screens=top: off; screens=bottom: the only one) */
+    u32 bottomFps;   /* bottom_fps: with both screens, the bottom one at most this often (15, 10, 5, 1); 0: fps (#18) */
     u32 led;         /* 0 off, 1 solid, 2 pulse */
     bool audio;      /* record the DSP output */
     bool audioDebug; /* diagnostics: no video, raw DSP output polls every 250 us */
@@ -231,8 +232,6 @@ void __system_initSyscalls(void);
 void __libc_init_array(void);
 void __libc_fini_array(void);
 
-static Result g_mcuRc = -1;
-
 void __system_allocateHeaps(void)
 {
     u32 out = 0;
@@ -258,7 +257,7 @@ void __appInit(void)
 
 void __appExit(void)
 {
-    mcuHwcExit();
+    ptmSysmExit();
     archiveUnmountAll();
     fsExit();
     srvExit();
@@ -436,20 +435,96 @@ static u32 SdFreeMb(void)
 
 /* ------------------------------------------------------------------ LED */
 
+/*
+ * The MCU's services take one session each, and a client that finds it taken gets an error: the
+ * module used to keep mcu::HWC open all the time (and took it over when it was busy), and a HOME
+ * Menu patch that shows the battery percent, which opens mcu::HWC for each reading, showed
+ * "Error" while the recorder ran (issue #10). Now the LED goes through ptm:sysm SetInfoLEDPattern
+ * (0x0801, 24 sessions shared by all ptm services), the way the system's news module sets it: ptm
+ * hands the same 100 bytes to mcu::RTC, the MCU writes them to the same register (I2C 0x2D) as
+ * mcu::HWC's command did. mcu::HWC is opened only for a moment: for the battery in the log, and for
+ * the LED if ptm refused.
+ */
+static bool g_ledPtm;            /* ptm:sysm is open and took the LED */
+static u32  g_mcuBusy;           /* mcu::HWC was taken by someone else when the module wanted it */
+
+/* retry: wait up to 6 ms for a client that holds it now (never while recording: the main loop
+   captures the screens) */
+static Result McuOpen(Handle *h, bool retry)
+{
+    Result rc = srvGetServiceHandle(h, "mcu::HWC");   /* the blocking policy: a taken port fails at once */
+    for (u32 i = 0; R_FAILED(rc) && retry && i < 3; i++)   /* the other one closes in a moment */
+    {
+        svcSleepThread(2 * 1000 * 1000);
+        rc = srvGetServiceHandle(h, "mcu::HWC");
+    }
+    if (R_FAILED(rc))
+        g_mcuBusy++;
+    return rc;
+}
+
+/* One command on an open session: cmd holds the header and its normal words, gets the first 4 words back. */
+static Result McuIpc(Handle h, u32 *cmd)
+{
+    u32 *ipc = getThreadCommandBuffer();
+    memcpy(ipc, cmd, (1u + ((cmd[0] >> 6) & 0x3Fu)) * sizeof(u32));
+    Result rc = svcSendSyncRequest(h);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)ipc[1];
+    memcpy(cmd, ipc, 4 * sizeof(u32));
+    return rc;
+}
+
 static void InitLed(void)
 {
-    g_mcuRc = mcuHwcInit();
-    if (R_FAILED(g_mcuRc) && R_SUCCEEDED(svcControlService(0 /* steal */, mcuHwcGetSessionHandle(), "mcu::HWC")))
-        g_mcuRc = 0;
+    g_ledPtm = R_SUCCEEDED(ptmSysmInit());
 }
 
 /* When the module last wrote the LED (LedKeep). */
 static u64 g_ledWrittenTick;
 
+static bool g_powerOffNow;   /* (defined again below) ptm is powering the console off */
+static bool g_shutdownSeen;  /* (defined again below) the system ends the recorder */
+static u32  g_ledPtmFails;   /* ptm:sysm refused this many LED writes running */
+
+static void LedWrite(const InfoLedPattern *p)
+{
+    u32 cmd[26];
+    if (g_powerOffNow)   /* ptm is busy powering off, and the power-off clears the LED itself */
+        return;
+    /* once the system ends the recorder, ptm may be the one taking the console down: the last LED
+       writes go to the MCU directly, as before 1.5 (they are few: the saved signal, LED off) */
+    if (g_ledPtm && !g_shutdownSeen)
+    {
+        u32 *ipc = getThreadCommandBuffer();
+        ipc[0] = IPC_MakeHeader(0x801, 25, 0);   /* PTMSYSM:SetInfoLEDPattern */
+        memcpy(&ipc[1], p, sizeof(*p));
+        Result rc = svcSendSyncRequest(*ptmSysmGetSessionHandle());
+        if (R_SUCCEEDED(rc))
+            rc = (Result)ipc[1];
+        if (R_SUCCEEDED(rc))
+        {
+            g_ledPtmFails = 0;
+            return;
+        }
+        /* this write through the MCU; ptm again next time, unless it keeps refusing */
+        if (++g_ledPtmFails >= 3)
+        {
+            Log("LED: ptm:sysm SetInfoLEDPattern failed 3 times (%08lX), mcu::HWC from now on", rc);
+            g_ledPtm = false;
+        }
+    }
+    Handle h;
+    if (R_FAILED(McuOpen(&h, !g_recording)))
+        return;
+    cmd[0] = IPC_MakeHeader(0xA, 25, 0);   /* MCUHWC:SetInfoLedPattern */
+    memcpy(&cmd[1], p, sizeof(*p));
+    McuIpc(h, cmd);
+    svcCloseHandle(h);
+}
+
 static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoothing, u8 loopDelay)
 {
-    if (R_FAILED(g_mcuRc))
-        return;
     InfoLedPattern p;
     memset(&p, 0, sizeof(p));
     p.delay = delay;
@@ -458,7 +533,7 @@ static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoot
     memcpy(p.redPattern, r, 32);
     memcpy(p.greenPattern, g, 32);
     memcpy(p.bluePattern, b, 32);
-    MCUHWC_SetInfoLedPattern(&p);
+    LedWrite(&p);
     g_ledWrittenTick = svcGetSystemTick();
 }
 
@@ -475,12 +550,17 @@ typedef struct { u8 pct; u32 mv; bool charger; } Battery;
 static Battery BatteryNow(void)
 {
     Battery b = { 0, 0, false };
-    u8 v = 0;
-    if (R_SUCCEEDED(g_mcuRc))
+    u32 cmd[4];
+    Handle h;
+    if (R_SUCCEEDED(McuOpen(&h, !g_recording)))   /* one session for both, for a moment */
     {
-        MCUHWC_GetBatteryLevel(&b.pct);
-        if (R_SUCCEEDED(MCUHWC_GetBatteryVoltage(&v)))
-            b.mv = v * 20u;
+        cmd[0] = IPC_MakeHeader(0x5, 0, 0);   /* MCUHWC:GetBatteryLevel */
+        if (R_SUCCEEDED(McuIpc(h, cmd)))
+            b.pct = (u8)cmd[2];
+        cmd[0] = IPC_MakeHeader(0x4, 0, 0);   /* MCUHWC:GetBatteryVoltage */
+        if (R_SUCCEEDED(McuIpc(h, cmd)))
+            b.mv = (u8)cmd[2] * 20u;
+        svcCloseHandle(h);
     }
     if (g_ptmu)
         PTMU_GetAdapterState(&b.charger);
@@ -697,6 +777,11 @@ static void LoadConfig(void)
             const u32 fps = (u32)atoi(v);
             if (fps == 30 || fps == 20 || fps == 15)
                 g_cfg.fps = fps;
+        }
+        else if (strcasecmp(p, "bottom_fps") == 0)
+        {
+            const u32 b = (u32)atoi(v);
+            g_cfg.bottomFps = b == 15 || b == 10 || b == 5 || b == 1 ? b : 0;
         }
         else if (strcasecmp(p, "screens") == 0)
         {
@@ -1604,7 +1689,7 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
             const u32 len = fmt & WIDE_FMT ? (u32)codec_c420_encode_conv(src, cols, rows, 2u * stride, fmt, WideColumn, dst)
                             : f == FB_RGB565 ? (u32)codec_c420_encode(src, cols, rows, stride, dst)
                             : f == FB_BGR8 && g_c420Arm && codec_c420_arm_fits(src, rows, stride, dst)
-                                ? (g_c420ArmFrames++, (u32)codec_c420_encode_bgr8_arm(src, cols, rows, stride, dst))
+                                ? (__atomic_fetch_add(&g_c420ArmFrames, 1u, __ATOMIC_RELAXED), (u32)codec_c420_encode_bgr8_arm(src, cols, rows, stride, dst))
                             : f == FB_BGR8 || f == FB_RGBA8 ? (u32)codec_c420_encode_888(src, cols, rows, stride, bpp, dst)
                             : (u32)codec_c420_encode_conv(src, cols, rows, stride, fmt, fb_column_to_rgb565, dst);
             if (len)
@@ -1645,7 +1730,7 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
     else
     {
         if ((fmt & 7u) == FB_BGR8 && g_colArm)
-            g_colArmFrames++;
+            __atomic_fetch_add(&g_colArmFrames, 1u, __ATOMIC_RELAXED);   /* two converters on an Old 3DS */
         len = (u32)codec_xr32_encode_conv(g_prev[sc], src, cols, rows, stride, fmt, ColumnToRgb565, *key, dst);
     }
     g_codecFrames[sc]++;
@@ -2717,7 +2802,9 @@ static bool PaceTake(int sc)
 static u32 PollScreens(void)
 {
     const u64 nowUs = TicksToUs64(Ticks() - g_recStartTick);
-    const u32 gapUs = 1000000u / g_cfg.fps - 8000u;   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
+    /* the bottom screen at its own, lower rate when both are recorded (bottom_fps): a still menu
+       there takes no DMA and no encoding the top screen could use (issue #18) */
+    const u32 bottomFps = g_cfg.top && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : g_cfg.fps;
     const u32 fill = RingFill();
     u64 wakeUs = nowUs + 20000u;
     if (g_paced)
@@ -2731,6 +2818,8 @@ static u32 PollScreens(void)
         const u32 fmt = REG32(base + 0x70), sel = REG32(base + 0x78) & 1u, stride = REG32(base + 0x90);
         const u32 cur = sel ? b : a;
         Track *t = &g_track[sc];
+        const u32 fps = sc == 1 ? bottomFps : g_cfg.fps;
+        const u32 gapUs = 1000000u / fps - (fps > 12u ? 8000u : 0u);   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
         if (fmt != t->lastFmt || stride != t->lastStride || IsVram(cur) != t->vram)   /* a mode change (800 px, 3D, a program's own) */
         {
             t->lastFmt = fmt;
@@ -2766,7 +2855,7 @@ static u32 PollScreens(void)
            re-reading an application's FCRAM framebuffer kept a closing app alive, and the next
            launch waited until the recording stopped (Homebrew Launcher -> 3DS Recorder, O3DS
            2026-11-03). A still FCRAM picture just stays the last frame in the video. */
-        const bool isStatic = !isNew && IsVram(cur) && (!t->hasCap || nowUs - t->lastCapUs >= STATIC_GAP_US) &&
+        const bool isStatic = !isNew && IsVram(cur) && (!t->hasCap || nowUs - t->lastCapUs >= (gapUs > STATIC_GAP_US ? gapUs : STATIC_GAP_US)) &&
                               nowUs - t->lastNewUs >= STATIC_GAP_US;
         /* A game drawing faster than the recording but slower than 60 (Monster Hunter 4 on a New
            3DS, ~45 a second): every other swap came under gapUs after a capture and was let go, and
@@ -2776,7 +2865,7 @@ static u32 PollScreens(void)
            refresh, so it is taken only in the middle between two refreshes (counted from the swap):
            a DMA started just before the next swap would read a buffer the game draws into again. */
         const u32 phase = (u32)((nowUs - t->lastNewUs) % VBLANK_US);
-        const bool late = !isNew && t->pend && t->precise && t->hasCap && nowUs - t->lastCapUs >= 1000000u / g_cfg.fps &&
+        const bool late = !isNew && t->pend && t->precise && t->hasCap && nowUs - t->lastCapUs >= 1000000u / fps &&
                           phase >= LATE_AFTER_US && phase <= VBLANK_US - LATE_BEFORE_US;
         if (!(due && (isNew || isStatic || late)))
             continue;
@@ -2785,9 +2874,12 @@ static u32 PollScreens(void)
         t->lastCapUs = nowUs;
         t->hasCap = true;
         t->pend = false;
+        /* a bottom screen already at its own low rate (bottom_fps) gives up no more frames when the
+           card is behind, only when the ring is nearly full: it costs little, and 5 fps would become 2 */
+        const bool lowBottom = sc == 1 && bottomFps < g_cfg.fps;
         if (g_paced)
         {
-            if (!PaceTake(sc))
+            if (!lowBottom && !PaceTake(sc))
             {
                 g_throttled++;
                 continue;
@@ -2804,6 +2896,7 @@ static u32 PollScreens(void)
             const bool hard = fill > g_ringSize / 100u * THROTTLE_HARD_PCT;
             const bool both = g_cfg.top && g_cfg.bottom;
             const bool skip = !both               ? ++t->throttleN % 2u != 0u
+                              : sc == 1 && lowBottom ? hard
                               : sc == 1           ? hard || (g_bottomKeep == 1u ? ++t->throttleN % 2u != 0u
                                                                         : ++t->throttleN % 3u == 0u)
                               : hard && ++t->throttleN % 2u != 0u;
@@ -2832,48 +2925,59 @@ static u32 PollScreens(void)
    channels, noise, gradients. Any difference: the C encoder for good. ~0.1 ms. */
 static bool C420ArmSame(void)
 {
-    enum { COLS = 8, ROWS = 64, STRIDE = ROWS * 3 + 12 };
-    static u8 src[COLS * STRIDE] __attribute__((aligned(4)));
-    static u32 a[COLS * ROWS / 4 + 4], b[COLS * ROWS / 4 + 4];
+    enum { COLS = 9, ROWS = 64, STRIDE = ROWS * 3 + 12 };   /* an odd count: the last column is left out, as in C */
+    enum { SRC = COLS * STRIDE, OUTW = COLS * ROWS / 4 + 4 };
+    /* from the module's own heap for the moment of the check, not .bss: SYSTEM memory is tight on an Old 3DS */
+    u8 *const mem = malloc(SRC + 2 * OUTW * sizeof(u32));
+    if (!mem)
+        return false;   /* not checked: C */
+    u8 *const src = mem;
+    u32 *const a = (u32 *)(mem + SRC), *const b = a + OUTW;
     u32 seed = 7;
-    for (u32 i = 0; i < sizeof(src); i++)
+    for (u32 i = 0; i < SRC; i++)
     {
         seed = seed * 1103515245u + 12345u;
         const u32 c = i / STRIDE, r = i % STRIDE / 3, n = seed >> 16;
         src[i] = c == 0 ? 0 : c == 1 ? 255 : c == 2 ? (r & 1 ? 255 : 0) : c == 3 ? (u8)(i % 3 == r % 3 ? 255 : 0)
                : c == 4 ? (u8)(r * 4 + (n & 3)) : c == 5 ? (u8)(n % 3 ? 255 : n) : (u8)n;
     }
-    memset(b, 0x55, sizeof(b));
+    memset(b, 0x55, OUTW * sizeof(u32));
     const size_t la = codec_c420_encode_888(src, COLS, ROWS, STRIDE, 3, (u8 *)a);
     const size_t lb = codec_c420_encode_bgr8_arm(src, COLS, ROWS, STRIDE, (u8 *)b);
-    return la == lb && memcmp(a, b, la) == 0 && b[lb / 4] == 0x55555555u;
+    const bool same = la == lb && memcmp(a, b, la) == 0 && b[lb / 4] == 0x55555555u;
+    free(mem);
+    return same;
 }
 
 /* A BGR8 column to RGB565 in ARM assembly (codec/source/convert_arm.s) against the C one, once: every
    byte value in each channel's place, black, white, noise. Any difference: C for good. */
 static bool ColArmSame(void)
 {
-    enum { ROWS = 256 };
-    static u8 src[ROWS * 3 * 3] __attribute__((aligned(4)));
-    static u16 a[ROWS + 8] __attribute__((aligned(4))), b[ROWS + 8] __attribute__((aligned(4)));
+    enum { ROWS = 256, SRC = ROWS * 3 * 3 };
+    u8 *const mem = malloc(SRC + 2 * (ROWS + 8) * sizeof(u16));   /* the heap for the moment, as C420ArmSame */
+    if (!mem)
+        return false;
+    u8 *const src = mem;
+    u16 *const a = (u16 *)(mem + SRC), *const b = a + ROWS + 8;
+    bool same = true;
     u32 seed = 3;
     for (u32 k = 0; k < 3; k++)
     {
-        for (u32 i = 0; i < sizeof(src); i++)
+        for (u32 i = 0; i < SRC; i++)
         {
             seed = seed * 1103515245u + 12345u;
             src[i] = k == 0 ? (u8)(i / 3 + i % 3 * 85) : k == 1 ? (seed >> 16 & 1 ? 255 : 0) : (u8)(seed >> 16);
         }
         for (u32 c = 0; c < 3; c++)
         {
-            memset(b, 0x55, sizeof(b));
+            memset(b, 0x55, (ROWS + 8) * sizeof(u16));
             fb_column_to_rgb565(a, src + c * ROWS * 3, FB_BGR8, ROWS);
             fb_column_bgr8_arm(b, src + c * ROWS * 3, ROWS);
-            if (memcmp(a, b, ROWS * 2) != 0 || b[ROWS] != 0x5555u)
-                return false;
+            same = same && memcmp(a, b, ROWS * 2) == 0 && b[ROWS] == 0x5555u;
         }
     }
-    return true;
+    free(mem);
+    return same;
 }
 
 /* g_c420Arm and g_colArm from the config, the console and the checks (after each
@@ -5161,10 +5265,11 @@ static bool StartRecordingAs(bool replay)
     }
     else
         LedRecording();
-    Log("%s started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, audio %s, ring %lu KB, %s memory profile%s, "
+    Log("%s started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, bottom fps %lu (0: same), audio %s, ring %lu KB, %s memory profile%s, "
         "SYSTEM free %lu KB, SD free %lu MB, %s)",
         replay ? "replay buffer" : "recording", g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
         *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, ScreensName(),
+        g_cfg.top && g_cfg.bottom && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : 0u,
         g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, lite ? "light" : "normal",
         g_inPlg ? " in the launcher plugin's memory" : "",
         g_shared.sysFreeKb, sdFree,
@@ -6036,9 +6141,10 @@ int main(void)
         {
             lastBattery = Ticks();
             const Battery b = BatteryNow();
-            Log("battery %u%%, %lu mV%s; %s, replay buffer %s", b.pct, b.mv, b.charger ? ", ON THE CHARGER" : "",
+            Log("battery %u%%, %lu mV%s; %s, replay buffer %s; LED through %s, mcu::HWC found taken %lu times", b.pct,
+                b.mv, b.charger ? ", ON THE CHARGER" : "",
                 !g_recording ? "not recording" : g_replay ? "the replay buffer runs" : "a recording runs",
-                g_cfg.replay ? "on" : "off");
+                g_cfg.replay ? "on" : "off", g_ledPtm ? "ptm:sysm" : "mcu::HWC", g_mcuBusy);
         }
         if (!g_recording && g_cfg.replay && Ticks() - lastAppCheck > 2ull * SYSCLOCK_ARM11)
         {

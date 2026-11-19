@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include "i18n.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -466,13 +468,13 @@ float ui_key_chip(float x, float y, const char *key)
     return w;
 }
 
-/* The flags on the language switch, 21 x 13 (US: stripes + canton; UA: blue over yellow). */
-void ui_flag(float x, float y, bool ukraine) { ui_flag_sized(x, y, 21, ukraine); }
+/* The languages' flags, 21 x 13 (English: US stripes + canton; Ukrainian: blue over yellow). */
+void ui_flag(float x, float y, int lang) { ui_flag_sized(x, y, 21, lang); }
 
-void ui_flag_sized(float x, float y, float w, bool ukraine)
+void ui_flag_sized(float x, float y, float w, int lang)
 {
     const float h = w * 13 / 21, k = w / 21;
-    if (ukraine) {
+    if (lang == LANG_UK) {
         ui_rect(x, y, w, h / 2, COL_FLAG_BLUE);
         ui_rect(x, y + h / 2, w, h / 2, COL_FLAG_YELLOW);
         return;

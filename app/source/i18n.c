@@ -1,28 +1,37 @@
 #include "i18n.h"
 
 #include <stdio.h>
+#include <strings.h>
 
-static const char *const EN[S_COUNT] = {
-#define X(id, en, uk) [id] = en,
+const LangInfo LANGS[LANG_COUNT] = {
+    [LANG_EN] = {"en", "English"},
+    [LANG_UK] = {"uk", "Українська"},
+};
+
+static const char *const TEXT[S_COUNT][LANG_COUNT] = {
+#define X(id, en, uk) [id] = {[LANG_EN] = en, [LANG_UK] = uk},
     STRINGS(X)
 #undef X
 };
-static const char *const UK[S_COUNT] = {
-#define X(id, en, uk) [id] = uk,
-    STRINGS(X)
-#undef X
-};
 
-static bool g_uk;
+static Lang g_lang = LANG_EN;
 
-void i18n_set_ukrainian(bool on) { g_uk = on; }
-bool i18n_ukrainian(void) { return g_uk; }
+void i18n_set_lang(Lang lang) { g_lang = (unsigned)lang < LANG_COUNT ? lang : LANG_EN; }
+Lang i18n_lang(void) { return g_lang; }
 
-const char *T(Str id) { return (unsigned)id < S_COUNT ? (g_uk ? UK : EN)[id] : ""; }
+Lang i18n_lang_from_code(const char *code)
+{
+    for (int i = 0; i < LANG_COUNT; i++)
+        if (strcasecmp(code, LANGS[i].code) == 0)
+            return (Lang)i;
+    return LANG_EN;
+}
+
+const char *T(Str id) { return (unsigned)id < S_COUNT ? TEXT[id][g_lang] : ""; }
 
 const char *i18n_recordings(unsigned n, char *buf, unsigned cap)
 {
-    if (!g_uk)
+    if (g_lang != LANG_UK)
         snprintf(buf, cap, n == 1 ? "%u recording" : "%u recordings", n);
     else {
         const unsigned d = n % 10, dd = n % 100;

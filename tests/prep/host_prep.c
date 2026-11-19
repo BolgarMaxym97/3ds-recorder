@@ -65,7 +65,7 @@ static void *writer(void *job)
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <file.r3d> <out base> [--interrupt N]\n", argv[0]);
+        fprintf(stderr, "usage: %s <file.r3d> <out base> [--interrupt N] [--threads N]\n", argv[0]);
         return 2;
     }
     int every = 0, threads = 1;
