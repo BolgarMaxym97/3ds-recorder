@@ -33,8 +33,6 @@ static void focus_ring(Rect r, float radius) { ui_frame(r.x - 1, r.y - 1, r.w + 
 
 /* Panel tiles (bottom screen, 2 x 2) */
 static const Rect TILE[4] = {{12, 12, 144, 94}, {164, 12, 144, 94}, {12, 114, 144, 94}, {164, 114, 144, 94}};
-/* hint row, right side: the language flag (help is a tile now) */
-static Rect flag_btn(void) { return (Rect){281, 213, 27, 19}; }
 /* The first tile holds two switches, one under the other: the recorder, and its replay buffer */
 static const Rect TILE_REC = {12, 12, 144, 46}, TILE_REPLAY = {12, 60, 144, 46};
 #define REPLAY_NEED_MB 700u   /* the replay's two files (2 x 256.5 MB) and the recorder's reserve */
@@ -43,23 +41,29 @@ static const Rect BACK_BTN = {12, 10, 22, 22};
 /* First run */
 static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
-/* Settings: 8 rows under a short navbar */
-enum { ROW_FPS, ROW_SCREENS, ROW_QUALITY, ROW_SOUND, ROW_LED, ROW_AUTOSTART, ROW_LID, ROW_STATS, ROW_LANG, ROW_HOTKEY, ROW_UNINSTALL, SET_ROWS };
-/* Settings rows: 9 fit (down to y 227); the list scrolls by whole rows to keep the focused one in
-   view, the next one peeks in at the bottom (a tap brings it up) and a thin bar on the right shows
-   where the list is. */
-#define SET_VISIBLE 9
-static int g_setFirst; /* the top row shown */
-static Rect set_row(int i) { return (Rect){10, 31 + (i - g_setFirst) * 22.0f, 300, 20.5f}; }
-static bool set_row_shown(int i) { return i >= g_setFirst && set_row(i).y < 240; }
-static void set_scroll(int focus)
-{
-    if (focus < g_setFirst)
-        g_setFirst = focus;
-    else if (focus > g_setFirst + SET_VISIBLE - 1)
-        g_setFirst = focus - (SET_VISIBLE - 1);
-}
+/* Settings: the groups (SCR_SETTINGS), each one's rows (SCR_SETGROUP), the language list (SCR_LANG) */
+enum { ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND, ROW_HOTKEY, ROW_LED, ROW_AUTOSTART, ROW_CONVERT,
+       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_COUNT };
+enum { GRP_RECORDING, GRP_RECORDER, GRP_APP, GRP_LANG, GRP_COUNT };
+#define GROUP_MAX 5
+static const int GROUP_ROWS[GRP_LANG][GROUP_MAX] = {
+    [GRP_RECORDING] = {ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND},
+    [GRP_RECORDER] = {ROW_HOTKEY, ROW_LED, ROW_AUTOSTART},
+    [GRP_APP] = {ROW_CONVERT, ROW_LID, ROW_STATS, ROW_UNINSTALL},
+};
+static const int GROUP_N[GRP_LANG] = {5, 3, 4};
+static Rect grp_card(int i) { return (Rect){10, 34 + i * 50.0f, 300, 44}; }   /* down to y 228 */
+static Rect set_row(int i) { return (Rect){10, 34 + i * 30.0f, 300, 26}; }      /* 5 rows: down to y 180 */
 static const Rect SET_BACK = {10, 6, 21, 21};
+/* the language list: first run (a Continue button under it) or from Settings / the panel's flag */
+#define LANG_VISIBLE 4
+static Rect lang_row(int i, bool first) { return (Rect){10, (first ? 12 : 34) + i * 38.0f, 300, 34}; }
+static const Rect LANG_GO = {12, 196, 296, 32};
+static int g_langFirst; /* the language list's top row shown (LANG_VISIBLE fit) */
+static Lang g_langSaved; /* lang= in config.ini when the list opened from Settings */
+
+static void lang_scroll_to(int lang) { g_langFirst = lang > LANG_VISIBLE - 1 ? lang - (LANG_VISIBLE - 1) : 0; }
+
 /* Hotkey screen buttons */
 static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200, 92, 28}};
 /* Uninstall dialog */
@@ -271,7 +275,7 @@ static void say_important(App *a, const char *text)
 static void toast_tick(App *a)
 {
     /* the first run's language and guide come first: an important message waits for them */
-    if (a->msgImportant && (a->screen == SCR_LANG || a->screen == SCR_GUIDE))
+    if (a->msgImportant && ((a->screen == SCR_LANG && a->langFirst) || a->screen == SCR_GUIDE))
         a->msgUntil = a->frame + 60 * 10;
     if (a->msgNext[0] && a->frame > a->msgUntil) {
         snprintf(a->msg, sizeof(a->msg), "%s", a->msgNext);
@@ -284,7 +288,7 @@ static void toast_tick(App *a)
 static void go(App *a, Screen s, int focus)
 {
     static const char *const names[] = {"panel", "firstrun", "help", "settings", "hotkey", "gallery", "player",
-                                        "download", "uninstall", "uninstalled", "guide", "lang"};
+                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group"};
     if (s != a->screen || !a->frame)
         app_log("screen: %s", (unsigned)s < sizeof(names) / sizeof(names[0]) ? names[s] : "?");
     a->screen = s;
@@ -313,7 +317,7 @@ void app_init(App *a, const char *selfPath)
     APT_CheckNew3DS(&n3ds);
     a->new3ds = n3ds;
     config_load(&a->cfg);
-    i18n_set_ukrainian(a->cfg.ukrainian);
+    i18n_set_lang(a->cfg.lang);
     a->lumaVersion = recorder_luma_version();
     SdInfo first; /* the first screen needs it: read once here, then by the info thread */
     info_read(&first, true);
@@ -329,7 +333,7 @@ void app_init(App *a, const char *selfPath)
     if (g_lastTexOk)
         C3D_TexSetFilter(&g_lastTex, GPU_LINEAR, GPU_LINEAR);
     g_info = threadCreate(info_main, NULL, 16 * 1024, prio + 2, -2, false);
-    prepare_start(n3ds, n3ds && a->cfg.mp4Slices); /* recordings become MP4s for the phone in the background */
+    prepare_start(n3ds, n3ds && a->cfg.mp4Slices, a->cfg.convertAuto); /* recordings become MP4s for the phone in the background */
     stats_start(a->cfg.stats); /* new log lines to the developer, quietly (stats.h) */
     /* The recorder starts with the app. Only when Luma cannot load it does the first-run
        screen come up, to say what to change. */
@@ -342,7 +346,7 @@ void app_init(App *a, const char *selfPath)
         tell_system_stop(a);
     app_log("app: %s, lang %s, guide %s, module %s (state %lu, file %s), Luma modules %s, SD free %lu MB, "
             "%lu recordings (%llu MB)%s",
-            n3ds ? "New 3DS" : "Old 3DS", a->cfg.ukrainian ? "uk" : "en", a->cfg.guideSeen ? "seen" : "first run",
+            n3ds ? "New 3DS" : "Old 3DS", LANGS[a->cfg.lang].code, a->cfg.guideSeen ? "seen" : "first run",
             a->st.running ? "running" : "not running", (unsigned long)a->st.state,
             a->moduleFile == MODULE_SAME ? "same" : a->moduleFile == MODULE_DIFFERENT ? "different" : "missing",
             a->lumaModules ? "on" : "OFF", (unsigned long)a->sdFreeMb, (unsigned long)a->files.count,
@@ -363,7 +367,9 @@ void app_init(App *a, const char *selfPath)
     if (!a->cfg.guideSeen) { /* the very first run: the language, how to use it, then on */
         a->afterGuide = next;
         a->guidePage = 0;
-        go(a, a->cfg.langSet ? SCR_GUIDE : SCR_LANG, a->cfg.ukrainian ? 1 : 0);
+        a->langFirst = !a->cfg.langSet;
+        lang_scroll_to(a->cfg.lang);
+        go(a, a->cfg.langSet ? SCR_GUIDE : SCR_LANG, a->cfg.langSet ? 0 : a->cfg.lang);
     } else
         go(a, next, 0);
 }
@@ -471,13 +477,26 @@ static bool run_pending(App *a)
     return false;
 }
 
-static void set_language(App *a, bool uk)
+static void set_language(App *a, int lang)
 {
-    if (a->cfg.ukrainian == uk)
+    if ((unsigned)lang >= LANG_COUNT || a->cfg.lang == (Lang)lang)
         return;
-    a->cfg.ukrainian = uk;
-    i18n_set_ukrainian(uk);
-    config_set("lang", uk ? "uk" : "en");
+    a->cfg.lang = (Lang)lang;
+    i18n_set_lang(a->cfg.lang);
+    config_set("lang", LANGS[lang].code);
+}
+
+/* X on the first screens: the next language, without the list */
+static void next_language(App *a) { set_language(a, (a->cfg.lang + 1) % LANG_COUNT); }
+
+static void open_languages(App *a, Screen back, int backFocus)
+{
+    a->langFirst = false;
+    g_langSaved = a->cfg.lang;
+    lang_scroll_to(a->cfg.lang);
+    a->langBack = back;
+    a->langBackFocus = backFocus;
+    go(a, SCR_LANG, a->cfg.lang);
 }
 
 /* ------------------------------------------------------------------ hotkey */
@@ -623,6 +642,29 @@ typedef struct {
     int n, sel, disabled; /* disabled: option index, -1 none */
 } Seg;
 
+/* The bottom screen's own rate (bottom_fps, #18): 0 = the same as the frame rate. More values than a
+   segmented control holds: the row shows one and ◀ ▶ step through them. */
+static const int BOTTOM_FPS[5] = {0, 15, 10, 5, 1};
+
+static int bottom_fps_index(const App *a)
+{
+    for (int i = 0; i < 5; i++)
+        if (BOTTOM_FPS[i] == a->cfg.bottomFps)
+            return i;
+    return 0;
+}
+
+static const char *bottom_fps_label(const App *a, char *buf, size_t cap)
+{
+    const int v = a->cfg.bottomFps;
+    if (!v || v >= a->cfg.fps)
+        return T(S_BOTTOM_SAME);
+    snprintf(buf, cap, "%d fps", v);
+    return buf;
+}
+
+static bool bottom_fps_on(const App *a) { return a->cfg.screens == SCREENS_BOTH; }
+
 static bool row_seg(const App *a, int row, Seg *g)
 {
     switch (row) {
@@ -638,8 +680,8 @@ static bool row_seg(const App *a, int row, Seg *g)
     case ROW_LED:
         *g = (Seg){{T(S_LED_PULSE), T(S_LED_SOLID), T(S_LED_OFF)}, 3, a->cfg.led == 2 ? 0 : a->cfg.led == 1 ? 1 : 2, -1};
         return true;
-    case ROW_LANG:
-        *g = (Seg){{"English", "Українська", NULL}, 2, a->cfg.ukrainian ? 1 : 0, -1};
+    case ROW_CONVERT:
+        *g = (Seg){{T(S_CONVERT_AUTO), T(S_CONVERT_MANUAL), NULL}, 2, a->cfg.convertAuto ? 0 : 1, -1};
         return true;
     }
     return false;
@@ -672,10 +714,33 @@ static void choose(App *a, int row, int opt)
             apply_setting(a, "led", V[opt]);
         break;
     }
-    case ROW_LANG:
-        set_language(a, opt == 1);
+    case ROW_CONVERT:
+        if ((opt == 0) != a->cfg.convertAuto) {
+            apply_setting(a, "convert", opt == 0 ? "auto" : "manual");
+            prepare_set_auto(a->cfg.convertAuto);
+        }
         break;
     }
+}
+
+/* ◀ ▶ on Bottom Screen FPS (dir -1 / +1; A goes round) */
+static void step_bottom_fps(App *a, int dir, bool wrap)
+{
+    if (!bottom_fps_on(a)) {
+        say(a, T(S_MSG_BOTTOM_BOTH));
+        return;
+    }
+    int i = bottom_fps_index(a);
+    do { /* a rate at or above the frame rate is the same as Same: stepped over */
+        i += dir;
+        if (wrap)
+            i = (i + 5) % 5;
+        if (i < 0 || i > 4)
+            return;
+    } while (BOTTOM_FPS[i] && BOTTOM_FPS[i] >= a->cfg.fps);
+    char v[8];
+    snprintf(v, sizeof(v), "%d", BOTTOM_FPS[i]);
+    apply_setting(a, "bottom_fps", v);
 }
 
 static void open_hotkey(App *a)
@@ -717,7 +782,9 @@ static void settings_activate(App *a, int row)
     Seg g;
     if (row_seg(a, row, &g)) {
         choose(a, row, (g.sel + 1) % g.n);
-    } else if (row == ROW_SOUND)
+    } else if (row == ROW_BOTTOM_FPS)
+        step_bottom_fps(a, 1, true);
+    else if (row == ROW_SOUND)
         apply_setting(a, "audio", a->cfg.audio ? "off" : "on");
     else if (row == ROW_AUTOSTART)
         set_autostart(a, !a->cfg.autostart);
@@ -731,6 +798,25 @@ static void settings_activate(App *a, int row)
         a->deleteRecordings = false;
         go(a, SCR_UNINSTALL, 1);
     }
+}
+
+/* the row in focus in the open group (ROW_*), -1 on the groups' list */
+static int set_focus_row(const App *a)
+{
+    if (a->screen != SCR_SETGROUP || a->setGroup >= GRP_LANG || a->focus < 0 || a->focus >= GROUP_N[a->setGroup])
+        return -1;
+    return GROUP_ROWS[a->setGroup][a->focus];
+}
+
+/* back into a group at one of its rows (from the hotkey and uninstall screens) */
+static void open_group_at(App *a, int group, int row)
+{
+    a->setGroup = group;
+    int f = 0;
+    for (int i = 0; i < GROUP_N[group]; i++)
+        if (GROUP_ROWS[group][i] == row)
+            f = i;
+    go(a, SCR_SETGROUP, f);
 }
 
 /* ------------------------------------------------------------------ update */
@@ -768,9 +854,9 @@ static void open_help(App *a, Screen back)
 }
 
 /* Panel focus: 0-3 the tiles (2 x 2; 0 is the recorder's switch, the first tile's upper half), 5 the
-   replay switch under it in the same tile, 4 the language flag (the hint row under the tiles).
+   replay switch under it in the same tile (the language is in Settings).
    While a recording runs the first tile is one button (Stop): 5 counts as 0 then. */
-enum { FOCUS_FLAG = 4, FOCUS_REPLAY = 5 };
+enum { FOCUS_REPLAY = 5 };
 
 static void toggle_replay(App *a)
 {
@@ -801,20 +887,16 @@ static void update_panel(App *a, const Input *in)
     if (d & KEY_DRIGHT)
         f = f == FOCUS_REPLAY ? 1 : f < 4 && f % 2 == 0 ? f + 1 : f;
     if (d & KEY_DUP)
-        f = f == FOCUS_FLAG ? 3 : f == FOCUS_REPLAY ? 0 : f == 2 && split ? FOCUS_REPLAY : f >= 2 ? f - 2 : f;
+        f = f == FOCUS_REPLAY ? 0 : f == 2 && split ? FOCUS_REPLAY : f >= 2 ? f - 2 : f;
     if (d & KEY_DDOWN)
-        f = f == 0 && split ? FOCUS_REPLAY : f == FOCUS_REPLAY ? 2 : f < 2 ? f + 2 : FOCUS_FLAG;
+        f = f == 0 && split ? FOCUS_REPLAY : f == FOCUS_REPLAY ? 2 : f < 2 ? f + 2 : f;
     a->focus = f;
     if (d & KEY_A) {
-        if (f == FOCUS_FLAG)
-            set_language(a, !a->cfg.ukrainian);
-        else if (f == FOCUS_REPLAY)
+        if (f == FOCUS_REPLAY)
             toggle_replay(a);
         else
             panel_activate(a, f);
     }
-    if (d & KEY_X)
-        set_language(a, !a->cfg.ukrainian);
     if ((d & KEY_Y) && a->files.newest[0]) { /* the last recording: straight into the player */
         open_gallery(a, a->files.newest);
         a->galAutoPlay = true;
@@ -828,10 +910,6 @@ static void update_panel(App *a, const Input *in)
             a->focus = i;
             panel_activate(a, i);
         }
-    if (hit(flag_btn(), in)) {
-        a->focus = FOCUS_FLAG;
-        set_language(a, !a->cfg.ukrainian);
-    }
     if (split && hit(TILE_REPLAY, in)) {
         a->focus = FOCUS_REPLAY;
         toggle_replay(a);
@@ -860,7 +938,7 @@ static void update_firstrun(App *a, const Input *in)
     if (d & KEY_START)
         a->quit = true;
     if (d & KEY_X)
-        set_language(a, !a->cfg.ukrainian);
+        next_language(a);
     if (act == 0)
         go(a, SCR_PANEL, 0);
     else if (act == 1) {
@@ -885,31 +963,42 @@ static void update_help(App *a, const Input *in)
         open_guide(a, SCR_HELP);
 }
 
-/* ------------------------------------------------------------------ language (first run) */
+/* ------------------------------------------------------------------ language list */
 
-static const Rect LANG_CARD[2] = {{12, 40, 144, 132}, {164, 40, 144, 132}};
-static const Rect LANG_GO = {12, 196, 296, 32};
 
 static void update_lang(App *a, const Input *in)
 {
     const u32 d = in->down;
+    const bool first = a->langFirst;
     int f = a->focus;
-    if (d & KEY_DLEFT)
-        f = 0;
-    if (d & KEY_DRIGHT)
-        f = 1;
-    for (int i = 0; i < 2; i++)
-        if (hit(LANG_CARD[i], in))
+    if ((d & KEY_DUP) && f > 0)
+        f--;
+    if ((d & KEY_DDOWN) && f < LANG_COUNT - 1)
+        f++;
+    if (f < g_langFirst)
+        g_langFirst = f;
+    if (f > g_langFirst + LANG_VISIBLE - 1)
+        g_langFirst = f - (LANG_VISIBLE - 1);
+    for (int i = g_langFirst; i < LANG_COUNT && i < g_langFirst + LANG_VISIBLE; i++)
+        if (hit(lang_row(i - g_langFirst, first), in))
             f = i;
-    if (f != a->focus) { /* the screens switch at once, so the choice shows itself */
+    if (f != a->focus) { /* the screens switch at once, so the choice shows itself; saved on leaving */
         a->focus = f;
-        a->cfg.ukrainian = f == 1;
-        i18n_set_ukrainian(f == 1);
+        a->cfg.lang = (Lang)f;
+        i18n_set_lang(a->cfg.lang);
     }
-    if ((d & KEY_A) || hit(LANG_GO, in)) {
-        a->cfg.langSet = true;
-        config_set("lang", a->cfg.ukrainian ? "uk" : "en");
-        go(a, SCR_GUIDE, 0);
+    if (first) {
+        if ((d & KEY_A) || hit(LANG_GO, in)) {
+            a->cfg.langSet = true;
+            config_set("lang", LANGS[a->cfg.lang].code);
+            go(a, SCR_GUIDE, 0);
+        }
+        return;
+    }
+    if ((d & (KEY_A | KEY_B)) || hit(SET_BACK, in)) {
+        if (a->cfg.lang != g_langSaved)
+            config_set("lang", LANGS[a->cfg.lang].code);
+        go(a, a->langBack, a->langBackFocus);
     }
 }
 
@@ -950,7 +1039,7 @@ static void update_guide(App *a, const Input *in)
     if ((d & KEY_B) || hit(GD_SKIP, in))
         guide_done(a);
     if (d & KEY_X)
-        set_language(a, !a->cfg.ukrainian);
+        next_language(a);
 }
 
 static void update_settings(App *a, const Input *in)
@@ -958,47 +1047,74 @@ static void update_settings(App *a, const Input *in)
     const u32 d = in->down;
     if (d & KEY_DUP && a->focus > 0)
         a->focus--;
-    if (d & KEY_DDOWN && a->focus < SET_ROWS - 1)
+    if (d & KEY_DDOWN && a->focus < GRP_COUNT - 1)
         a->focus++;
-    Seg g;
-    if (row_seg(a, a->focus, &g) && (d & (KEY_DLEFT | KEY_DRIGHT))) {
-        int o = g.sel + ((d & KEY_DRIGHT) ? 1 : -1);
-        if (o >= 0 && o < g.n)
-            choose(a, a->focus, o);
+    int open = (d & KEY_A) ? a->focus : -1;
+    for (int i = 0; i < GRP_COUNT; i++)
+        if (hit(grp_card(i), in))
+            open = a->focus = i;
+    if (open == GRP_LANG)
+        open_languages(a, SCR_SETTINGS, GRP_LANG);
+    else if (open >= 0) {
+        a->setGroup = open;
+        go(a, SCR_SETGROUP, 0);
     }
-    if (a->focus == ROW_SOUND && (d & (KEY_DLEFT | KEY_DRIGHT)) && ((d & KEY_DRIGHT) != 0) != a->cfg.audio)
-        apply_setting(a, "audio", (d & KEY_DRIGHT) ? "on" : "off");
-    if (a->focus == ROW_AUTOSTART && (d & (KEY_DLEFT | KEY_DRIGHT)))
-        set_autostart(a, (d & KEY_DRIGHT) != 0);
-    if (a->focus == ROW_LID && (d & (KEY_DLEFT | KEY_DRIGHT)) && ((d & KEY_DRIGHT) != 0) != a->cfg.lidWork)
-        apply_setting(a, "lid_work", (d & KEY_DRIGHT) ? "on" : "off");
-    if (a->focus == ROW_STATS && (d & (KEY_DLEFT | KEY_DRIGHT)))
-        set_stats(a, (d & KEY_DRIGHT) != 0);
+    if ((d & KEY_B) || hit(SET_BACK, in))
+        go(a, SCR_PANEL, 3);
+}
+
+static void update_setgroup(App *a, const Input *in)
+{
+    const u32 d = in->down;
+    const int n = GROUP_N[a->setGroup];
+    if (d & KEY_DUP && a->focus > 0)
+        a->focus--;
+    if (d & KEY_DDOWN && a->focus < n - 1)
+        a->focus++;
+    const int row = GROUP_ROWS[a->setGroup][a->focus];
+    const int dir = (d & KEY_DRIGHT) ? 1 : (d & KEY_DLEFT) ? -1 : 0;
+    Seg g;
+    if (dir && row_seg(a, row, &g)) {
+        const int o = g.sel + dir;
+        if (o >= 0 && o < g.n)
+            choose(a, row, o);
+    } else if (dir && row == ROW_BOTTOM_FPS)
+        step_bottom_fps(a, dir, false);
+    else if (dir) {
+        const bool on = dir > 0;
+        if (row == ROW_SOUND && on != a->cfg.audio)
+            apply_setting(a, "audio", on ? "on" : "off");
+        else if (row == ROW_AUTOSTART)
+            set_autostart(a, on);
+        else if (row == ROW_LID && on != a->cfg.lidWork)
+            apply_setting(a, "lid_work", on ? "on" : "off");
+        else if (row == ROW_STATS)
+            set_stats(a, on);
+    }
     if (d & KEY_A)
-        settings_activate(a, a->focus);
-    set_scroll(a->focus);
-    for (int r = 0; r < SET_ROWS && in->tapped; r++) {
-        if (!set_row_shown(r))
-            continue;
-        const Rect row = set_row(r);
-        if (row.y + row.h > 240) { /* the row peeking in at the bottom: a tap brings it into view */
-            if (hit(row, in))
-                a->focus = r;
-        } else if (row_seg(a, r, &g)) {
+        settings_activate(a, row);
+    for (int i = 0; i < n && in->tapped; i++) {
+        const int r = GROUP_ROWS[a->setGroup][i];
+        const Rect rr = set_row(i);
+        if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
-            seg_layout(row, g.labels, g.n, opt);
-            for (int i = 0; i < g.n; i++)
-                if (hit(opt[i], in)) {
-                    a->focus = r;
-                    choose(a, r, i);
+            seg_layout(rr, g.labels, g.n, opt);
+            for (int k = 0; k < g.n; k++)
+                if (hit(opt[k], in)) {
+                    a->focus = i;
+                    choose(a, r, k);
                 }
-        } else if (hit(row, in)) {
-            a->focus = r;
+        } else if (r == ROW_BOTTOM_FPS && hit(rr, in)) { /* ◀ on the left of the value, ▶ on the right */
+            a->focus = i;
+            const float vx = rr.x + rr.w - 40; /* the middle of the value */
+            step_bottom_fps(a, in->tap_x >= rr.x + rr.w - 90 && in->tap_x < vx ? -1 : 1, in->tap_x < rr.x + rr.w - 90);
+        } else if (hit(rr, in)) {
+            a->focus = i;
             settings_activate(a, r);
         }
     }
     if ((d & KEY_B) || hit(SET_BACK, in))
-        go(a, SCR_PANEL, 3);
+        go(a, SCR_SETTINGS, a->setGroup);
 }
 
 /* The hotkey screen's two steps: the recording hotkey, then the replay one. */
@@ -1035,7 +1151,7 @@ static void hotkey_next(App *a)
     /* kept as it was, but the recording hotkey chosen a step ago now holds it (or the other way) */
     if (hk_overlap(hk_step_now(a), hk_mask(a->cfg.hotkey)))
         hotkey_set(a, hk_replay_default(hk_mask(a->cfg.hotkey)), true);
-    go(a, SCR_SETTINGS, ROW_HOTKEY);
+    open_group_at(a, GRP_RECORDER, ROW_HOTKEY);
 }
 
 static void hotkey_save(App *a, u32 m)
@@ -1115,7 +1231,7 @@ static void update_uninstall(App *a, const Input *in)
         a->focus = 0;
         a->deleteRecordings = !a->deleteRecordings;
     } else if (act == 1)
-        go(a, SCR_SETTINGS, ROW_UNINSTALL);
+        open_group_at(a, GRP_APP, ROW_UNINSTALL);
     else if (act == 2) {
         a->pending = ACT_UNINSTALL;
         a->busy = T(S_UN_WORKING);
@@ -1366,7 +1482,7 @@ static int g_prepSeen;
 
 static void phone_start(App *a)
 {
-    const ServerState st = server_start(a->phoneName, a->cfg.ukrainian ? "uk" : "en", APP_VERSION, a->new3ds);
+    const ServerState st = server_start(a->phoneName, LANGS[a->cfg.lang].code, APP_VERSION, a->new3ds);
     g_qrOk = false;
     ServerStats ss;
     server_stats(&ss);
@@ -1430,6 +1546,7 @@ void app_update(App *a, const Input *in)
     case SCR_GUIDE: update_guide(a, in); break;
     case SCR_LANG: update_lang(a, in); break;
     case SCR_SETTINGS: update_settings(a, in); break;
+    case SCR_SETGROUP: update_setgroup(a, in); break;
     case SCR_HOTKEY: update_hotkey(a, in); break;
     case SCR_GALLERY: update_gallery(a, in); break;
     case SCR_PLAYER: update_player(a, in); break;
@@ -1496,7 +1613,7 @@ static void format_name(char *buf, size_t cap, const char *name)
         snprintf(buf, cap, "%s", name);
         return;
     }
-    if (i18n_ukrainian())
+    if (i18n_lang() == LANG_UK)
         snprintf(buf, cap, "%02d.%02d.%04d · %02d:%02d", d, mo, y, h, mi);
     else
         snprintf(buf, cap, "%s %d, %04d · %02d:%02d", MON[mo - 1], d, y, h, mi);
@@ -1630,7 +1747,7 @@ static void draw_panel_top(App *a)
             const PrepareState ps = prepare_state(a->files.newest, &pm);
             if (ps == PS_READY)
                 ui_text_right(376, 140, 9, FONT_REG, COL_OK, T(S_GAL_PREP_READY));
-            else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0)) {
+            else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0 && a->cfg.convertAuto)) { /* manual: a paused job waits for a Download */
                 snprintf(buf, sizeof(buf), T(S_GAL_PREP_PCT), pm / 10);
                 ui_text_right(376, 140, 9, FONT_REG, ps == PS_WORKING ? COL_SOFT : COL_FAINT, buf);
             }
@@ -1721,22 +1838,30 @@ static void draw_lang_top(App *a)
     ui_circle(200, 62, 22, COL_SURFACE);
     ui_circle(200, 62, 7, COL_ACCENT);
     ui_text_center(200, 98, 9, FONT_REG, COL_MUTED, "3DS Recorder");
-    ui_text_center(200, 128, 19, FONT_BOLD, COL_TEXT, "Choose your language");
-    ui_text_center(200, 158, 13, FONT_REG, COL_SOFT, "Оберіть мову");
+    ui_text_center(200, 136, 19, FONT_BOLD, COL_TEXT, T(S_LANG_CHOOSE)); /* in the language in focus */
 }
 
 static void draw_lang_bottom(App *a)
 {
-    static const char *const name[2] = {"English", "Українська"};
-    for (int i = 0; i < 2; i++) {
-        const Rect r = LANG_CARD[i];
-        ui_card(r.x, r.y, r.w, r.h, 12, a->focus == i ? COL_SURFACE2 : COL_SURFACE);
-        ui_flag_sized(r.x + (r.w - 72) / 2, r.y + 24, 72, i == 1);
-        ui_text_center(r.x + r.w / 2, r.y + 88, 12, FONT_BOLD, COL_TEXT, name[i]);
-        if (a->focus == i)
-            focus_ring(r, 12);
+    const bool first = a->langFirst;
+    if (!first) {
+        ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
+        ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
+        ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_LANGUAGE));
     }
-    button(LANG_GO, T(S_LANG_CONTINUE), 1, false);
+    for (int i = g_langFirst; i < LANG_COUNT && i < g_langFirst + LANG_VISIBLE; i++) {
+        const Rect r = lang_row(i - g_langFirst, first);
+        const bool sel = a->cfg.lang == (Lang)i;
+        ui_card(r.x, r.y, r.w, r.h, 8, sel ? COL_SURFACE2 : COL_SURFACE);
+        ui_flag_sized(r.x + 12, r.y + (r.h - 30 * 13 / 21.0f) / 2, 30, i);
+        ui_text(r.x + 54, r.y + 9, 11, FONT_BOLD, COL_TEXT, LANGS[i].name);
+        if (sel)
+            ui_icon(ICON_CHECK, r.x + r.w - 18, r.y + r.h / 2, 13, COL_ACCENT);
+        if (a->focus == i)
+            focus_ring(r, 8);
+    }
+    if (first)
+        button(LANG_GO, T(S_LANG_CONTINUE), 1, false);
 }
 
 static const Str GUIDE_TITLE[GUIDE_PAGES] = {S_G1_TITLE, S_G2_TITLE, S_G3_TITLE, S_G4_TITLE};
@@ -1814,12 +1939,17 @@ static void draw_settings_top(App *a)
     stat_card(138 + w, 40, w, T(S_STREAM), s1, NULL);
     stat_card(132, 96, w, T(S_PER_MIN), s2, NULL);
     stat_card(138 + w, 96, w, T(S_FITS), s3, NULL);
-    if (a->focus == ROW_AUTOSTART)   /* what the switch does, while it is the row in focus */
+    const int row = set_focus_row(a);
+    if (row == ROW_AUTOSTART)   /* what the row does, while it is in focus */
         snprintf(note, sizeof(note), "%s", T(S_AUTOSTART_NOTE));
-    else if (a->focus == ROW_LID)
+    else if (row == ROW_LID)
         snprintf(note, sizeof(note), "%s", T(S_LID_WORK_NOTE));
-    else if (a->focus == ROW_STATS)
+    else if (row == ROW_STATS)
         snprintf(note, sizeof(note), T(S_STATS_NOTE), stats_id());
+    else if (row == ROW_CONVERT)
+        snprintf(note, sizeof(note), "%s", T(S_CONVERT_NOTE));
+    else if (row == ROW_BOTTOM_FPS)
+        snprintf(note, sizeof(note), "%s", T(S_BOTTOM_FPS_NOTE));
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     const float h = ui_text_wrap_height(234, 9, FONT_REG, note) + 14;
@@ -1902,7 +2032,7 @@ static void format_short(char *buf, size_t cap, const char *name)
     int y = 0, mo = 0, d = 0, h = 0, mi = 0;
     if (sscanf(name, "%4d%2d%2d_%2d%2d", &y, &mo, &d, &h, &mi) != 5 || mo < 1 || mo > 12)
         snprintf(buf, cap, "%s", name);
-    else if (i18n_ukrainian())
+    else if (i18n_lang() == LANG_UK)
         snprintf(buf, cap, "%02d.%02d · %02d:%02d", d, mo, h, mi);
     else
         snprintf(buf, cap, "%s %d · %02d:%02d", MON[mo - 1], d, h, mi);
@@ -2090,7 +2220,7 @@ static void draw_phone_top(App *a)
 
 static void draw_toast(App *a)
 {
-    if (!a->msg[0] || a->frame > a->msgUntil || (a->msgImportant && (a->screen == SCR_LANG || a->screen == SCR_GUIDE)))
+    if (!a->msg[0] || a->frame > a->msgUntil || (a->msgImportant && ((a->screen == SCR_LANG && a->langFirst) || a->screen == SCR_GUIDE)))
         return;
     const float h = ui_text_wrap_height(350, 9, FONT_REG, a->msg) + 12;
     ui_rrect(14, 226 - h, 372, h, 7, COL_INFO_BG);
@@ -2106,7 +2236,8 @@ void app_draw_top(App *a)
     case SCR_HELP: draw_help_top(a); break;
     case SCR_GUIDE: draw_guide_top(a); break;
     case SCR_LANG: draw_lang_top(a); break;
-    case SCR_SETTINGS: draw_settings_top(a); break;
+    case SCR_SETTINGS:
+    case SCR_SETGROUP: draw_settings_top(a); break;
     case SCR_HOTKEY: draw_hotkey_top(a); break;
     case SCR_GALLERY: draw_gallery_top(a); break;
     case SCR_PLAYER: draw_player_top(a); break;
@@ -2166,14 +2297,9 @@ static void draw_panel_bottom(App *a)
         focus_ring(a->focus == 0 ? TILE_REC : TILE_REPLAY, 10);
     else if (a->focus < 4 || a->focus == FOCUS_REPLAY)
         focus_ring(TILE[a->focus < 4 ? a->focus : 0], 10);
-    /* hint row: hotkey, language flag */
+    /* hint row: the hotkey */
     const float x = 12 + ui_text(12, 217, 9, FONT_REG, COL_MUTED, T(S_START_STOP)) + 5;
     hk_chips(x, 216, hk_mask(a->cfg.hotkey), COL_MUTED);
-    const Rect fb = flag_btn();
-    ui_rrect(fb.x, fb.y, fb.w, fb.h, 4, COL_SURFACE2);
-    ui_flag(fb.x + 3, fb.y + 3, !a->cfg.ukrainian); /* shows the other language */
-    if (a->focus == FOCUS_FLAG)
-        focus_ring(fb, 4);
 }
 
 static void draw_firstrun_bottom(App *a)
@@ -2210,37 +2336,96 @@ static void draw_help_bottom(App *a)
     }
 }
 
-static void draw_settings_bottom(App *a)
+static void settings_header(const char *title)
 {
     ui_rrect(SET_BACK.x, SET_BACK.y, SET_BACK.w, SET_BACK.h, 6, COL_SURFACE);
     ui_icon(ICON_BACK, SET_BACK.x + 10.5f, SET_BACK.y + 10.5f, 12, COL_TEXT);
-    ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, T(S_SETTINGS));
-    static const Str NAME[SET_ROWS] = {S_FPS, S_SCREENS, S_QUALITY, S_SOUND, S_LED, S_AUTOSTART, S_LID_WORK, S_STATS, S_LANGUAGE, S_HOTKEY, S_UNINSTALL_ROW};
-    set_scroll(a->focus);
-    for (int r = 0; r < SET_ROWS; r++) {
-        if (!set_row_shown(r))
-            continue;
-        const Rect row = set_row(r);
+    ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, title);
+}
+
+static const Str GROUP_NAME[GRP_COUNT] = {S_GRP_RECORDING, S_GRP_RECORDER, S_GRP_APP, S_LANGUAGE};
+
+/* what a group holds now, one line under its name */
+static void group_summary(const App *a, int grp, char *buf, size_t cap)
+{
+    static const Str SCREENS[3] = {S_BOTH, S_TOP, S_BOTTOM};
+    static const Str LED[3] = {S_LED_OFF, S_LED_SOLID, S_LED_PULSE};
+    char hk[48];
+    switch (grp) {
+    case GRP_RECORDING:
+        snprintf(buf, cap, "%d fps · %s · %s · %s", a->cfg.fps, T(SCREENS[a->cfg.screens]),
+                 T(a->cfg.lossless ? S_Q_LOSSLESS : S_Q_AUTO), T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
+        break;
+    case GRP_RECORDER:
+        hk_label(hk_mask(a->cfg.hotkey), hk, sizeof(hk));
+        snprintf(buf, cap, "%s · LED %s%s%s", hk, T(LED[a->cfg.led]), a->cfg.autostart ? " · " : "",
+                 a->cfg.autostart ? T(S_AUTOSTART) : "");
+        break;
+    case GRP_APP:
+        snprintf(buf, cap, "%s: %s", T(S_CONVERT), T(a->cfg.convertAuto ? S_CONVERT_AUTO : S_CONVERT_MANUAL));
+        break;
+    default:
+        snprintf(buf, cap, "%s", LANGS[a->cfg.lang].name);
+    }
+}
+
+static void draw_settings_bottom(App *a)
+{
+    char sum[128];
+    settings_header(T(S_SETTINGS));
+    for (int i = 0; i < GRP_COUNT; i++) {
+        const Rect c = grp_card(i);
+        ui_card(c.x, c.y, c.w, c.h, 8, COL_SURFACE);
+        float x = c.x + 12;
+        if (i == GRP_LANG) {
+            ui_flag_sized(x, c.y + (c.h - 26 * 13 / 21.0f) / 2, 26, a->cfg.lang);
+            x += 38;
+        }
+        ui_text(x, c.y + 7, 10.5f, FONT_BOLD, COL_TEXT, T(GROUP_NAME[i]));
+        group_summary(a, i, sum, sizeof(sum));
+        ui_text(x, c.y + 25, 9, FONT_REG, COL_MUTED, sum);
+        ui_icon(ICON_NEXT, c.x + c.w - 12, c.y + c.h / 2, 11, COL_MUTED);
+        if (a->focus == i)
+            focus_ring(c, 8);
+    }
+}
+
+static void draw_setgroup_bottom(App *a)
+{
+    static const Str NAME[ROW_COUNT] = {
+        [ROW_FPS] = S_FPS,           [ROW_SCREENS] = S_SCREENS, [ROW_BOTTOM_FPS] = S_BOTTOM_FPS, [ROW_QUALITY] = S_QUALITY,
+        [ROW_SOUND] = S_SOUND,       [ROW_HOTKEY] = S_HOTKEY,   [ROW_LED] = S_LED,               [ROW_AUTOSTART] = S_AUTOSTART,
+        [ROW_CONVERT] = S_CONVERT,   [ROW_LID] = S_LID_WORK,    [ROW_STATS] = S_STATS,           [ROW_UNINSTALL] = S_UNINSTALL_ROW,
+    };
+    settings_header(T(GROUP_NAME[a->setGroup]));
+    for (int i = 0; i < GROUP_N[a->setGroup]; i++) {
+        const int r = GROUP_ROWS[a->setGroup][i];
+        const Rect row = set_row(i);
+        const bool off = r == ROW_BOTTOM_FPS && !bottom_fps_on(a);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
-        ui_text(row.x + 8, row.y + 4, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : COL_TEXT, T(NAME[r]));
+        ui_text(row.x + 9, row.y + 7, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : off ? COL_FAINT : COL_TEXT, T(NAME[r]));
         Seg g;
         if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
             seg_layout(row, g.labels, g.n, opt);
             ui_rrect(opt[0].x - 2, opt[0].y - 1, opt[g.n - 1].x + opt[g.n - 1].w - opt[0].x + 4, opt[0].h + 2, 4, COL_BG);
-            for (int i = 0; i < g.n; i++) {
-                const bool sel = i == g.sel, dis = i == g.disabled;
+            for (int k = 0; k < g.n; k++) {
+                const bool sel = k == g.sel;
                 if (sel)
-                    ui_rrect(opt[i].x, opt[i].y, opt[i].w, opt[i].h, 3, COL_ACCENT);
-                const float tw = ui_text_width(9, FONT_BOLD, g.labels[i]);
-                ui_text_center(opt[i].x + opt[i].w / 2, opt[i].y + 2, 9, FONT_BOLD,
-                               sel ? COL_WHITE : dis ? COL_FAINT : COL_SOFT, g.labels[i]);
-                if (dis)
-                    ui_rect(opt[i].x + opt[i].w / 2 - tw / 2, opt[i].y + opt[i].h / 2, tw, 1, COL_FAINT);
+                    ui_rrect(opt[k].x, opt[k].y, opt[k].w, opt[k].h, 3, COL_ACCENT);
+                ui_text_center(opt[k].x + opt[k].w / 2, opt[k].y + 4, 9, FONT_BOLD, sel ? COL_WHITE : COL_SOFT, g.labels[k]);
             }
+        } else if (r == ROW_BOTTOM_FPS) {
+            char v[16];
+            const char *label = bottom_fps_label(a, v, sizeof(v));
+            const u32 col = off ? COL_FAINT : COL_TEXT;
+            const float rx = row.x + row.w - 22;
+            ui_text_right(rx, row.y + 7, 9.5f, FONT_BOLD, col, label);
+            ui_icon(ICON_BACK, rx - ui_text_width(9.5f, FONT_BOLD, label) - 10, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
+            ui_icon(ICON_NEXT, row.x + row.w - 11, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
         } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID || r == ROW_STATS)
-            ui_toggle(row.x + row.w - 37, row.y + 1.25f,
+            ui_toggle(row.x + row.w - 38, row.y + 4,
                       r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart
                                                      : r == ROW_LID      ? a->cfg.lidWork
                                                                          : a->cfg.stats);
@@ -2249,17 +2434,15 @@ static void draw_settings_bottom(App *a)
             const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
             const float sep = ui_text_width(9, FONT_REG, "·") + 8;
             float x = row.x + row.w - 20 - hk_chips_width(m) - sep - hk_chips_width(m2);
-            x += hk_chips(x, row.y + 3.5f, m, COL_MUTED) + 1;
-            x += ui_text(x, row.y + 4.5f, 9, FONT_REG, COL_FAINT, "·") + 4;
-            hk_chips(x, row.y + 3.5f, m2, COL_MUTED);
+            x += hk_chips(x, row.y + 6, m, COL_MUTED) + 1;
+            x += ui_text(x, row.y + 7, 9, FONT_REG, COL_FAINT, "·") + 4;
+            hk_chips(x, row.y + 6, m2, COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
-        if (r == a->focus)
+        if (i == a->focus)
             focus_ring(row, 6);
     }
-    const float track = 240 - 31 - 4, thumb = track * SET_VISIBLE / SET_ROWS;
-    ui_rrect(313, 31 + (track - thumb) * g_setFirst / (SET_ROWS - SET_VISIBLE), 3, thumb, 1.5f, COL_TRACK);
 }
 
 static void draw_hotkey_bottom(App *a)
@@ -2370,7 +2553,7 @@ static void draw_gallery_bottom(App *a)
             ui_text_right(r.x + r.w - 8, r.y + 20, 9, FONT_REG, COL_OK, T(S_GAL_PREP_READY));
         else if (ps == PS_FAILED)
             ui_text_right(r.x + r.w - 8, r.y + 20, 9, FONT_REG, COL_FAINT, T(S_GAL_PREP_FAILED));
-        else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0)) {
+        else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0 && a->cfg.convertAuto)) { /* manual: a paused job waits for a Download */
             snprintf(buf, sizeof(buf), T(S_GAL_PREP_PCT), pm / 10);
             ui_text_right(r.x + r.w - 8, r.y + 20, 9, FONT_REG, ps == PS_WORKING ? COL_SOFT : COL_FAINT, buf);
         }
@@ -2504,6 +2687,7 @@ void app_draw_bottom(App *a)
     case SCR_GUIDE: draw_guide_bottom(a); break;
     case SCR_LANG: draw_lang_bottom(a); break;
     case SCR_SETTINGS: draw_settings_bottom(a); break;
+    case SCR_SETGROUP: draw_setgroup_bottom(a); break;
     case SCR_HOTKEY: draw_hotkey_bottom(a); break;
     case SCR_GALLERY: draw_gallery_bottom(a); break;
     case SCR_PLAYER: draw_player_bottom(a); break;

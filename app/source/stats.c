@@ -215,20 +215,30 @@ static bool SendReport(void)
     stats_json_str(&j, "from", from, stats_from(&g_state, from, sizeof(from)));
     stats_json_str(&j, "app_log", app.text, app.len);
     stats_json_str(&j, "rec_log", rec.text, rec.len);
+    /* A report the server will never take (too big here, or refused as malformed: 4xx but 429) is
+       skipped, not tried again at every launch: the marks move on past those lines. */
+    bool skip = false;
+    u32 status = 0;
     if (!stats_json_end(&j)) {
-        app_log("stats: report too big, not sent");
-        return false;
-    }
-    const u32 status = Post(STATS_URL "/v1/report", "application/json", g_body, j.len, NULL);
-    if (!Delivered(status)) {
-        app_log("stats: report not sent (HTTP %lu)", (unsigned long)status);
-        return false;
+        app_log("stats: report too big, its lines skipped");
+        skip = true;
+    } else {
+        status = Post(STATS_URL "/v1/report", "application/json", g_body, j.len, NULL);
+        skip = status >= 400 && status < 500 && status != 429;
+        if (!Delivered(status) && !skip) {
+            app_log("stats: report not sent (HTTP %lu)", (unsigned long)status);
+            return false;
+        }
+        if (skip)
+            app_log("stats: report refused (HTTP %lu), its lines skipped", (unsigned long)status);
     }
     LightLock_Lock(&g_lock);
     g_state.app = app.next;
     g_state.rec = rec.next;
     SaveState();
     LightLock_Unlock(&g_lock);
+    if (skip)
+        return false;
     app_log("stats: sent %u + %u bytes of logs, system %s", (unsigned)app.len, (unsigned)rec.len, system);
     return true;
 }
@@ -291,7 +301,8 @@ static void Run(void *arg)
         return;
     if (SendReport())
         SendDump();
-    httpcExit();
+    if (!g_stop)   /* the app is closing and may not have waited for this thread: its services go with it */
+        httpcExit();
 }
 
 void stats_start(bool enabled)

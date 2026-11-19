@@ -31,12 +31,14 @@ static LightLock g_lock;
 static Entry g_e[MAX_ENTRIES];      /* under g_lock */
 static int g_n;
 static char g_first[20];            /* under g_lock */
+static volatile bool g_auto = true; /* convert=auto: every recording; manual: only g_first (the one downloaded) */
 static char g_forget[20];           /* under g_lock */
 static LightEvent g_forgotten;
 static volatile u32 g_hold;
 static volatile bool g_quit, g_suspended;
 static bool g_new3ds;
 static aptHookCookie g_hook;
+static bool g_hooked;
 static u32 g_oldLimit;
 static bool g_limitSet;
 static int g_shareGot;
@@ -152,13 +154,13 @@ static void scan(void)
     LightLock_Unlock(&g_lock);
 }
 
-/* The recording to work on: the one asked for first, else the newest not done. */
+/* The recording to work on: the one asked for first, else (convert=auto) the newest not done. */
 static bool pick(char *name)
 {
     bool ok = false;
     LightLock_Lock(&g_lock);
     Entry *e = g_first[0] ? find(g_first) : NULL;
-    if (!e || e->state == PS_READY || e->state == PS_FAILED)
+    if (g_auto && (!e || e->state == PS_READY || e->state == PS_FAILED))
         for (int i = 0; i < g_n && (!e || e->state == PS_READY || e->state == PS_FAILED); i++)
             e = &g_e[i];
     if (e && (e->state == PS_QUEUED || e->state == PS_WORKING)) {
@@ -846,10 +848,11 @@ static void thread_main(void *arg)
         LightLock_Lock(&g_lock);
         snprintf(want, sizeof(want), "%s", g_first);
         LightLock_Unlock(&g_lock);
-        if (want[0] && strcmp(want, name) != 0) {
+        if (!g_auto || (want[0] && strcmp(want, name) != 0)) {
             LightLock_Lock(&g_lock);
-            const Entry *w = find(want);
-            const bool other = w && (w->state == PS_QUEUED);
+            const Entry *w = want[0] ? find(want) : NULL;
+            /* switched to manual: only the one asked for goes on, the others wait with their resume point */
+            const bool other = (w && w->state == PS_QUEUED) || (!g_auto && strcmp(want, name) != 0);
             LightLock_Unlock(&g_lock);
             if (other) {
                 job_close(&job);
@@ -898,8 +901,11 @@ static void on_apt(APT_HookType hook, void *param)
         g_suspended = false;
 }
 
-void prepare_start(bool new3ds, bool slices)
+void prepare_set_auto(bool on) { g_auto = on; }
+
+void prepare_start(bool new3ds, bool slices, bool autoAll)
 {
+    g_auto = autoAll;
     if (g_thread)
         return;
     g_new3ds = new3ds;
@@ -939,11 +945,12 @@ void prepare_start(bool new3ds, bool slices)
     if (!new3ds && g_limitSet) /* made; until a job runs, the system keeps core 1 */
         APT_SetAppCpuTimeLimit(CORE1_IDLE);
     aptHook(&g_hook, on_apt, NULL);
+    g_hooked = true;
     g_writer = threadCreate(writer_main, NULL, 16 * 1024, prio + 2, -2, false);
     if (slices && core == 2) {   /* only next to the producer on core 2 (not where it fell back to core 1) */
         LightEvent_Init(&g_sgo, RESET_ONESHOT);
         LightEvent_Init(&g_sdone, RESET_ONESHOT);
-        g_slicer = threadCreate(slicer_main, NULL, 32 * 1024, prio + 2, 2, false);
+        g_slicer = threadCreate(slicer_main, NULL, 64 * 1024, prio + 2, 2, false);   /* minih264 slice: as much stack as thread_main */
     }
     g_thread = g_helper && g_writer ? threadCreate(thread_main, NULL, 64 * 1024, prio + 3, -2, false) : NULL;
     if (new3ds)
@@ -956,13 +963,17 @@ void prepare_start(bool new3ds, bool slices)
 
 void prepare_stop(void)
 {
-    if (!g_thread)
-        return;
-    g_quit = true;
-    threadJoin(g_thread, U64_MAX);
-    threadFree(g_thread);
-    g_thread = NULL;
-    aptUnhook(&g_hook);
+    if (g_thread) {
+        g_quit = true;
+        threadJoin(g_thread, U64_MAX);
+        threadFree(g_thread);
+        g_thread = NULL;
+    }
+    if (g_hooked) {
+        aptUnhook(&g_hook);
+        g_hooked = false;
+    }
+    /* the helpers too when the main thread never started (one of them failed to): they wait on their events */
     g_helperQuit = true;
     if (g_helper) {
         LightEvent_Signal(&g_go);

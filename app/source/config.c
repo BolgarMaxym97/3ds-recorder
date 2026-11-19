@@ -42,7 +42,9 @@ void config_load(Config *c)
     c->audio = true;
     c->led = 2;
     snprintf(c->hotkey, sizeof(c->hotkey), "R+SELECT");
-    c->ukrainian = false;
+    c->lang = LANG_EN;
+    c->bottomFps = 0;
+    c->convertAuto = true;
     c->guideSeen = false;
     c->langSet = false;
     c->replay = false;
@@ -73,6 +75,11 @@ void config_load(Config *c)
             c->screens = strcasecmp(v, "top") == 0      ? SCREENS_TOP
                          : strcasecmp(v, "bottom") == 0 ? SCREENS_BOTTOM
                                                         : SCREENS_BOTH;
+        else if (strcasecmp(line, "bottom_fps") == 0) {
+            const int b = atoi(v);
+            c->bottomFps = b == 15 || b == 10 || b == 5 || b == 1 ? b : 0;
+        } else if (strcasecmp(line, "convert") == 0)
+            c->convertAuto = strcasecmp(v, "manual") != 0;
         else if (strcasecmp(line, "quality") == 0)
             c->lossless = strcasecmp(v, "lossless") == 0;
         else if (strcasecmp(line, "audio") == 0)
@@ -82,7 +89,7 @@ void config_load(Config *c)
         else if (strcasecmp(line, "hotkey") == 0 && *v)
             snprintf(c->hotkey, sizeof(c->hotkey), "%s", v);
         else if (strcasecmp(line, "lang") == 0) {
-            c->ukrainian = strcasecmp(v, "uk") == 0;
+            c->lang = i18n_lang_from_code(v);
             c->langSet = true;
         }
         else if (strcasecmp(line, "replay") == 0)

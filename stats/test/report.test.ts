@@ -37,8 +37,13 @@ const report = {
   rec_log: recLog,
 };
 
+// Each request from its own address, so the rate limiter (10 a minute per address) stays out of the
+// way; the limiter's own test sends from one.
+let ipNumber = 0;
+const nextIp = () => `198.51.100.${++ipNumber % 250}`;
+
 function post(path: string, body: BodyInit, headers: Record<string, string> = {}) {
-  return SELF.fetch(BASE + path, { method: "POST", headers, body });
+  return SELF.fetch(BASE + path, { method: "POST", headers: { "cf-connecting-ip": nextIp(), ...headers }, body });
 }
 
 function postReport(body: unknown) {
@@ -159,7 +164,12 @@ describe("POST /v1/dump", () => {
         controller.close();
       },
     });
-    const response = await SELF.fetch(BASE + "/v1/dump", { method: "POST", headers, body: stream, duplex: "half" } as RequestInit);
+    const response = await SELF.fetch(BASE + "/v1/dump", {
+      method: "POST",
+      headers: { "cf-connecting-ip": nextIp(), ...headers },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
     expect(response.status).toBe(413);
   });
 
@@ -204,6 +214,22 @@ describe("expire", () => {
     ]);
     const { results: dumps } = await env.DB.prepare("SELECT name FROM dumps").all();
     expect(dumps).toEqual([{ name: "crash_dump_00000002.dmp" }]);
+  });
+});
+
+describe("rate limit", () => {
+  it("answers 429 past 10 POSTs a minute from one address", async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const response = await SELF.fetch(BASE + "/v1/report", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.7" },
+        body: "{}",
+      });
+      statuses.push(response.status);
+    }
+    expect(statuses.slice(0, 10).every((s) => s !== 429)).toBe(true);
+    expect(statuses.slice(10)).toEqual([429, 429]);
   });
 });
 

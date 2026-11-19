@@ -1,6 +1,7 @@
 /*
  * "Prepare for the phone" in the background: a low-priority thread turns recordings into MP4s
- * (prep/, H.264 + AAC) next to them, newest first, while the app is open. A job goes on from
+ * (prep/, H.264 + AAC) next to them, newest first, while the app is open (convert=manual: only
+ * the one being downloaded). A job goes on from
  * its last resume point after the app was closed. It pauses while the player runs, while a
  * file goes to the phone, while the module records and while the app is in the background.
  */
@@ -20,8 +21,11 @@ typedef enum {
 
 enum { PREP_HOLD_PLAYER = 1, PREP_HOLD_SEND = 2 };
 
-/* slices: the H.264 encoder's second half of each picture on core 2 (New 3DS; config mp4_threads) */
-void prepare_start(bool new3ds, bool slices);
+/* slices: the H.264 encoder's second half of each picture on core 2 (New 3DS; config mp4_threads).
+   autoAll (config convert=auto): every recording, newest first; else only those asked for with
+   prepare_first (the Download screen). Replay clips and joins are made either way. */
+void prepare_start(bool new3ds, bool slices, bool autoAll);
+void prepare_set_auto(bool autoAll);
 void prepare_stop(void);
 /* PREP_HOLD_* bits: work pauses while any is set. */
 void prepare_hold(u32 bit, bool on);
