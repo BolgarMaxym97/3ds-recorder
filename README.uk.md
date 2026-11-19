@@ -61,7 +61,7 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 | **Повтор** | Увімкніть **Повтор 30 с** у плитці «Рекордер»; у грі **X + SELECT** зберігає останні 30 секунд кліпом. |
 | **Перегляд** | Галерея → **A**. |
 | **На телефон** | Галерея → **Y** на записі, відскануйте QR-код камерою телефона, натисніть **Зберегти відео**. iPhone і Android, нічого ставити не треба. |
-| **З SD-картки** | `/3ds/recorder/recordings/`: поруч із кожним `.r3d` лежить `.mp4`. Лише `.r3d`? Перетягніть його на [сторінку конвертера](https://bolgarmaxym97.github.io/3ds-recorder/) — MP4 зробить браузер, нічого не вивантажується. |
+| **З SD-картки** | `/3ds/recorder/recordings/`: поруч зі сконвертованим `.r3d` лежить `.mp4`. Лише `.r3d`? Перетягніть його на [сторінку конвертера](https://bolgarmaxym97.github.io/3ds-recorder/) — MP4 зробить браузер, нічого не вивантажується. |
 
 **LED:** синій на мить — готово · червоний «дихає» — іде запис · слабкий синій — Повтор увімкнено · зелений двічі —
 збережено · червоний тричі — щось не так (найчастіше заповнена SD-картка), відкрийте додаток, щоб побачити причину.
@@ -132,7 +132,8 @@ https://github.com/user-attachments/assets/122e7c76-d4c6-4f60-9426-aeed7d322776
 [Luma3DS](https://github.com/LumaTeam/Luma3DS), [devkitPro / libctru / citro2d](https://devkitpro.org),
 [minih264](https://github.com/lieff/minih264), [vo-aacenc](https://github.com/mstorsjo/vo-aacenc) (Apache 2.0),
 [QR Code generator](https://www.nayuki.io/page/qr-code-generator-library) (MIT),
-[mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), шрифт [Inter](https://rsms.me/inter/) (SIL OFL).
+[mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), шрифти [Inter](https://rsms.me/inter/) і
+[Noto Sans JP / SC / TC](https://fonts.google.com/noto) (SIL OFL).
 Їхні ліцензії лежать поруч з їхнім кодом у `third_party/`, `web/vendor/` і `app/assets/fonts/`.
 
 ## Ліцензія

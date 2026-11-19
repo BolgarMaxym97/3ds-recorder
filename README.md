@@ -63,7 +63,7 @@ recordings stay.
 | **Replay** | Switch **Replay 30 s** on in the Recorder tile; in a game, **X + SELECT** saves the last 30 seconds as a clip. |
 | **Watch** | Gallery → **A**. |
 | **To the phone** | Gallery → **Y** on a recording, scan the QR code with the phone's camera, tap **Save the video**. iPhone and Android, nothing to install. |
-| **From the SD card** | `/3ds/recorder/recordings/`: an `.mp4` next to each `.r3d`. Only an `.r3d`? Drop it on the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) — the browser makes the MP4, nothing is uploaded. |
+| **From the SD card** | `/3ds/recorder/recordings/`: an `.mp4` next to each converted `.r3d`. Only an `.r3d`? Drop it on the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) — the browser makes the MP4, nothing is uploaded. |
 
 **The LED:** blue for a moment — ready · red, breathing — recording · faint blue — Replay is on · green twice — saved ·
 red three times — something went wrong (usually a full SD card), open the app to see why.
@@ -133,7 +133,8 @@ tick the box. Luma settings are not changed.
 [Luma3DS](https://github.com/LumaTeam/Luma3DS), [devkitPro / libctru / citro2d](https://devkitpro.org),
 [minih264](https://github.com/lieff/minih264), [vo-aacenc](https://github.com/mstorsjo/vo-aacenc) (Apache 2.0),
 [QR Code generator](https://www.nayuki.io/page/qr-code-generator-library) (MIT),
-[mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), [Inter](https://rsms.me/inter/) font (SIL OFL).
+[mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), [Inter](https://rsms.me/inter/) and
+[Noto Sans JP / SC / TC](https://fonts.google.com/noto) fonts (SIL OFL).
 Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/assets/fonts/`.
 
 ## License
