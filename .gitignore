@@ -1,5 +1,7 @@
 # Build output (rebuilt with make; releases are attached to GitHub Releases)
 build/
+build-tour/
+build-perf/
 *.3dsx
 *.cia
 *.cxi
@@ -48,6 +50,8 @@ tests/host/test_unwrap
 tests/host/test_autostart
 tests/host/test_front
 tests/host/test_plgring
+tests/host/test_textbreak
+tests/host/test_i18n
 tests/host/test_appletguard
 tests/host/test_join
 tests/host/test_stats

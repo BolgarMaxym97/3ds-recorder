@@ -84,7 +84,8 @@ red three times — something went wrong (usually a full SD card), open the app 
 - **Recorder:** the two hotkeys (recording, Replay clip), the LED, Launch On Startup.
 - **App:** Convert To MP4 (automatically, or only the recording you download), Work With Lid Closed, Share Statistics,
   Uninstall recorder.
-- **Language.**
+- **Language:** English, Українська, Deutsch, Español, Français, Italiano, Português (Brazil), 日本語, 简体中文,
+  繁體中文. The first run offers the console's own language; the phone page follows the app's language.
 
 **Quality: Auto** stores a picture that changes all over (a 3D game in motion) the way video does, so both screens keep
 up to 30 fps on an Old 3DS; menus and 2D stay exact. **Lossless** keeps every frame exact, but in 3D games the SD card
@@ -93,8 +94,8 @@ cannot take every frame.
 ## Good to know
 
 - **DS and GBA games can't be recorded** — they run in a separate mode of the console.
-- Leaving System Settings, starting a DS / GBA game or turning the console off **restarts the console**: the recording
-  is saved there.
+- Leaving System Settings or starting a DS / GBA game **restarts the console**, and turning it off stops the recorder
+  too: the recording is saved there.
 - **Applets** (Internet Browser, Friend List…) need the recorder's memory: the recording is saved first and goes on
   when the applet closes.
 - **Closing the lid** pauses a recording; the parts become one recording again in the app. While the app converts or

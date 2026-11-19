@@ -9,8 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 
 #include "app.h"
+#include "i18n.h"
 #include "lid.h"
 #include "prepare.h"
 #include "recorder.h"
@@ -83,6 +86,88 @@ static void scene_begin(C3D_RenderTarget *target, u16 width)
     C2D_SceneSize(240, width, true);
 }
 
+#ifdef UI_TOUR
+/* Both screens as one 400x480 BMP (the top one, the bottom one under it centred), read back from
+   the framebuffers: 240-pixel columns of B, G, R, the left one first, bottom to top. */
+static void tour_save(const char *path)
+{
+    static u8 img[400 * 480 * 3];
+    memset(img, 0, sizeof(img));
+    u16 fw, fh;
+    const u8 *top = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &fw, &fh);
+    const u8 *bot = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &fw, &fh);
+    for (int y = 0; y < 480; y++) { /* BMP rows: bottom up */
+        u8 *row = img + (size_t)(479 - y) * 400 * 3;
+        for (int x = 0; x < 400; x++) {
+            const u8 *src = NULL;
+            if (y < 240)
+                src = top + ((size_t)x * 240 + (239 - y)) * 3;
+            else if (x >= 40 && x < 360)
+                src = bot + ((size_t)(x - 40) * 240 + (239 - (y - 240))) * 3;
+            if (src)
+                memcpy(row + x * 3, src, 3);
+        }
+    }
+    u8 h[54] = {'B', 'M'};
+    const u32 size = sizeof(h) + sizeof(img);
+    memcpy(h + 2, &size, 4);
+    h[10] = 54, h[14] = 40;
+    const u32 w = 400, hh = 480;
+    memcpy(h + 18, &w, 4);
+    memcpy(h + 22, &hh, 4);
+    h[26] = 1, h[28] = 24;
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fwrite(h, 1, sizeof(h), f);
+        fwrite(img, 1, sizeof(img), f);
+        fclose(f);
+    }
+}
+
+/* the languages to tour: sdmc:/3ds/recorder/tour.txt ("ja zh-Hant"), every one without it */
+static int tour_langs(int *out)
+{
+    int n = 0;
+    char buf[128] = "";
+    FILE *f = fopen("sdmc:/3ds/recorder/tour.txt", "r");
+    if (f) {
+        buf[fread(buf, 1, sizeof(buf) - 1, f)] = 0;
+        fclose(f);
+        for (char *t = strtok(buf, " \r\n,"); t; t = strtok(NULL, " \r\n,"))
+            for (int i = 0; i < LANG_COUNT; i++)
+                if (!strcasecmp(t, LANGS[i].code))
+                    out[n++] = i;
+    }
+    if (!n)
+        for (int i = 0; i < LANG_COUNT; i++)
+            out[n++] = i;
+    return n;
+}
+#endif
+
+#ifdef PERF_LOG
+/* make PERF=1: the CPU time of drawing a frame (building it: texts parsed, shapes queued; not the
+   GPU), per screen and language: average and worst of the first 240 frames on each screen */
+static void perf_frame(const App *a, u64 ticks)
+{
+    static int screen = -1, lang = -1;
+    static u32 n;
+    static u64 sum, worst;
+    if ((int)a->screen != screen || (int)a->cfg.lang != lang) {
+        screen = a->screen, lang = a->cfg.lang, n = 0, sum = worst = 0;
+        return;
+    }
+    if (n >= 240)
+        return;
+    sum += ticks;
+    if (ticks > worst)
+        worst = ticks;
+    if (++n == 240)
+        app_log("perf: screen %d, %s: draw %.2f ms average, %.2f ms worst", screen, LANGS[lang].code,
+                (double)sum / n / (SYSCLOCK_ARM11 / 1000.0), (double)worst / (SYSCLOCK_ARM11 / 1000.0));
+}
+#endif
+
 int main(int argc, char **argv)
 {
     romfsInit();
@@ -106,6 +191,13 @@ int main(int argc, char **argv)
     app_init(&app, self);
     lid_init();
 
+#ifdef UI_TOUR
+    gfxSetDoubleBuffering(GFX_TOP, false);
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
+    mkdir("sdmc:/3ds/recorder/tour", 0777);
+    int tourLang[LANG_COUNT], tourLangs = tour_langs(tourLang), tourL = 0, tourStep = 0, tourWait = -1;
+    char tourName[48];
+#endif
     bool touching = false, dragged = false;
     u32 idle = 0, skipped = 0; /* frames without input; frames not drawn since the last drawn one */
     touchPosition first = {0, 0}, last = {0, 0};
@@ -129,6 +221,18 @@ int main(int argc, char **argv)
             in.tap_x = last.px;
             in.tap_y = last.py;
         }
+#ifdef UI_TOUR
+        in = (Input){0};
+        if (tourWait < 0) {
+            tourWait = app_tour(&app, tourLang[tourL], tourStep, tourName, sizeof(tourName));
+            if (!tourWait && ++tourL < tourLangs) {
+                tourStep = 0;
+                tourWait = app_tour(&app, tourLang[tourL], tourStep, tourName, sizeof(tourName));
+            }
+            if (!tourWait)
+                break;
+        }
+#endif
         app_update(&app, &in);
         if (lid_step(app.cfg.lidWork)) { /* the lid is closed: the screens are dark, the work goes on (lid.h) */
             svcSleepThread(50 * 1000 * 1000);
@@ -147,13 +251,31 @@ int main(int argc, char **argv)
 
         ui_frame_begin();
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+#ifdef PERF_LOG
+        const u64 perfT0 = svcGetSystemTick();
+#endif
         C2D_TargetClear(top, COL_BG);
         scene_begin(top, TOP_W);
         app_draw_top(&app);
         C2D_TargetClear(bottom, COL_BG);
         scene_begin(bottom, BOTTOM_W);
         app_draw_bottom(&app);
+#ifdef PERF_LOG
+        perf_frame(&app, svcGetSystemTick() - perfT0);
+#endif
         C3D_FrameEnd(0);
+#ifdef UI_TOUR
+        if (--tourWait == 0) {
+            gspWaitForVBlank();
+            gspWaitForVBlank();
+            char path[96];
+            snprintf(path, sizeof(path), "sdmc:/3ds/recorder/tour/%s-%02d-%s.bmp", LANGS[tourLang[tourL]].code,
+                     tourStep, tourName);
+            tour_save(path);
+            tourStep++;
+            tourWait = -1;
+        }
+#endif
     }
 
     lid_exit();

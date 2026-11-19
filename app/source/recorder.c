@@ -71,21 +71,24 @@ void app_log_start(void)
         remove(REC_APP_LOG_OLD);
         rename(REC_APP_LOG, REC_APP_LOG_OLD);
     }
-    u8 model = 0xFF, region = 0xFF;
+    u8 model = 0xFF, region = 0xFF, lang = 0xFF;
     if (R_SUCCEEDED(cfguInit())) {
         CFGU_GetSystemModel(&model);
         CFGU_SecureInfoGetRegion(&region);
+        CFGU_GetSystemLanguage(&lang);
         cfguExit();
     }
+    static const char *const langs[] = {"ja", "en", "fr", "de", "it", "es", "zh", "ko", "nl", "pt", "ru", "tw"};
     static const char *const models[] = {"Old 3DS", "Old 3DS XL", "New 3DS", "Old 2DS", "New 3DS XL", "New 2DS XL"};
     static const char *const regions[] = {"JPN", "USA", "EUR", "AUS", "CHN", "KOR", "TWN"};
     const u32 luma = recorder_luma_version(), kv = osGetKernelVersion(), fv = osGetFirmVersion();
     extern u32 __ctru_heap_size;
     snprintf(g_about, sizeof(g_about),
-             "app %s%s%s (%s) | %s (model %u) | %s | Luma %lu.%lu.%lu | kernel %lu.%lu-%lu, firm %lu.%lu-%lu | "
+             "app %s%s%s (%s) | %s (model %u) | %s, system language %s | Luma %lu.%lu.%lu | kernel %lu.%lu-%lu, firm %lu.%lu-%lu | "
              "heap %lu KB, linear free %lu KB",
              APP_VERSION, APP_CHANNEL[0] ? " " : "", APP_CHANNEL, envIsHomebrew() ? "3dsx" : "cia", model < 6 ? models[model] : "unknown model",
-             (unsigned)model, region < 7 ? regions[region] : "unknown region", (unsigned long)(luma >> 16),
+             (unsigned)model, region < 7 ? regions[region] : "unknown region", lang < 12 ? langs[lang] : "unknown",
+             (unsigned long)(luma >> 16),
              (unsigned long)(luma >> 8 & 0xFF), (unsigned long)(luma & 0xFF), (unsigned long)GET_VERSION_MAJOR(kv),
              (unsigned long)GET_VERSION_MINOR(kv), (unsigned long)GET_VERSION_REVISION(kv),
              (unsigned long)GET_VERSION_MAJOR(fv), (unsigned long)GET_VERSION_MINOR(fv),
@@ -93,6 +96,8 @@ void app_log_start(void)
              (unsigned long)(linearSpaceFree() / 1024));
     snprintf(g_console.model, sizeof(g_console.model), "%s", model < 6 ? models[model] : "unknown");
     snprintf(g_console.region, sizeof(g_console.region), "%s", region < 7 ? regions[region] : "unknown");
+    snprintf(g_console.sysLang, sizeof(g_console.sysLang), "%s", lang < 12 ? langs[lang] : "");
+    g_console.sysLangId = lang < 12 ? lang : -1;
     snprintf(g_console.luma, sizeof(g_console.luma), "%lu.%lu.%lu", (unsigned long)(luma >> 16),
              (unsigned long)(luma >> 8 & 0xFF), (unsigned long)(luma & 0xFF));
     snprintf(g_console.kernel, sizeof(g_console.kernel), "%lu.%lu-%lu", (unsigned long)GET_VERSION_MAJOR(kv),

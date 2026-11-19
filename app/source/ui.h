@@ -10,6 +10,8 @@
 #include <citro2d.h>
 #include <stdbool.h>
 
+#include "i18n.h"
+
 #define TOP_W 400
 #define BOTTOM_W 320
 #define SCREEN_H 240
@@ -43,8 +45,6 @@
 #define COL_LED_GREEN   RGBA(0x2F, 0xBF, 0x71, 0xFF)
 #define COL_WHITE       RGBA(0xFF, 0xFF, 0xFF, 0xFF)
 #define COL_SCRIM       RGBA(0x0B, 0x0C, 0x0E, 0xE0)
-#define COL_FLAG_BLUE   RGBA(0x00, 0x57, 0xB7, 0xFF)
-#define COL_FLAG_YELLOW RGBA(0xFF, 0xD7, 0x00, 0xFF)
 #define COL_US_RED      RGBA(0xB2, 0x22, 0x34, 0xFF)
 #define COL_US_BLUE     RGBA(0x3C, 0x3B, 0x6E, 0xFF)
 
@@ -58,12 +58,20 @@ typedef enum {
 bool ui_init(void);
 void ui_exit(void);
 void ui_frame_begin(void); /* clears the per-frame text buffer */
+/* The font for a language's script: Japanese and Chinese load their own (a few MB), the others
+   use the base font. false when it could not be loaded (the text then shows what the base has). */
+bool ui_set_script(Script s);
+/* true: all text in the base font, which has every language's name and first-run language screen
+   (the language list, where the hovered language previews without loading its font) */
+void ui_base_font(bool on);
 
 /* Text. `px` is the em size in screen pixels. Returns the drawn width. */
 float ui_text(float x, float y, float px, FontWeight weight, u32 color, const char *str);
 float ui_text_center(float cx, float y, float px, FontWeight weight, u32 color, const char *str);
 float ui_text_right(float rx, float y, float px, FontWeight weight, u32 color, const char *str);
 /* Word-wrapped to `width`; returns the height used. */
+/* One line cut with "…" to `width` when it is wider. */
+float ui_text_fit(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str);
 float ui_text_wrap(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str);
 /* At most `max_lines` lines, the last cut with "…" when the text goes on. */
 float ui_text_wrap_lines(float x, float y, float width, float px, FontWeight weight, u32 color, const char *str,

@@ -10,7 +10,7 @@ Wi-Fi, the app does not even try to connect. Nothing is shown and nothing waits 
 lines go next time.
 
 **What is sent:** the new lines of `app.log` and `recorder.log` (at most 48 KB per launch), the newest Luma crash report
-from `/luma/dumps/arm11/` that was not sent yet, `config.ini`, the console model, region, system, Luma and kernel
+from `/luma/dumps/arm11/` that was not sent yet, `config.ini`, the app's language and the console's, the console model, region, system, Luma and kernel
 versions, the app version and a random console ID. The logs say which games ran (title IDs), how recordings went
 (frame rate, dropped frames, errors), what the console did (HOME, sleep, power-off), and, when you downloaded a
 recording to a phone, the browser that opened the page (its user agent: browser, system and often the phone model,

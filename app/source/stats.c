@@ -1,4 +1,5 @@
 #include "stats.h"
+#include "i18n.h"
 
 #include <3ds.h>
 #include <dirent.h>
@@ -210,6 +211,9 @@ static bool SendReport(void)
     stats_json_str(&j, "system", system, strlen(system));
     stats_json_str(&j, "luma", c->luma, strlen(c->luma));
     stats_json_str(&j, "kernel", c->kernel, strlen(c->kernel));
+    const char *lang = LANGS[i18n_lang()].code; /* the app's language; sys_lang: the console's */
+    stats_json_str(&j, "lang", lang, strlen(lang));
+    stats_json_str(&j, "sys_lang", c->sysLang, strlen(c->sysLang));
     stats_json_str(&j, "config", g_config, configLen);
     char from[96];
     stats_json_str(&j, "from", from, stats_from(&g_state, from, sizeof(from)));

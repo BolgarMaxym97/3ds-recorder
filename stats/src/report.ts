@@ -24,6 +24,8 @@ export interface Report {
   app_log: string | null;
   rec_log: string | null;
   sent_from: string | null;
+  lang: string | null;
+  sys_lang: string | null;
 }
 
 export interface Extracted {
@@ -65,12 +67,23 @@ export function parseReport(raw: unknown): Result {
     app_log: text(body, "app_log", 32 * 1024),
     rec_log: text(body, "rec_log", 48 * 1024),
     sent_from: text(body, "from", 64),
+    lang: text(body, "lang", 16),
+    sys_lang: text(body, "sys_lang", 8),
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) return { ok: false, error: `bad ${key}` };
   }
 
+  // Before 1.5.0 the app sent no "lang": its config.ini has it (no lang= line: English).
+  if (fields.lang === null && typeof fields.config === "string") fields.lang = configLang(fields.config);
+  if (fields.sys_lang === "") fields.sys_lang = null;
   return { ok: true, report: { install_id: body.id, app_version: app, ...fields } as Report };
+}
+
+// The app's language from its config.ini ("lang=uk"), "en" when the line is not there.
+export function configLang(config: string): string {
+  const match = /^lang=([A-Za-z-]{2,16})\s*$/m.exec(config);
+  return match ? match[1] : "en";
 }
 
 // Short columns read from recorder.log, so the statistics outlive the 180-day log text.
