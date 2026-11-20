@@ -52,6 +52,11 @@ as it is (400 × 480), only cut shorter.* More, as they came out:
 4. Open **3DS Recorder**, choose your language and read the short guide. The recorder starts by itself: the LED
    glows blue for a moment.
 
+**Without a PC:** in FBI choose **Remote Install → Scan QR Code** and scan this code. It always installs the latest
+release.
+
+<img src="docs/qr-latest-cia.png" width="160" alt="QR code: the latest 3ds-recorder.cia">
+
 **To update,** install the new `.cia` over the old one (or replace the `.3dsx`) and open the app. Settings and
 recordings stay.
 
@@ -103,6 +108,10 @@ cannot take every frame.
 - **Games that need extra memory on an Old 3DS** (Smash Bros, Pokémon Sun / Moon, Monster Hunter…) need Luma's
   **Plugin Loader** on for the recorder to come back inside them, and record fewer frames there.
 - Long recordings continue in a new file every 4 GB or every hour (FAT32).
+- **Plugin menus** (CTRPF / 3GX) are drawn outside the game's memory: the video keeps the game's last picture while
+  one is open.
+- **NTR streaming** and the recorder compete for the console: stop the recorder (or turn off Launch On Startup) while
+  you stream with NTR.
 
 More: [the guide](docs/guide.md) — Replay, Launch On Startup, applets, extended-memory games, limits.
 

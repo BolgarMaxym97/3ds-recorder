@@ -102,6 +102,8 @@ AccessControlInfo:
     GetDmaState: 0x57
     GetProcessList: 0x65
     KernelSetState: 0x7C
+    # New 3DS: the application memory limit put back after pm left it low (main.c AppMemFix)
+    SetResourceLimitValues: 0x9F
     # Luma custom SVCs (0x90 ConvertVAToPA, 0xA3 ControlMemoryUnsafe, 0xB3 ControlProcess):
     # k11ext skips SVC permission checks for them.
   InterruptNumbers:

@@ -71,7 +71,12 @@ AccessControlInfo:
   CanShareDeviceMemory          : true
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
-  SystemModeExt                 : Legacy
+  # New 3DS: 124MB, not Legacy. A Legacy title makes pm lower the application memory limit
+  # (APPMEMALLOC) to 64 MB, and after this app it stayed there: the next game that runs in the
+  # New 3DS mode (Smash, Ultra Sun / Moon, MH4U, Minecraft N3DS) started with 64 MB and crashed or
+  # hung (field logs 2026-11-20: 63 of 64 launches after this app got 64 MB; issues #24, #30).
+  # The app's heap stays capped at the 64 MB size (main.c: HEAP_APP_MAX). Old 3DS: ignored.
+  SystemModeExt                 : 124MB
   CpuSpeed                      : 804MHz
   EnableL2Cache                 : true
   CanAccessCore2                : true

@@ -473,7 +473,7 @@ static bool run_pending(App *a)
     const int act = a->pending;
     a->pending = ACT_NONE;
     a->busy = NULL;
-    char buf[160];
+    char buf[256];
     app_log("action %d done: rc %08lX, ok %d, step '%s'", act, (unsigned long)g_workRc, g_workOk, g_workStep);
     if (act == ACT_START) {
         g_infoModuleWanted = true; /* the module file may have been installed */
@@ -483,7 +483,10 @@ static bool run_pending(App *a)
             if (a->screen == SCR_FIRSTRUN)
                 go(a, SCR_PANEL, 0);
         } else {
-            snprintf(buf, sizeof(buf), T(S_MSG_START_FAILED), g_workStep, (unsigned long)g_workRc);
+            /* C8804478 (FS: not found) from pm when it launched the module: seen on Luma 13.3.3,
+               gone after an update to 13.5.0 (field logs 2026-11-20, issue #4) */
+            snprintf(buf, sizeof(buf), T(g_workRc == (Result)0xC8804478 ? S_MSG_START_OLD_LUMA : S_MSG_START_FAILED),
+                     g_workStep, (unsigned long)g_workRc);
             say(a, buf);
         }
     } else if (act == ACT_STOP) {
@@ -1469,6 +1472,13 @@ static void open_player(App *a, const GalItem *it)
         prepare_hold(PREP_HOLD_PLAYER, false);
         say(a, T(S_PLAY_FAILED));
         return;
+    }
+    /* the file has sound and the DSP cannot play it: most often no DSP firmware dump (DSP1); said
+       once a session (12 players without sound in the field logs, 2026-11-19) */
+    static bool noDspSaid;
+    if (player_file_audio() && !player_has_audio() && !noDspSaid) {
+        noDspSaid = true;
+        say(a, T(S_MSG_NO_DSP));
     }
     for (int i = 0; i < 2; i++)
         C3D_TexSetFilter(&g_plTex[i], GPU_LINEAR, GPU_LINEAR);

@@ -29,6 +29,9 @@ u32 __ctru_linear_heap_size = 24 * 1024 * 1024;
  * before main. 3ds-ua's installer (2026-10-28) and 3ds-ua-hub (2026-11-01) both hit it; this is
  * their fix: libctru's own allocation with the main heap capped at the heap area. */
 #define HEAP_SIZE_MAX (OS_HEAP_AREA_END - OS_HEAP_AREA_BEGIN)
+/* The CIA runs in the New 3DS 124 MB mode (cia.rsf: SystemModeExt) and would get a ~96 MB heap;
+   it never needed more than the ~39 MB a 64 MB title has, so it keeps that on every console. */
+#define HEAP_APP_MAX  (40u * 1024 * 1024)
 
 extern u32 __ctru_heap, __ctru_heap_size, __ctru_linear_heap;
 extern char *fake_heap_start, *fake_heap_end;
@@ -51,6 +54,8 @@ void __system_allocateHeaps(void)
     __ctru_heap_size = remaining - __ctru_linear_heap_size;
     if (__ctru_heap_size > HEAP_SIZE_MAX)
         __ctru_heap_size = HEAP_SIZE_MAX;
+    if (__ctru_heap_size > HEAP_APP_MAX)
+        __ctru_heap_size = HEAP_APP_MAX;
 
     if (R_FAILED(svcControlMemory(&__ctru_heap, OS_HEAP_AREA_BEGIN, 0, __ctru_heap_size, MEMOP_ALLOC,
                                   MEMPERM_READ | MEMPERM_WRITE)))

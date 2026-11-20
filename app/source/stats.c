@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "config.h"
 #include "recorder.h"
@@ -247,6 +248,35 @@ static bool SendReport(void)
     return true;
 }
 
+/* The Luma dumps not sent yet, with their files' dates, into app.log before the report goes: a
+   dump alone says nothing of when the crash was (the first one sent is the newest of any age), the
+   date puts it next to recorder.log's lines (field logs 2026-11-19). The console's clock, local. */
+static void LogDumpDates(void)
+{
+    DIR *d = opendir(DUMPS_DIR);
+    if (!d)
+        return;
+    struct dirent *e;
+    u32 logged = 0;
+    while ((e = readdir(d)) && logged < 8) {
+        u32 n;
+        if (!stats_dump_number(e->d_name, &n) || (g_state.dumpSet && n <= g_state.dump))
+            continue;
+        char path[300];
+        snprintf(path, sizeof(path), DUMPS_DIR "/%s", e->d_name);
+        u64 mtime = 0;
+        if (R_FAILED(archive_getmtime(path, &mtime)))
+            continue;
+        const time_t t = (time_t)mtime;
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        app_log("stats: luma dump %s dated %04d-%02d-%02d %02d:%02d:%02d", e->d_name, tm.tm_year + 1900, tm.tm_mon + 1,
+                tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        logged++;
+    }
+    closedir(d);
+}
+
 static void SendDump(void)
 {
     static u32 nums[256];
@@ -303,6 +333,7 @@ static void Run(void *arg)
        room for the whole report */
     if (R_FAILED(httpcInit(sizeof(g_body) + 0x8000)))
         return;
+    LogDumpDates();
     if (SendReport())
         SendDump();
     if (!g_stop)   /* the app is closing and may not have waited for this thread: its services go with it */

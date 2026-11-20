@@ -87,6 +87,49 @@ int main(void)
     CHECK(!cpu_restore_ok(44, 44, 1));
     CHECK(!cpu_restore_ok(44, 44, 2));
 
+    /* FCRAM frames held while a program starts (launch_hold); VRAM ones never */
+    CHECK(front_hold_fcram(true, true, false));
+    CHECK(!front_hold_fcram(true, true, true));    /* HOME Menu's VRAM frames go on */
+    CHECK(!front_hold_fcram(true, false, false));  /* loaded: frames again */
+    CHECK(!front_hold_fcram(false, true, false));  /* off (the default) */
+    /* a game started from HOME during a recording: held for exactly the quiet time */
+    {
+        FrontApp f = { 0 };
+        front_note(&f, 0, 100);
+        front_note(&f, 47, 107);
+        CHECK(front_hold_fcram(true, front_quiet(&f, 108, Q), false));
+        CHECK(front_hold_fcram(true, front_quiet(&f, 121, Q), false));
+        CHECK(!front_hold_fcram(true, front_quiet(&f, 122, Q), false));
+    }
+
+    /* both screens at one FCRAM address: unsettled; VRAM or different addresses: fine */
+    CHECK(screens_unsettled(0x203A0C80u, false, 0x203A0C80u, false));
+    CHECK(!screens_unsettled(0x20339730u, false, 0x203A0C80u, false));
+    CHECK(!screens_unsettled(0x18273000u, true, 0x18273000u, true));
+    CHECK(!screens_unsettled(0x20339730u, false, 0x1802CA50u, true));
+
+    /* 804 MHz + L2 only with a program in front that has loaded: never in HOME Menu */
+    CHECK(!cpu_boost_now(0, false));
+    CHECK(!cpu_boost_now(47, true));
+    CHECK(cpu_boost_now(47, false));
+
+    /* the APPLICATION region's end: the region on a New 3DS, the limit on an Old 3DS */
+    CHECK(app_region_end(6, 0x04000000u) == 0x27C00000u);   /* CTGP-7: 64 MB limit, frames at 26D26E00 */
+    CHECK(app_region_end(6, 0x07C00000u) == 0x27C00000u);
+    CHECK(app_region_end(7, 0x05000000u) == 0x2B200000u);
+    CHECK(app_region_end(0, 0x04000000u) == 0x24000000u);   /* Old 3DS 64 MB */
+    CHECK(app_region_end(3, 0x05000000u) == 0x25000000u);   /* Old 3DS 80 MB */
+    /* pm's limit left under the New 3DS mode's size */
+    CHECK(app_limit_stuck(6, 0x04000000u));
+    CHECK(app_limit_stuck(6, 0x05000000u));
+    CHECK(!app_limit_stuck(6, 0x07C00000u));
+    CHECK(!app_limit_stuck(0, 0x04000000u));
+    CHECK(!app_limit_stuck(2, 0x06000000u));
+    /* what AppMemFix puts back: the mode's own size */
+    CHECK(app_region_end(6, 0) - 0x20000000u == 0x07C00000u);
+    CHECK(app_region_end(7, 0) - 0x20000000u == 0x0B200000u);
+    CHECK(!app_limit_stuck(6, app_region_end(6, 0) - 0x20000000u));
+
     if (!g_fail)
         printf("test_front: ok\n");
     return g_fail;

@@ -139,7 +139,7 @@
     X(S_TILE_RECORDER_OFF_SHORT, "Hotkey does nothing") \
     X(S_TILE_REPLAY_ON, "Clip: %s") \
     X(S_TILE_REPLAY_OFF, "Keeps the last 30 s") \
-    X(S_MSG_REPLAY_ON, "Replay is on. In a game or HOME press %s to save the last 30 seconds.") \
+    X(S_MSG_REPLAY_ON, "Replay is on. It starts about 15 s after a game starts; then press %s in the game or HOME to save the last 30 seconds.") \
     X(S_MSG_REPLAY_OFF, "Replay is off.") \
     X(S_MSG_REPLAY_WRITE, "Replay stopped: the SD card refused its writes. Check the card, then turn Replay off and on again.") \
     X(S_MSG_REPLAY_SPACE, "Replay needs 700 MB free on the SD card.") \
@@ -243,6 +243,8 @@
     X(S_GAL_PREP_PCT, "Converting %d%%") \
     X(S_GAL_PREP_FAILED, "Could not convert") \
     X(S_PLAY_FAILED, "Could not open the recording.") \
+    X(S_MSG_NO_DSP, "No sound in this player: the console's DSP firmware has not been dumped. Run DSP1 once (it saves /3ds/dspfirm.cdc). The recordings have their sound.") \
+    X(S_MSG_START_OLD_LUMA, "Could not start the recorder (%s, %08lX). Update Luma3DS to the latest release, then try again.") \
     X(S_PL_SEEK, "±10 s") \
     X(S_PL_PAUSE, "Pause") \
     X(S_PL_BACK, "Gallery") \

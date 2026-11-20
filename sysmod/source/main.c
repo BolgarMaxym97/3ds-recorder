@@ -195,13 +195,18 @@ typedef struct {
     /* n3ds_boost=off (not in the app): a New 3DS records at the speed the running program chose, no
        804 MHz + L2 (CpuBoost); for a game that misbehaves while recording (a report's next step) */
     bool n3dsBoost;
+    /* launch_hold=on (not in the app, a test key): no frames from the application's memory while
+       a program starts during a recording (front.h front_hold_fcram); off by default */
+    s8 launchHold;
+    /* appmem_fix=off (not in the app): leave the application memory limit as pm left it (AppMemFix) */
+    bool appMemFix;
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
     bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
     u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
     bool autostart;  /* autostart=on: the recorder starts with the console (launch on startup, AutoApply) */
 } Config;
 
-static Config g_cfg = { .o3dsCore = -1, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
+static Config g_cfg = { .o3dsCore = -1, .launchHold = -1, .appMemFix = true, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
                         .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .codecArm = -1, .bench = false, .n3dsBoost = true, .abTest = false,
                         .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
@@ -810,6 +815,10 @@ static void LoadConfig(void)
             g_cfg.sdLimitKb = (u32)atoi(v);
         else if (strcasecmp(p, "n3ds_boost") == 0)
             g_cfg.n3dsBoost = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(p, "appmem_fix") == 0)
+            g_cfg.appMemFix = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(p, "launch_hold") == 0)
+            g_cfg.launchHold = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
         else if (strcasecmp(p, "codec_bench") == 0)
             g_cfg.bench = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "ab_test") == 0)
@@ -918,23 +927,27 @@ typedef struct {
     u64 startTick;
 } Slot;
 
+/* Each frame's slot starts on a page (EnsureSlots: page-aligned DMA destinations), so the caps are
+   counted in page-rounded frames: in plain bytes the last frame never fitted (the plugin's arenas
+   held 2 top and 1 bottom frame where 3 and 2 were meant, 6 BGR8 ones were 5; found 2026-11-19). */
+#define PAGE_UP(x) (((x) + 0xFFFu) & ~0xFFFu)
 /* 6 frames per screen in BGR8 (3 bytes/pixel, what SM3DL and NSMB2 use): rides out converter
    stalls up to ~200 ms (v9: 0.13 s in HOME; with 768 / 480 KB only 2 BGR8 frames fitted) */
-static const u32 ARENA_CAP[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
+static const u32 ARENA_CAP[2] = { 6u * PAGE_UP(400u * 240u * 3u), 6u * PAGE_UP(320u * 240u * 3u) };
 /* Light profile: an extended-memory game on an Old 3DS leaves ~5.3 MB of SYSTEM memory (the
    launcher plugin's 2 MB included, O3DS 2026-11-08). Two frames per screen even at 4 bytes a pixel,
    a 2 MB ring, half the audio queue: ~3.7 MB. */
-static const u32 ARENA_CAP_LITE[2] = { 2u * 400u * 240u * 4u, 2u * 320u * 240u * 4u };
-static u32 g_arenaCap[2] = { 6u * 400u * 240u * 3u, 6u * 320u * 240u * 3u };
+static const u32 ARENA_CAP_LITE[2] = { 2u * PAGE_UP(400u * 240u * 4u), 2u * PAGE_UP(320u * 240u * 4u) };
+static u32 g_arenaCap[2] = { 6u * PAGE_UP(400u * 240u * 3u), 6u * PAGE_UP(320u * 240u * 3u) };
 /* In the launcher plugin's 2 MB (an extended-memory game, Old 3DS): two frames per screen at 2 bytes
    a pixel (one at 3 or 4), a 256-frame audio queue, the ring gets the last 768 KB (plgring.h). The plugin
    cannot be bigger: Pokemon Ultra Moon did not start with 5 MB taken from it (75 MB left; 78 MB
    worked; Smash ran on 75), O3DS 2026-11-08. */
-static const u32 ARENA_CAP_PLG[2] = { 2u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
+static const u32 ARENA_CAP_PLG[2] = { 2u * PAGE_UP(400u * 240u * 2u), 2u * PAGE_UP(320u * 240u * 2u) };
 /* With every frame C420 (no reference frames there): three top-screen frames (two in BGR8), and
    2.5 s of audio instead of 1.25: Smash's loading starved the converter for up to 3.9 s and 554 of
    5370 audio frames found the queue full (O3DS 0.12.1, 2026-11-11). */
-static const u32 ARENA_CAP_PLG_C420[2] = { 3u * 400u * 240u * 2u, 2u * 320u * 240u * 2u };
+static const u32 ARENA_CAP_PLG_C420[2] = { 3u * PAGE_UP(400u * 240u * 2u), 2u * PAGE_UP(320u * 240u * 2u) };
 #define AUDIO_QUEUE_PLG_C420 512u
 #define AUDIO_QUEUE_PLG 256u   /* 128 overflowed in Smash (queue full 617 of 13792, O3DS 2026-11-08) */
 static u32 g_aqCap = AUDIO_QUEUE;
@@ -1117,6 +1130,8 @@ static volatile bool g_prepDone;
 
 /* application owning FCRAM framebuffers: pid only, never a handle */
 static u32 g_appPid, g_appBase, g_ownPid;
+static u64 g_lastAppTid;   /* the last application LogStarted saw (for the limit left after it) */
+static Handle g_appResLimit;   /* the applications' resource limit (pm's), for AppMemFix; never a process */
 
 /* ------------------------------------------------------------------ prepared file */
 
@@ -1945,6 +1960,19 @@ static u32          g_lastSnapUs;
 
 static Result g_dspCacheRc;   /* first failure of the cache invalidation, for the log */
 
+/* Diagnostics for recordings without sound (Pokemon Ultra Moon on a New 2DS XL: two frames, then
+   nothing while the DSP ran, field logs 2026-11-19). The final mix is read at fixed places; these
+   say whether the DSP still went on there (its frame counters) while no frame came, and once per
+   recording where in its memory it writes then (DspScan). */
+static u16  g_dspCntFirst[2], g_dspCntPrev[2];
+static bool g_dspCntSeen;
+static u32  g_dspCntChanges;     /* polls whose counters differed from the previous poll's */
+static u64  g_audioLastFrameTick;
+static u32  g_audioStalls;       /* times the DSP ran on with no new frame for AUDIO_STALL_US */
+static bool g_audioInStall, g_dspScanned;
+static u8   g_dspOffOr, g_dspOffLast;   /* PDN_DSP_CNT's values while "off" (CSND games?) */
+#define AUDIO_STALL_US 1000000u
+
 static void DspInvalidate(u32 va, u32 size)
 {
     const Result rc = svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, va & ~31u, ((va & 31u) + size + 31u) & ~31u);
@@ -2019,6 +2047,53 @@ static void RingCommit(u32 advance)
  * changed. A block equal to the last one taken from that region (silence,
  * paused DSP) is not stored. Tests: plan 3.7.
  */
+/* Where the DSP writes now: its memory (0x1FF00000-0x1FF7FFFF) hashed in 256-byte chunks twice
+   ~10 ms apart, the chunks that changed logged as ranges. Once per recording, on its first stall. */
+#define DSP_SCAN_BASE  0x1FF00000u
+#define DSP_SCAN_SIZE  0x80000u
+#define DSP_SCAN_CHUNK 256u
+static u32 g_dspScanHash[DSP_SCAN_SIZE / DSP_SCAN_CHUNK];
+
+static u32 DspChunkHash(u32 va)
+{
+    const volatile u32 *p = (const volatile u32 *)va;
+    u32 h = 2166136261u;
+    for (u32 i = 0; i < DSP_SCAN_CHUNK / 4u; i++)
+        h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
+static void DspScan(void)
+{
+    const u32 n = DSP_SCAN_SIZE / DSP_SCAN_CHUNK;
+    DspInvalidate(DSP_SCAN_BASE, DSP_SCAN_SIZE);   /* once a pass: 2048 calls a chunk took far longer */
+    for (u32 i = 0; i < n; i++)
+        g_dspScanHash[i] = DspChunkHash(DSP_SCAN_BASE + i * DSP_SCAN_CHUNK);
+    svcSleepThread(10ull * 1000 * 1000);
+    DspInvalidate(DSP_SCAN_BASE, DSP_SCAN_SIZE);
+    char line[480];
+    u32 len = 0, ranges = 0, changed = 0;
+    s32 from = -1;
+    for (u32 i = 0; i <= n; i++)
+    {
+        const bool ch = i < n && DspChunkHash(DSP_SCAN_BASE + i * DSP_SCAN_CHUNK) != g_dspScanHash[i];
+        changed += ch;
+        if (ch && from < 0)
+            from = (s32)i;
+        else if (!ch && from >= 0)
+        {
+            if (len < sizeof(line) - 24u)
+                len += (u32)snprintf(line + len, sizeof(line) - len, " %05lX-%05lX", (u32)from * DSP_SCAN_CHUNK,
+                                     i * DSP_SCAN_CHUNK);
+            ranges++;
+            from = -1;
+        }
+    }
+    line[len] = 0;
+    Log("audio stall: DSP memory written in 10 ms: %lu chunks of 256 B in %lu ranges (offsets from 1FF00000):%s", changed,
+        ranges, len ? line : " none");
+}
+
 static void PollAudio(void)
 {
     if (!g_aq)
@@ -2038,6 +2113,8 @@ static void PollAudio(void)
     if (!DSP_RUNNING())
     {
         g_dspOffPolls++;
+        g_dspOffLast = *(const volatile u8 *)PDN_DSP_CNT_VA;
+        g_dspOffOr |= g_dspOffLast;
         return;
     }
     bool done[2];
@@ -2066,6 +2143,32 @@ static void PollAudio(void)
     }
     u16 cnt[2];
     DspReadCounters(cnt);
+    if (!g_dspCntSeen)
+    {
+        g_dspCntSeen = true;
+        g_dspCntFirst[0] = cnt[0];
+        g_dspCntFirst[1] = cnt[1];
+        g_audioLastFrameTick = tick;
+    }
+    else if (cnt[0] != g_dspCntPrev[0] || cnt[1] != g_dspCntPrev[1])
+        g_dspCntChanges++;
+    g_dspCntPrev[0] = cnt[0];
+    g_dspCntPrev[1] = cnt[1];
+    if (done[0] || done[1])
+    {
+        g_audioLastFrameTick = tick;
+        g_audioInStall = false;
+    }
+    else if (!g_audioInStall && TicksToUs64(tick - g_audioLastFrameTick) >= AUDIO_STALL_US)
+    {
+        g_audioInStall = true;
+        g_audioStalls++;
+        if (!g_dspScanned)
+        {
+            g_dspScanned = true;
+            DspScan();
+        }
+    }
     const bool both = done[0] && done[1];
     if (both)
         g_audioBoth++;
@@ -2507,6 +2610,25 @@ static bool FindApp(void)
     return false;
 }
 
+/* Frames skipped because their buffer is not the application's (an applet's, a plugin's menu):
+   logged once per buffer address in a recording, the rest counted into the "video drops" line.
+   Logged once per MB before, two buffers taking turns logged every frame: 445 lines in a batch of
+   field logs (2026-11-20), the rest of the log pushed out. */
+#define SKIP_LOGGED_MAX 8u
+static u32 g_skipLogged[SKIP_LOGGED_MAX], g_skipLoggedN;
+static u32 g_notAppSkips;   /* frames not taken: not the application's memory */
+static bool SkipFirstSeen(u32 pa)
+{
+    g_notAppSkips++;
+    for (u32 i = 0; i < g_skipLoggedN; i++)
+        if (g_skipLogged[i] == pa)
+            return false;
+    if (g_skipLoggedN >= SKIP_LOGGED_MAX)
+        return false;
+    g_skipLogged[g_skipLoggedN++] = pa;
+    return true;
+}
+
 /* VRAM framebuffers (HOME, applets, some games): our own VRAM mapping. FCRAM
    framebuffers: the running application at its linear mapping. The process
    handle is opened per DMA and closed at once (never keep an app alive). */
@@ -2545,14 +2667,12 @@ static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
         return (Result)0xDEAD0020;
     /* only the application's own FCRAM (APPLICATION region: kernel config page APPMEMALLOC); an
        applet's or HOME Menu's framebuffer there is not the application's to read */
-    const u32 appEnd = 0x20000000u + *(const volatile u32 *)0x1FF80040;
+    const u32 appEnd = app_region_end(*(const volatile u8 *)0x1FF80030, *(const volatile u32 *)0x1FF80040);
     if (pa + size > appEnd || pa + size < pa)
     {
-        static u32 lastMb;
-        if (g_recording && (pa >> 20) != lastMb)
+        if (g_recording && SkipFirstSeen(pa))
             Log("FCRAM frame at pa %08lX size %lu outside the application's memory (ends %08lX): skipped", pa, size,
                 appEnd);
-        lastMb = pa >> 20;
         return (Result)0xDEAD0023;
     }
     static u64 backoffUntil;   /* after a refused DMA: the application's memory is left alone a moment */
@@ -2590,12 +2710,10 @@ static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
     if (rc == (Result)0xDEAD0025)
     {
         /* this buffer is not mapped where the application's frames are: skipped, nothing reset
-           (Wario Land's bottom screen, O3DS 2026-11-07); logged once per MB of address */
-        static u32 lastMb;
-        if (g_recording && (pa >> 20) != lastMb)
+           (Wario Land's bottom screen, O3DS 2026-11-07); logged once per buffer (SkipFirstSeen) */
+        if (g_recording && SkipFirstSeen(pa))
             Log("FCRAM frame at pa %08lX size %lu not mapped in pid %lu at base %08lX: skipped", pa, size, g_appPid,
                 g_appBase);
-        lastMb = pa >> 20;
         return rc;
     }
     static u32 lastPid, lastBase;
@@ -2796,12 +2914,47 @@ static bool PaceTake(int sc)
     return true;
 }
 
+static bool FrontQuiet(void);
+static bool IsNew3ds(void);
+/* launch_hold (front.h front_hold_fcram): a test key, off unless config.ini says on */
+static bool LaunchHold(void)
+{
+    return g_cfg.launchHold == 1;
+}
+static u32 g_launchHeld;   /* captures not taken: a program was starting (launch_hold) */
+static u32 g_unsettled;    /* captures not taken: both screens at one FCRAM address */
+static u32 g_bottomGap;    /* bottom-screen captures left for a busy top screen (BOTTOM_MIN_GAP_US) */
+
 /* Captures the screens that swapped (or a still VRAM one now and then). Returns how long the main
    loop may sleep: until shortly before the next capture is due, polling every POLL_REC_US from
    then on so a swap is caught within ~2 ms (the frame stays put until the game's next swap). */
 static u32 PollScreens(void)
 {
     const u64 nowUs = TicksToUs64(Ticks() - g_recStartTick);
+    /* a program starting: nothing from its memory until it has loaded (front.h) */
+    const bool hold = LaunchHold() && FrontQuiet();
+    static bool wasHeld;
+    if (hold != wasHeld)
+    {
+        if (hold)
+            g_appPid = g_appBase = 0;   /* the process to read from is looked up again afterwards */
+        if (!g_replay)
+            Log(hold ? "a program starts: no frames from the application's memory until it has loaded (%lu s)"
+                     : "the program has loaded: frames from its memory again (%lu s)",
+                (u32)(nowUs / 1000000u));
+        wasHeld = hold;
+    }
+    /* both screens at one FCRAM address: the game is setting them up (front.h) */
+    u32 curPa[2];
+    for (int sc = 0; sc < 2; sc++)
+        curPa[sc] = (REG32(PDC_VA(sc) + 0x78) & 1u) ? REG32(PDC_VA(sc) + 0x6C) : REG32(PDC_VA(sc) + 0x68);
+    const bool unsettled = screens_unsettled(curPa[0], IsVram(curPa[0]), curPa[1], IsVram(curPa[1]));
+    {
+        static bool wasUnsettled;
+        if (unsettled && !wasUnsettled && !g_replay)
+            Log("both screens at FCRAM pa %08lX: not read until they differ (%lu s)", curPa[0], (u32)(nowUs / 1000000u));
+        wasUnsettled = unsettled;
+    }
     /* the bottom screen at its own, lower rate when both are recorded (bottom_fps): a still menu
        there takes no DMA and no encoding the top screen could use (issue #18) */
     const u32 bottomFps = g_cfg.top && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : g_cfg.fps;
@@ -2871,6 +3024,17 @@ static u32 PollScreens(void)
             continue;
         if (t->hasCap && nowUs - t->modeUs < MODE_SETTLE_US)
             continue;   /* the screen's mode just changed: let it settle */
+        /* not taken, still due: the first capture after them is at once (no lastCapUs, no pend change) */
+        if (front_hold_fcram(hold, true, IsVram(cur)))
+        {
+            g_launchHeld++;
+            continue;
+        }
+        if (unsettled)
+        {
+            g_unsettled++;
+            continue;
+        }
         t->lastCapUs = nowUs;
         t->hasCap = true;
         t->pend = false;
@@ -2907,7 +3071,10 @@ static u32 PollScreens(void)
             }
         }
         if (sc == 1 && g_cfg.top && BusySlots(0) >= 2 && nowUs - t->lastRealUs < BOTTOM_MIN_GAP_US)
+        {
+            g_bottomGap++;
             continue;   /* top screen first, but the bottom keeps 10 fps */
+        }
         t->lastRealUs = nowUs;
         Capture(sc, cur, fmt, stride, (u32)nowUs, isStatic);
     }
@@ -3760,7 +3927,9 @@ static void UpdateBoost(void)
         SetBoost(false, "another application or none");
         return;
     }
-    if (p && appDrawing && now - since >= (u64)PRIO_BOOST_AFTER_US * (SYSCLOCK_ARM11 / 1000000u)) /* 64-bit: apps run for hours */
+    /* launch_hold: not while the program still loads (its frames are not even read then) */
+    if (p && appDrawing && now - since >= (u64)PRIO_BOOST_AFTER_US * (SYSCLOCK_ARM11 / 1000000u) && /* 64-bit: apps run for hours */
+        !(LaunchHold() && FrontQuiet()))
         SetBoost(true, "an application has been running 8 s and draws");
 }
 
@@ -5124,6 +5293,8 @@ static bool StartRecordingAs(bool replay)
     g_huffFrames = g_huffKept = g_huffBusy = 0;
     g_huffIn = g_huffOut = 0;
     g_torn[0] = g_torn[1] = 0;
+    g_launchHeld = g_unsettled = g_bottomGap = 0;
+    g_notAppSkips = g_skipLoggedN = 0;
     /* the overhang only in the normal profile: the light ones have no memory to spare */
     const u32 over = lite && !g_inPlg ? 0u : RingOver();   /* the plugin's: mirrored, no memory */
     /* 8 MB rides out ~3 s of SD stall at 2.5 MB/s */
@@ -5175,6 +5346,9 @@ static bool StartRecordingAs(bool replay)
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
     g_audioFrames = g_audioDropped = g_dspSnaps = g_dspOffPolls = 0;
+    g_dspCntSeen = g_audioInStall = g_dspScanned = false;
+    g_dspCntChanges = g_audioStalls = 0;
+    g_dspOffOr = g_dspOffLast = 0;
     g_dspCacheRc = 0;
     g_lastSnapUs = 0;
     memset(g_audioLast, 0, sizeof(g_audioLast));
@@ -5335,7 +5509,9 @@ static void CpuBoost(bool on)
     }
     if (on && g_cpuBefore < 0)
     {
-        g_cpuWait = FrontQuiet();
+        /* not in HOME Menu and not while a program starts (front.h cpu_boost_now): the main loop
+           asks again once a program runs and has loaded */
+        g_cpuWait = !cpu_boost_now(ApplicationPid(), FrontQuiet());   /* g_frontPid: not kept up while idle */
         if (g_cpuWait)
             return;
         s64 mhz = 0, l2 = 0;
@@ -5388,9 +5564,11 @@ static const char *CpuState(void)
 static void LogDrops(void)
 {
     Log("video drops: ring full %lu, no free slot %lu, DMA timeout %lu, DMA error %lu, DMA start failed %lu (last rc %08lX), "
-        "slots busy %lu, DMA limit %lu (most running at once %lu); encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
+        "slots busy %lu, DMA limit %lu (most running at once %lu); not taken: program starting %lu, screens unsettled %lu, "
+        "bottom behind the top %lu, not the application's memory %lu; encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
         g_drops[DROP_RING], g_drops[DROP_NO_SLOT], g_drops[DROP_DMA_TIMEOUT], g_drops[DROP_DMA_ERROR],
         g_drops[DROP_DMA_START], (u32)g_dmaStartRc, g_drops[DROP_SLOTS_BUSY], g_drops[DROP_DMA_LIMIT], g_dmaMaxRunning,
+        g_launchHeld, g_unsettled, g_bottomGap, g_notAppSkips,
         g_shared.framesTop ? (u32)(g_encodeSumUs[0] / g_shared.framesTop) : 0,
         g_shared.framesBot ? (u32)(g_encodeSumUs[1] / g_shared.framesBot) : 0, g_encodeMaxUs[0], g_encodeMaxUs[1],
         g_encodeSlow[0], g_encodeSlow[1], CpuState());
@@ -5761,6 +5939,11 @@ static void StopRecording(const char *why, bool releaseFirst)
         name, seconds, g_written / KB, g_shared.framesTop, g_shared.framesBot, g_dropped, g_throttled,
         g_ringMax / KB, g_growCount, g_growMaxMs, g_audioFrames, g_audioDropped, g_audioQueueFull, g_audioUnstable, g_audioBoth, g_audioMaxGapUs, g_audioGapsOver4ms,
         g_dspSnaps, g_dspOffPolls, (u32)g_dspCacheRc, (u32)g_writeRc, (u32)rn, why);
+    if (g_cfg.audio)
+        Log("audio: DSP counters %04X/%04X -> %04X/%04X, changed in %lu polls; no new frame for 1 s (silence or a stall) %lu times, the last "
+            "frame %lu ms before the end; DSP state while off: last %02X, any %02X",
+            g_dspCntFirst[0], g_dspCntFirst[1], g_dspCntPrev[0], g_dspCntPrev[1], g_dspCntChanges, g_audioStalls,
+            g_audioLastFrameTick ? (u32)(TicksToUs64(Ticks() - g_audioLastFrameTick) / 1000u) : 0, g_dspOffLast, g_dspOffOr);
     {
         /* the card's speed while it wrote (throttling means it was slower than the video) */
         const u64 us = g_writeTicks / (SYSCLOCK_ARM11 / 1000000u);
@@ -5854,7 +6037,10 @@ static void LogStarted(void)
     if (pid && R_SUCCEEDED(svcOpenProcess(&h, pid)))
     {
         svcGetProcessInfo(&tid, h, 0x10001);
+        if (!g_appResLimit && R_FAILED(svcGetResourceLimit(&g_appResLimit, h)))
+            g_appResLimit = 0;
         svcCloseHandle(h);
+        g_lastAppTid = (u64)tid;
     }
     if (!pid)
     {
@@ -5865,6 +6051,43 @@ static void LogStarted(void)
         pid, (u64)tid, CpuState(), OS_KernelConfig->memregion_sz[0] / KB,
         (s32)osGetMemRegionFree(MEMREGION_APPLICATION) / (s32)KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
         g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording");
+}
+
+/* New 3DS: the application memory limit pm left too low after an application ended (front.h
+   app_limit_stuck) goes back to the mode's own size, the very call pm makes itself when an
+   application ends (Luma pm reslimit.c resetAppMemLimit): after some titles (this app up to 1.5.0,
+   3DShell, CTGP-7) it stayed at 64 MB, and Smash, Ultra Sun / Moon, MH4U and Minecraft N3DS
+   started next with that and crashed or hung (field logs 2026-11-20, issues #24, #30). Only up,
+   only with no application started since (a starting O3DS title sets its own limit first: raising
+   it would only allow more). appmem_fix=off leaves it. */
+static void AppMemFix(void)
+{
+    const u32 type = *(const volatile u8 *)0x1FF80030;
+    const u32 before = *(const volatile u32 *)0x1FF80040;
+    if (!g_cfg.appMemFix || !app_limit_stuck(type, before))
+        return;
+    if (!g_appResLimit)
+    {
+        const u32 pid = ApplicationPid();
+        Handle h = 0;
+        if (pid && R_SUCCEEDED(svcOpenProcess(&h, pid)))
+        {
+            if (R_FAILED(svcGetResourceLimit(&g_appResLimit, h)))
+                g_appResLimit = 0;
+            svcCloseHandle(h);
+        }
+    }
+    if (!g_appResLimit)
+    {
+        Log("application memory limit %lu KB: not put back (no application seen yet to reach pm's limit)", before / KB);
+        return;
+    }
+    const u32 full = app_region_end(type, 0) - 0x20000000u;
+    ResourceLimitType cat = RESLIMIT_COMMIT;
+    const s64 value = (s64)((u64)full | ((u64)full << 32));   /* the high word: APPMEMALLOC (pm does the same) */
+    const Result rc = svcSetResourceLimitValues(g_appResLimit, &cat, &value, 1);
+    Log("application memory limit %lu KB put back to %lu KB (rc %08lX, now %lu KB)", before / KB, full / KB, (u32)rc,
+        *(const volatile u32 *)0x1FF80040 / KB);
 }
 
 /* The app is on the screen: it adds to g_shared.appBeat every second or so while it runs in front.
@@ -6113,6 +6336,7 @@ int main(void)
     bool reloadPending = false;
     u64 lastSdCheck = 0;
     u64 startedLogAt = 0;    /* an application started: its log line is due at this tick */
+    u64 appMemFixAt = 0, appMemFixFrom = 0;   /* AppMemFix is due (an application ended with the limit low) */
     for (;;)
     {
         u32 cmd = __atomic_exchange_n(&g_shared.cmd, (u32)REC_CMD_NONE, __ATOMIC_SEQ_CST);   /* none lost between */
@@ -6324,10 +6548,30 @@ int main(void)
             startedLogAt = Ticks() + 3ull * SYSCLOCK_ARM11;
         }
         else if (nid == 0x202 || nid == 0x203 || nid == 0x20C || (nid >= 0x110 && nid <= 0x113))
+        {
             Log("system notification %03lX: %s; %s", nid,
                 nid == 0x202 ? "POWER pressed" : nid == 0x203 ? "POWER held (forced power-off)" :
                 nid == 0x20C ? "fatal hardware condition (mcu)" : "an application has ended",
                 g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording");
+            /* pm puts the application memory limit back when the application ends (front.h
+               app_limit_stuck); when it did not, AppMemFix does a moment later */
+            const u32 lim = *(const volatile u32 *)0x1FF80040;
+            if (nid >= 0x110 && nid <= 0x113 && app_limit_stuck(*(const volatile u8 *)0x1FF80030, lim) && !appMemFixAt)
+            {
+                Log("application memory limit stays at %lu KB after the application ended (title %016llX)", lim / KB,
+                    g_lastAppTid);
+                appMemFixFrom = Ticks();
+                appMemFixAt = appMemFixFrom + SYSCLOCK_ARM11 / 2;
+            }
+        }
+        if (appMemFixAt && Ticks() >= appMemFixAt)
+        {
+            appMemFixAt = 0;
+            if (g_shutdownSeen || (g_front.noted && g_front.notedAt >= appMemFixFrom))
+                Log("application memory limit left as it is: %s", g_shutdownSeen ? "the console turns off" : "an application started since");
+            else
+                AppMemFix();
+        }
         if (startedLogAt && Ticks() >= startedLogAt && !g_shutdownSeen)
         {
             startedLogAt = 0;
@@ -6420,7 +6664,7 @@ int main(void)
             if (DmasRunning())
                 sleepUs = POLL_REC_US;   /* close them soon after they finish */
             UpdateBoost();
-            if (g_cpuWait && !FrontQuiet())   /* the program that was starting has loaded */
+            if (g_cpuWait && cpu_boost_now(g_frontPid, FrontQuiet()))   /* a program runs and has loaded */
                 CpuBoost(true);
             ConvProbeStep();
             /* New 3DS: a program that keeps core 2 busy itself starves the converter there (lowest
