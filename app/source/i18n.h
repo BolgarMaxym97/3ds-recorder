@@ -245,6 +245,7 @@
     X(S_PLAY_FAILED, "Could not open the recording.") \
     X(S_MSG_NO_DSP, "No sound in this player: the console's DSP firmware has not been dumped. Run DSP1 once (it saves /3ds/dspfirm.cdc). The recordings have their sound.") \
     X(S_MSG_START_OLD_LUMA, "Could not start the recorder (%s, %08lX). Update Luma3DS to the latest release, then try again.") \
+    X(S_MSG_START_NAND_LUMA, "Could not start the recorder (%s, %08lX). Luma3DS was started from the console's memory, so it looks for the recorder there. Copy boot.firm from the latest Luma3DS release to the root of the SD card, restart the console and try again.") \
     X(S_PL_SEEK, "±10 s") \
     X(S_PL_PAUSE, "Pause") \
     X(S_PL_BACK, "Gallery") \

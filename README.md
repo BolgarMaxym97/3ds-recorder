@@ -70,6 +70,11 @@ recordings stay.
 | **To the phone** | Gallery → **Y** on a recording, scan the QR code with the phone's camera, tap **Save the video**. iPhone and Android, nothing to install. |
 | **From the SD card** | `/3ds/recorder/recordings/`: an `.mp4` next to each converted `.r3d`. Only an `.r3d`? Drop it on the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) — the browser makes the MP4, nothing is uploaded. |
 
+**On a computer, in high quality** — [two ways](docs/pc-converter.md): the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) (nothing to
+install: 1×–3× sharp pixels, top / bottom / side by side, for YouTube or for editing), or
+[r3d2video](docs/pc-converter.md) for DNxHR, lossless files and one file per screen (Windows zip with each release;
+by [noctis1008-wq](https://github.com/noctis1008-wq)).
+
 **The LED:** blue for a moment — ready · red, breathing — recording · faint blue — Replay is on · green twice — saved ·
 red three times — something went wrong (usually a full SD card), open the app to see why.
 
@@ -106,14 +111,12 @@ cannot take every frame.
 - **Closing the lid** pauses a recording; the parts become one recording again in the app. While the app converts or
   saves clips, the lid can be closed: the work goes on, then the console sleeps.
 - **Games that need extra memory on an Old 3DS** (Smash Bros, Pokémon Sun / Moon, Monster Hunter…) need Luma's
-  **Plugin Loader** on for the recorder to come back inside them, and record fewer frames there.
+  **Plugin Loader** on for the recorder to come back inside them, and record fewer frames there. Your own plugins for
+  such a game stay.
 - Long recordings continue in a new file every 4 GB or every hour (FAT32).
-- **Plugin menus** (CTRPF / 3GX) are drawn outside the game's memory: the video keeps the game's last picture while
-  one is open.
-- **NTR streaming** and the recorder compete for the console: stop the recorder (or turn off Launch On Startup) while
-  you stream with NTR.
+- **Stop the recorder while you stream with NTR**: the two compete for the console.
 
-More: [the guide](docs/guide.md) — Replay, Launch On Startup, applets, extended-memory games, limits.
+More: [the guide](docs/guide.md) — Replay, Launch On Startup, applets, extended-memory games, plugin menus, limits.
 
 ## Problems and feedback
 
@@ -123,6 +126,10 @@ goes wrong, open an [issue](../../issues/new): what you did, what happened, the 
 
 **A game does not start or freezes with the recorder?** Switch **Recorder** off on the app's panel and play without
 it — and please tell us in an issue.
+
+**"Could not start the recorder (start, C8804478)"?** Luma3DS looks for the recorder where it was itself started
+from. Started from the console's memory (CTRNAND), it does not see the one on the SD card: copy `boot.firm` from the
+[latest Luma3DS](https://github.com/LumaTeam/Luma3DS/releases/latest) to the root of the SD card and restart.
 
 **Anonymous statistics:** with Settings → App → **Share Statistics** on (the default), the app sends the new lines of
 its logs when it opens with Wi-Fi, so we see how it works on consoles we can't test. No IP address, name or Friend Code.
@@ -145,6 +152,7 @@ tick the box. Luma settings are not changed.
 [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), [Inter](https://rsms.me/inter/) and
 [Noto Sans JP / SC / TC](https://fonts.google.com/noto) fonts (SIL OFL).
 Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/assets/fonts/`.
+From the community: [r3d2video](docs/pc-converter.md) by [noctis1008-wq](https://github.com/noctis1008-wq).
 
 ## License
 

@@ -114,4 +114,68 @@ static inline bool cpu_restore_ok(uint32_t boostPid, uint32_t nowPid, int nowSta
     return nowPid == boostPid && nowState == 3;
 }
 
+/* Whether a screen's picture is taken at a capture slot: a new swap, a still VRAM screen's
+   refresh, a late capture, or a swap still pending (its capture found the slots busy, or the mode
+   had to settle) once the screen has kept it for staticGapUs. Without the last one a game that
+   stopped drawing kept the picture before its last swap in the video. */
+static inline bool capture_trigger(bool isNew, bool isStatic, bool late, bool pend, uint64_t sinceSwapUs,
+                                   uint32_t staticGapUs)
+{
+    return isNew || isStatic || late || (pend && sinceSwapUs >= staticGapUs);
+}
+
+/* CTRPluginFramework's menu (a 3GX plugin's own screens, issue #21): it draws into two buffers per
+   screen of its own at VA 0x06000000 in the game, RGB565, 240 rows of 480 bytes, top screen in
+   the 2D mode; the displayed address is outside the game's linear memory, so it was skipped.
+   From the Yu edition (Yu08083/3ds-recorder, sysmod/source/ctrpf_display.h). */
+#define CTRPF_VA 0x06000000u
+static inline bool ctrpf_display_layout(int sc, uint32_t fmt, uint32_t stride, uint32_t size)
+{
+    if ((sc != 0 && sc != 1) || (fmt & 7u) != 2u || stride != 480u)
+        return false;
+    if (sc == 0 && (fmt & 0x60u) != 0x40u)
+        return false;
+    return size == (sc == 0 ? 400u : 320u) * 480u;
+}
+
+static inline uint32_t ctrpf_display_buffer(int sc, unsigned index)
+{
+    const uint32_t top = 400u * 480u, bottom = 320u * 480u;
+    return sc == 0 ? CTRPF_VA + index * top : CTRPF_VA + 2u * top + index * bottom;
+}
+
+/* A framebuffer the kernel refused to DMA from (D04007F0) is left alone for a moment, that one
+   only: all of the application's frames were skipped for 0.5 s after any refusal, 7100 frames on
+   New 3DS consoles in a day of field logs (2026-11-21), most of them from buffers that read fine. */
+#define PA_BACKOFF_N 4
+typedef struct {
+    uint32_t pa[PA_BACKOFF_N];
+    uint64_t until[PA_BACKOFF_N];
+} PaBackoff;
+
+static inline bool pa_backoff_active(const PaBackoff *b, uint32_t pa, uint64_t now)
+{
+    for (int i = 0; i < PA_BACKOFF_N; i++)
+        if (b->pa[i] == pa && now < b->until[i])
+            return true;
+    return false;
+}
+
+static inline void pa_backoff_set(PaBackoff *b, uint32_t pa, uint64_t until)
+{
+    int at = 0;
+    for (int i = 0; i < PA_BACKOFF_N; i++)
+    {
+        if (b->pa[i] == pa)
+        {
+            at = i;
+            break;
+        }
+        if (b->until[i] < b->until[at])
+            at = i;   /* else the one that ends first */
+    }
+    b->pa[at] = pa;
+    b->until[at] = until;
+}
+
 #endif

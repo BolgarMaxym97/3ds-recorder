@@ -65,6 +65,7 @@ typedef struct {
 void recorder_init(FS_Archive sd);
 FS_Archive recorder_archive(void); /* the SD card archive opened in main() */
 bool recorder_luma_modules_on(void);   /* Luma option "load external FIRMs and modules" */
+bool recorder_luma_sd_mode(void);       /* Luma started from the SD card, not CTRNAND (where it looks for modules) */
 bool recorder_luma_patching_on(void);  /* Luma option "enable game patching" (launch on startup needs it) */
 u32 recorder_luma_version(void);        /* major << 16 | minor << 8 | build, 0 unknown */
 ModuleFile recorder_module_file(void);

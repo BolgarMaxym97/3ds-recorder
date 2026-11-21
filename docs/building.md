@@ -20,7 +20,7 @@ tools/dkp.sh app make cia         # app/3ds-recorder.cia and .3dsx
 | `prep/` | turns an `.r3d` into MP4 (H.264 + AAC) on the console; makes Replay clips into `.r3d` recordings; joins the parts of a recording the recorder paused |
 | `web/` | the page the phone opens; also the `.r3d` converter for computers (GitHub Pages, `tools/build-web.py --local`) |
 | `codec/` | the screen codecs and the `.r3d` format |
-| `tools/` | build helpers, `r3dconv` / `r3d2mp4.sh` (`.r3d` → MP4 on a computer), Azahar helpers (`tools/azahar/`) |
+| `tools/` | build helpers, `r3dconv` / `r3d2mp4.sh` (`.r3d` → MP4 on a computer), `r3d2video.py` (high-quality video for YouTube / editing / archiving, [docs/pc-converter.md](pc-converter.md)), Azahar helpers (`tools/azahar/`) |
 | `tests/` | host tests, on-device tests and benchmarks |
 
 **Screenshots** for the README (`docs/screenshots/`) of screens that do not need the recorder running (settings,

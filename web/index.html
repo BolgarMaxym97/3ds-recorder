@@ -66,8 +66,12 @@ ol { margin: 6px 0 0; padding-left: 20px; }
   cursor: pointer; margin-bottom: 12px; }
 .drop.over, .drop:hover { border-color: var(--accent); background: var(--surface); }
 .drop b { display: block; font-size: 18px; }
-.opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
-.seg { display: flex; background: var(--surface2); border-radius: 10px; padding: 3px; }
+.opt { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 0; }
+.opt > b { white-space: nowrap; }
+.seg { display: flex; background: var(--surface2); border-radius: 10px; padding: 3px; max-width: 100%; }
+.seg button { white-space: nowrap; }
+/* narrow: a row of four choices goes under its label and shares the width */
+@media (max-width: 480px) { .seg { flex: 1 1 100%; } .seg button { flex: 1 1 0; min-width: 0; padding: 7px 4px; white-space: normal; font-size: 14px; line-height: 1.2; } .opt.wide { flex-direction: column; align-items: stretch; } }
 .seg button { display: inline-block; width: auto; margin: 0; padding: 7px 14px; border-radius: 8px; font-weight: 600;
   background: none; color: var(--muted); }
 .seg button.on { background: var(--text); color: var(--bg); }
@@ -88,8 +92,14 @@ ol { margin: 6px 0 0; padding-left: 20px; }
     <div class="opt"><b data-t="optScale"></b>
       <div class="seg" id="scale"><button data-v="1">1×</button><button data-v="2">2×</button><button data-v="3">3×</button></div></div>
     <small data-t="scaleHint"></small>
+    <div class="opt wide"><b data-t="optLayout"></b>
+      <div class="seg" id="layout"><button data-v="auto" data-t="layAuto"></button><button data-v="top" data-t="layTop"></button><button data-v="bottom" data-t="layBottom"></button><button data-v="side" data-t="laySide"></button></div></div>
+    <div class="opt wide"><b data-t="optQuality"></b>
+      <div class="seg" id="quality"><button data-v="normal" data-t="qNormal"></button><button data-v="high" data-t="qHigh"></button><button data-v="edit" data-t="qEdit"></button></div></div>
+    <small data-t="qualityHint"></small>
     <div class="opt"><b data-t="optAudio"></b>
       <div class="seg" id="eq"><button data-v="1" data-t="eqOn"></button><button data-v="0" data-t="eqOff"></button></div></div>
+    <small><span data-t="pcTool"></span> <a href="https://github.com/BolgarMaxym97/3ds-recorder/blob/main/docs/pc-converter.md" target="_blank" rel="noopener" data-t="pcToolLink"></a></small>
   </div>
   <div class="note info" data-t="privacy"></div>
 </div>

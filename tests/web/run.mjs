@@ -2,7 +2,8 @@
 // build/web-result.<ext> (through tests/web/serve.py's test-only upload), for ffprobe.
 // Usage: node tests/web/run.mjs <page url> [--live]   (--live: presses Start, the MediaRecorder path)
 //        node tests/web/run.mjs <local page url> --file <x.r3d>   (the --local build: picks the file,
-//        saves the video into build/web-result.<ext> itself; --scale 2|3 and --as-recorded pick the options)
+//        saves the video into build/web-result.<ext> itself; --scale 2|3, --layout auto|top|bottom|side,
+//        --quality normal|high|edit and --as-recorded pick the options)
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,9 +52,13 @@ await shot('start');
 if (fileArg) {
   const scale = process.argv.includes('--scale') ? process.argv[process.argv.indexOf('--scale') + 1] : '1';
   for (let i = 0; i < 50 && !(await ev("!!document.querySelector('#scale button.on')")); i++) await sleep(100); // the page is up
+  const arg = (k, d) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : d);
   const picked = await ev(`document.querySelector('#scale [data-v="${scale}"]').click();
     document.querySelector('#eq [data-v="${process.argv.includes('--as-recorded') ? 0 : 1}"]').click();
-    document.querySelector('#scale .on').dataset.v + 'x, eq ' + document.querySelector('#eq .on').dataset.v`);
+    document.querySelector('#layout [data-v="${arg('--layout', 'auto')}"]').click();
+    document.querySelector('#quality [data-v="${arg('--quality', 'normal')}"]').click();
+    document.querySelector('#scale .on').dataset.v + 'x, eq ' + document.querySelector('#eq .on').dataset.v +
+      ', ' + document.querySelector('#layout .on').dataset.v + ', ' + document.querySelector('#quality .on').dataset.v`);
   console.log('options:', picked);
   const doc = await send('DOM.getDocument');
   const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#file' });

@@ -48,6 +48,7 @@
       rpl: 'This is a Replay buffer, not a recording. Save the clip on the console (Replay hotkey) and convert the .r3d it makes.',
       optScale: 'Scale', optAudio: 'Sound', eqOn: 'Like the console', eqOff: 'As recorded',
       scaleHint: '1× is the 3DS\'s own size (400×480). 2× and 3× keep the pixels sharp in editors and on big screens; the file is bigger.',
+      optLayout: 'Screens', layAuto: 'As recorded', layTop: 'Top', layBottom: 'Bottom', laySide: 'Side by side', optQuality: 'For', qNormal: 'Sharing', qHigh: 'YouTube', qEdit: 'Editing', qualityHint: 'YouTube: a higher bitrate (3× makes 1440p, which YouTube streams in better quality). Editing: every frame a keyframe at a high bitrate, for DaVinci Resolve and other editors; the file is much bigger.', pcTool: 'Need DNxHR for DaVinci Resolve, a lossless file or one file per screen?', pcToolLink: 'r3d2video for Windows',
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
       webm: 'This browser can only make WebM videos. For an MP4, open this page in Chrome, Edge or Safari.',
     },
@@ -78,6 +79,7 @@
       rpl: 'Це буфер Повтору, а не запис. Збережіть кліп на консолі (комбінація Повтору) і сконвертуйте .r3d, який вона створить.',
       optScale: 'Масштаб', optAudio: 'Звук', eqOn: 'Як на консолі', eqOff: 'Як записано',
       scaleHint: '1× — рідний розмір 3DS (400×480). 2× і 3× зберігають чіткі пікселі в редакторах і на великих екранах; файл більший.',
+      optLayout: 'Екрани', layAuto: 'Як записано', layTop: 'Верхній', layBottom: 'Нижній', laySide: 'Поруч', optQuality: 'Для чого', qNormal: 'Поділитися', qHigh: 'YouTube', qEdit: 'Монтаж', qualityHint: 'YouTube: вищий бітрейт (3× дає 1440p, яке YouTube показує в кращій якості). Монтаж: кожен кадр ключовий і високий бітрейт, для DaVinci Resolve та інших редакторів; файл значно більший.', pcTool: 'Потрібен DNxHR для DaVinci Resolve, файл без втрат чи окремий файл для кожного екрана?', pcToolLink: 'r3d2video для Windows',
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
       webm: 'Цей браузер уміє робити лише відео WebM. Для MP4 відкрийте цю сторінку в Chrome, Edge чи Safari.',
     },
@@ -108,6 +110,7 @@
       rpl: 'Esto es un búfer de la repetición, no una grabación. Guarda el clip en la consola (combinación de la repetición) y convierte el .r3d que se crea.',
       optScale: 'Escala', optAudio: 'Sonido', eqOn: 'Como en la consola', eqOff: 'Tal como se grabó',
       scaleHint: '1× es el tamaño original de la 3DS (400×480). 2× y 3× mantienen los píxeles nítidos en editores y pantallas grandes; el archivo ocupa más.',
+      optLayout: 'Pantallas', layAuto: 'Como se grabó', layTop: 'Superior', layBottom: 'Inferior', laySide: 'Lado a lado', optQuality: 'Para', qNormal: 'Compartir', qHigh: 'YouTube', qEdit: 'Edición', qualityHint: 'YouTube: más bitrate (3× da 1440p, que YouTube reproduce con mejor calidad). Edición: cada fotograma es clave y con bitrate alto, para DaVinci Resolve y otros editores; el archivo ocupa mucho más.', pcTool: '¿Necesitas DNxHR para DaVinci Resolve, un archivo sin pérdida o un archivo por pantalla?', pcToolLink: 'r3d2video para Windows',
       fastPc: 'rápido: codificador de video de tu PC', readErr: 'No se pudo leer el archivo (%1).', failedLocal: 'No se pudo crear el video (%1).', again: 'Convertir otro archivo',
       webm: 'Este navegador solo puede crear videos WebM. Para obtener un MP4, abre esta página en Chrome, Edge o Safari.',
     },
@@ -138,6 +141,7 @@
       rpl: 'Isto é um buffer da repetição, não uma gravação. Salve o clipe no console (combinação da repetição) e converta o .r3d criado.',
       optScale: 'Escala', optAudio: 'Som', eqOn: 'Como no console', eqOff: 'Como gravado',
       scaleHint: '1× é o tamanho original do 3DS (400×480). 2× e 3× mantêm os pixels nítidos em editores e telas grandes; o arquivo fica maior.',
+      optLayout: 'Telas', layAuto: 'Como gravado', layTop: 'Superior', layBottom: 'Inferior', laySide: 'Lado a lado', optQuality: 'Para', qNormal: 'Compartilhar', qHigh: 'YouTube', qEdit: 'Edição', qualityHint: 'YouTube: bitrate maior (3× gera 1440p, que o YouTube exibe com mais qualidade). Edição: todo quadro é chave e com bitrate alto, para o DaVinci Resolve e outros editores; o arquivo fica bem maior.', pcTool: 'Precisa de DNxHR para o DaVinci Resolve, de um arquivo sem perdas ou de um arquivo por tela?', pcToolLink: 'r3d2video para Windows',
       fastPc: 'rápido: codificador de vídeo do computador', readErr: 'Não foi possível ler o arquivo (%1).', failedLocal: 'Não foi possível criar o vídeo (%1).', again: 'Converter outro arquivo',
       webm: 'Este navegador só consegue criar vídeos WebM. Para um MP4, abra esta página no Chrome, Edge ou Safari.',
     },
@@ -168,6 +172,7 @@
       rpl: 'Questo è il buffer del replay, non una registrazione. Salva la clip sulla console (combinazione del replay) e converti il file .r3d che viene creato.',
       optScale: 'Scala', optAudio: 'Audio', eqOn: 'Come sulla console', eqOff: 'Come registrato',
       scaleHint: '1× è la dimensione originale del 3DS (400×480). 2× e 3× mantengono i pixel nitidi negli editor e sugli schermi grandi; il file è più pesante.',
+      optLayout: 'Schermi', layAuto: 'Come registrato', layTop: 'Superiore', layBottom: 'Inferiore', laySide: 'Affiancati', optQuality: 'Per', qNormal: 'Condividere', qHigh: 'YouTube', qEdit: 'Montaggio', qualityHint: 'YouTube: bitrate più alto (3× dà 1440p, che YouTube riproduce in qualità migliore). Montaggio: ogni fotogramma è chiave, con bitrate alto, per DaVinci Resolve e altri editor; il file è molto più pesante.', pcTool: 'Ti serve DNxHR per DaVinci Resolve, un file senza perdita o un file per schermo?', pcToolLink: 'r3d2video per Windows',
       fastPc: 'veloce: codificatore video del computer', readErr: 'Impossibile leggere il file (%1).', failedLocal: 'Impossibile creare il video (%1).', again: 'Converti un altro file',
       webm: 'Questo browser può creare solo video WebM. Per un MP4, apri questa pagina in Chrome, Edge o Safari.',
     },
@@ -204,6 +209,7 @@
       rpl: 'C’est une mémoire tampon de la relecture, pas un enregistrement. Sauvegardez le clip sur la console (combinaison de la relecture) et convertissez le .r3d ainsi créé.',
       optScale: 'Échelle', optAudio: 'Son', eqOn: 'Comme sur la console', eqOff: 'Tel qu’enregistré',
       scaleHint: '1× est la taille d’origine de la 3DS (400×480). 2× et 3× gardent des pixels nets dans les logiciels de montage et sur les grands écrans ; le fichier est plus lourd.',
+      optLayout: 'Écrans', layAuto: 'Comme enregistré', layTop: 'Haut', layBottom: 'Bas', laySide: 'Côte à côte', optQuality: 'Pour', qNormal: 'Partager', qHigh: 'YouTube', qEdit: 'Montage', qualityHint: 'YouTube : un débit plus élevé (3× donne du 1440p, que YouTube diffuse en meilleure qualité). Montage : chaque image est une image clé, à haut débit, pour DaVinci Resolve et d’autres logiciels ; le fichier est bien plus lourd.', pcTool: 'Besoin de DNxHR pour DaVinci Resolve, d’un fichier sans perte ou d’un fichier par écran ?', pcToolLink: 'r3d2video pour Windows',
       fastPc: 'rapide : encodeur vidéo de l’ordinateur', readErr: 'Impossible de lire le fichier (%1).',
       failedLocal: 'Impossible de créer la vidéo (%1).', again: 'Convertir un autre fichier',
       webm: 'Ce navigateur ne peut créer que des vidéos WebM. Pour un MP4, ouvrez cette page dans Chrome, Edge ou Safari.',
@@ -235,6 +241,7 @@
       rpl: 'Das ist ein Replay-Puffer, keine Aufnahme. Speichere den Clip auf der Konsole (Replay-Kombination) und wandle die dabei erstellte .r3d um.',
       optScale: 'Skalierung', optAudio: 'Ton', eqOn: 'Wie auf der Konsole', eqOff: 'Wie aufgenommen',
       scaleHint: '1× ist die Originalgröße des 3DS (400×480). 2× und 3× halten die Pixel in Schnittprogrammen und auf großen Bildschirmen scharf; die Datei wird größer.',
+      optLayout: 'Bildschirme', layAuto: 'Wie aufgenommen', layTop: 'Oben', layBottom: 'Unten', laySide: 'Nebeneinander', optQuality: 'Für', qNormal: 'Teilen', qHigh: 'YouTube', qEdit: 'Schnitt', qualityHint: 'YouTube: höhere Bitrate (3× ergibt 1440p, das YouTube in besserer Qualität abspielt). Schnitt: jedes Bild ein Keyframe mit hoher Bitrate, für DaVinci Resolve und andere Schnittprogramme; die Datei wird deutlich größer.', pcTool: 'DNxHR für DaVinci Resolve, eine verlustfreie Datei oder eine Datei pro Bildschirm?', pcToolLink: 'r3d2video für Windows',
       fastPc: 'schnell: Video-Encoder des Computers', readErr: 'Die Datei konnte nicht gelesen werden (%1).', failedLocal: 'Das Video konnte nicht erstellt werden (%1).', again: 'Weitere Datei umwandeln',
       webm: 'Dieser Browser kann nur WebM-Videos erstellen. Für eine MP4-Datei öffne diese Seite in Chrome, Edge oder Safari.',
     },
@@ -265,6 +272,7 @@
       rpl: '这是即时回放的缓存，不是录像。请在主机上保存片段（即时回放组合键），然后转换由此生成的.r3d文件。',
       optScale: '缩放', optAudio: '声音', eqOn: '模拟主机音色', eqOff: '原声',
       scaleHint: '1×是3DS的原始尺寸（400×480）。2×和3×可在剪辑软件和大屏幕上保持像素清晰，但文件更大。',
+      optLayout: '画面', layAuto: '按录制', layTop: '上屏', layBottom: '下屏', laySide: '并排', optQuality: '用途', qNormal: '分享', qHigh: 'YouTube', qEdit: '剪辑', qualityHint: 'YouTube：更高码率（3×为1440p，YouTube会以更好的画质播放）。剪辑：每帧都是关键帧且码率高，适合DaVinci Resolve等剪辑软件；文件会大很多。', pcTool: '需要用于DaVinci Resolve的DNxHR、无损文件或每个屏幕单独的文件？', pcToolLink: 'Windows版r3d2video',
       fastPc: '快速：使用电脑的视频编码器', readErr: '无法读取文件（%1）。', failedLocal: '无法生成视频（%1）。', again: '转换其他文件',
       webm: '此浏览器只能生成WebM视频。如需MP4，请在Chrome、Edge或Safari中打开此页面。',
     },
@@ -295,6 +303,7 @@
       rpl: '這是即時重播的暫存檔，不是錄影。請在主機上儲存片段（即時重播快捷鍵），再轉換它產生的 .r3d。',
       optScale: '縮放', optAudio: '聲音', eqOn: '與主機相同', eqOff: '原始錄音',
       scaleHint: '1× 為 3DS 的原始尺寸（400×480）。2× 和 3× 可在編輯軟體和大螢幕上保持像素清晰；檔案會較大。',
+      optLayout: '畫面', layAuto: '依錄製', layTop: '上螢幕', layBottom: '下螢幕', laySide: '並排', optQuality: '用途', qNormal: '分享', qHigh: 'YouTube', qEdit: '剪輯', qualityHint: 'YouTube：較高位元率（3× 為 1440p，YouTube 會以較佳畫質播放）。剪輯：每格都是關鍵影格且位元率高，適合 DaVinci Resolve 等剪輯軟體；檔案會大很多。', pcTool: '需要給 DaVinci Resolve 用的 DNxHR、無損檔案，或每個螢幕各一個檔案？', pcToolLink: 'Windows 版 r3d2video',
       fastPc: '快速：使用電腦的影片編碼器', readErr: '無法讀取檔案（%1）。', failedLocal: '無法製作影片（%1）。', again: '轉換其他檔案',
       webm: '此瀏覽器只能製作 WebM 影片。若要 MP4，請在 Chrome、Edge 或 Safari 中開啟此頁面。',
     },
@@ -325,6 +334,7 @@
       rpl: 'これはリプレイのバッファーで、録画ではありません。本体でクリップを保存し（リプレイの組み合わせ）、作られた.r3dを変換してください。',
       optScale: '倍率', optAudio: '音声', eqOn: '本体スピーカー風', eqOff: '録音のまま',
       scaleHint: '1×は3DS本来のサイズ（400×480）です。2×と3×では、編集ソフトや大きな画面でもドットがくっきりしますが、ファイルが大きくなります。',
+      optLayout: '画面', layAuto: '録画のまま', layTop: '上画面', layBottom: '下画面', laySide: '横に並べる', optQuality: '用途', qNormal: '共有', qHigh: 'YouTube', qEdit: '編集', qualityHint: 'YouTube：ビットレートを上げます（3×で1440p、YouTubeでより高画質に再生されます）。編集：全フレームをキーフレームにし高ビットレートで、DaVinci Resolveなどの編集ソフト向け。ファイルはかなり大きくなります。', pcTool: 'DaVinci Resolve用のDNxHR、ロスレス、画面ごとの別ファイルが必要ですか？', pcToolLink: 'Windows版 r3d2video',
       fastPc: '高速：パソコンの動画エンコーダー', readErr: 'ファイルを読み込めませんでした（%1）。', failedLocal: '動画を作成できませんでした（%1）。', again: 'ほかのファイルを変換',
       webm: 'このブラウザーではWebM動画しか作成できません。MP4にするには、このページをChrome、Edge、Safariで開いてください。',
     },
@@ -370,7 +380,25 @@
   let name = new URLSearchParams(location.search).get('f');
   let info = null;
   let localFile = null; // local mode: the File being converted
-  const opts = { scale: 1, eq: true }; // local mode: the size and the treble cut (remembered in the browser)
+  const opts = { scale: 1, eq: true, layout: 'auto', quality: 'normal' }; // local mode: size, sound, screens, purpose (remembered in the browser)
+
+  // Local mode: which screens go into the video and where (the composite picture is 400 wide: the top
+  // screen above, the bottom one centred under it). blits: [sx, sy, sw, sh, dx, dy] from it; null: as it is.
+  // A screen the recording does not have: as recorded. (From r3d2video's layouts, noctis1008-wq.)
+  function viewFor(hdr, layout) {
+    const hasTop = !hdr.bottomOnly, hasBottom = hdr.both || hdr.bottomOnly, by = hdr.both ? 240 : 0;
+    if (layout === 'top' && hasTop && hasBottom) return { w: 400, h: 240, blits: [[0, 0, 400, 240, 0, 0]] };
+    if (layout === 'bottom' && hasBottom) return { w: 320, h: 240, blits: [[40, by, 320, 240, 0, 0]] };
+    if (layout === 'side' && hdr.both) return { w: 720, h: 240, blits: [[0, 0, 400, 240, 0, 0], [40, 240, 320, 240, 400, 0]] };
+    return { w: 400, h: hdr.height, blits: null };
+  }
+  // the bitrate for a size and purpose: the upscaled pixels are flat blocks, they need far less than
+  // scale^2 times the bits; YouTube re-encodes what it gets (more in, better out); editing: all keyframes
+  const QUALITY = { normal: 1, high: 1.75, edit: 4 };
+  function bitrateFor(view, scale, quality) {
+    const base = [0, 3500000, 8000000, 12000000][scale] * (view.w * view.h) / (400 * 480);
+    return Math.round(Math.max(1500000, base) * (QUALITY[quality] || 1));
+  }
 
   // One line into the console's app.log: what the phone did, so a test far away needs no
   // questions afterwards (the "Log for the developer" file has it). Never fails the page.
@@ -571,7 +599,7 @@
     return find(0, b.length, 0x05) || b;
   }
 
-  async function fastSupport(width, height, fps, audio) {
+  async function fastSupport(width, height, fps, audio, bitrate = 2500000) {
     if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
     if (audio && (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined')) return null;
     if (width > 400 && typeof OffscreenCanvas === 'undefined') return null; // the upscale draws on one
@@ -593,11 +621,12 @@
     // stops at the first time going back ("Timestamps must be monotonically increasing", Firefox on
     // Windows, issue #28). Constrained Baseline has none: first where there is no AAC (Firefox); the
     // AAC browsers keep Main, as tested
-    const lv = Math.ceil(width / 16) * Math.ceil(height / 16) > 3600 ? '28' : '1f'; // level 3.1 up to 1280x720, else 4.0
+    // level 3.1 up to 1280x720, 4.0 above; 5.1 for the bitrates of the YouTube / editing purposes (4.0 stops at 20 Mbit/s)
+    const lv = bitrate > 20000000 ? '33' : Math.ceil(width / 16) * Math.ceil(height / 16) > 3600 ? '28' : '1f';
     const order = sound === 'mp4a.40.2' ? ['avc1.4d40' + lv, 'avc1.42e0' + lv, 'avc1.640028'] : ['avc1.42e0' + lv];
     for (const c of order) {
       try {
-        const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate: 2500000, framerate: fps });
+        const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate, framerate: fps });
         if (r.supported) return { video: c, audio: audio ? sound : null };
       } catch (e) { /* next */ }
     }
@@ -635,8 +664,9 @@
     }
   }
 
-  function fastConvert(hdr, codecs, scale) {
-    const W = 400 * scale, H = hdr.height * scale;
+  function fastConvert(hdr, codecs, scale, layout = 'auto', quality = 'normal') {
+    const view = viewFor(hdr, layout);
+    const W = view.w * scale, H = view.h * scale;
     const codec = codecs.video, opus = codecs.audio === 'opus';
     const withAudio = !!(hdr.audio && codecs.audio); // the codec was chosen from the file's details: they agree, but in case
     const target = new Mp4Muxer.ArrayBufferTarget();
@@ -650,11 +680,13 @@
     let error = null;
     // a muxer error inside the callback (a timestamp going back) is kept, not lost: the file would be broken
     const venc = new VideoEncoder({ output: (c, m) => { try { muxer.addVideoChunk(c, m); } catch (e) { error = error || e; } }, error: (e) => { error = e; } });
-    // the upscaled pixels are flat blocks: they need far less than scale^2 times the bits
-    venc.configure({ codec, width: W, height: H, bitrate: [0, 3500000, 8000000, 12000000][scale], framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
-    // 2x / 3x: each picture drawn bigger with no smoothing (nearest neighbour), on the GPU
-    const small = scale > 1 ? new OffscreenCanvas(400, hdr.height) : null;
-    const big = scale > 1 ? new OffscreenCanvas(W, H) : null;
+    venc.configure({ codec, width: W, height: H, bitrate: bitrateFor(view, scale, quality), framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
+    // 2x / 3x or another layout: each picture drawn (bigger) with no smoothing (nearest neighbour), on the GPU
+    const drawn = scale > 1 || view.blits;
+    const small = drawn ? new OffscreenCanvas(400, hdr.height) : null;
+    const big = drawn ? new OffscreenCanvas(W, H) : null;
+    const blits = view.blits || [[0, 0, 400, hdr.height, 0, 0]];
+    const allKeys = quality === 'edit';
     const bigCtx = big && big.getContext('2d');
     if (bigCtx) bigCtx.imageSmoothingEnabled = false;
     let aenc = null, rs = null, aOut = 0, pend = [], pendN = 0;
@@ -692,7 +724,7 @@
           if (base) base.close();
           if (big) {
             small.getContext('2d').putImageData(new ImageData(rgba, 400, hdr.height), 0, 0);
-            bigCtx.drawImage(small, 0, 0, W, H);
+            for (const [sx, sy, sw, sh, dx, dy] of blits) bigCtx.drawImage(small, sx, sy, sw, sh, dx * scale, dy * scale, sw * scale, sh * scale);
             base = new VideoFrame(big, { timestamp: 0 });
           } else {
             base = new VideoFrame(rgba, { format: 'RGBA', codedWidth: 400, codedHeight: hdr.height, timestamp: 0 });
@@ -703,7 +735,7 @@
         const f = timeUs === undefined
           ? new VideoFrame(base, { timestamp: Math.round(index * usPerFrame), duration: Math.round(usPerFrame) })
           : new VideoFrame(base, { timestamp: Math.round(timeUs), duration: Math.round(usPerFrame) });
-        venc.encode(f, { keyFrame: index % (hdr.fps * 2) === 0 });
+        venc.encode(f, { keyFrame: allKeys || index % (hdr.fps * 2) === 0 });
         f.close();
       },
       audio(s) {
@@ -1085,6 +1117,10 @@
     };
     seg('scale', () => opts.scale, (v) => { opts.scale = Number(v); });
     seg('eq', () => (opts.eq ? 1 : 0), (v) => { opts.eq = v === '1'; });
+    if (!['auto', 'top', 'bottom', 'side'].includes(opts.layout)) opts.layout = 'auto';
+    if (!(opts.quality in QUALITY)) opts.quality = 'normal';
+    seg('layout', () => opts.layout, (v) => { opts.layout = v; });
+    seg('quality', () => opts.quality, (v) => { opts.quality = v; });
   }
 
   async function openLocal(file) {
@@ -1098,7 +1134,7 @@
     if (!hdr) { fail(t('notR3d')); return; }
     localFile = file;
     name = file.name;
-    info = { name, size: file.size, ms: 0, both: hdr.both, fps: hdr.fps, audio: hdr.audio };
+    info = { name, size: file.size, ms: 0, both: hdr.both, bottomOnly: hdr.bottomOnly, fps: hdr.fps, audio: hdr.audio };
     $('pick').hidden = true;
     $('card').hidden = false;
     $('steps').hidden = false;
@@ -1194,13 +1230,20 @@
     step(2, '', 0, t('waiting'));
 
     const height = info.both ? 480 : 240;
-    let scale = LOCAL ? opts.scale : 1;
-    let codec = await fastSupport(400 * scale, height * scale, info.fps || 30, info.audio);
-    if (!codec && scale > 1) { scale = 1; codec = await fastSupport(400, height, info.fps || 30, info.audio); } // too big for this encoder
+    const canDraw = typeof OffscreenCanvas !== 'undefined'; // upscales and layouts are drawn on one
+    let scale = LOCAL && canDraw ? opts.scale : 1;
+    const layout = LOCAL && canDraw ? opts.layout : 'auto';
+    let quality = LOCAL ? opts.quality : 'normal';
+    const view = viewFor({ both: info.both, bottomOnly: info.bottomOnly, height }, layout);
+    const fps = info.fps || 30;
+    let codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality));
+    if (!codec && quality !== 'normal') { quality = 'normal'; codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality)); }
+    if (!codec && scale > 1) { scale = 1; codec = await fastSupport(view.w, view.h, fps, info.audio, bitrateFor(view, 1, quality)); } // too big for this encoder
     if (codec) {
       report('browser video: fast, ' + JSON.stringify(codec).slice(0, 120));
-      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast') + (scale > 1 ? ` · ${400 * scale}×${height * scale}` : ''),
-        make: (hdr) => fastConvert(hdr, codec, scale) });
+      const size = view.w * scale !== 400 || view.h * scale !== height ? ` · ${view.w * scale}×${view.h * scale}` : '';
+      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast') + size + (quality !== 'normal' ? ' · ' + t(quality === 'high' ? 'qHigh' : 'qEdit') : ''),
+        make: (hdr) => fastConvert(hdr, codec, scale, layout, quality) });
       return;
     }
     const mime = liveType();

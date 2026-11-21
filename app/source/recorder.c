@@ -126,7 +126,9 @@ static Handle OpenModule(void)
         s64 raw = 0;
         if (R_SUCCEEDED(svcGetProcessInfo(&raw, h, 0x10000)))
             memcpy(name, &raw, 8);
-        if (strcmp(name, REC_PROCESS_NAME) == 0)
+        s64 title = 0;   /* the name and our title id: no other process called so (from the Yu edition) */
+        if (strcmp(name, REC_PROCESS_NAME) == 0 && R_SUCCEEDED(svcGetProcessInfo(&title, h, 0x10001)) &&
+            (u64)title == REC_TITLE_ID)
             return h;
         svcCloseHandle(h);
     }
@@ -360,7 +362,7 @@ static ModuleFile CompareFile(const char *romfsPath, const char *sdPath)
         st = MODULE_SAME;
         for (;;) {
             const size_t na = fread(ba, 1, 16384, a), nb = fread(bb, 1, 16384, b);
-            if (na != nb || memcmp(ba, bb, na) != 0) {
+            if (na != nb || memcmp(ba, bb, na) != 0 || ferror(a) || ferror(b)) {   /* a read error: installed again */
                 st = MODULE_DIFFERENT;
                 break;
             }
@@ -377,26 +379,38 @@ static ModuleFile CompareFile(const char *romfsPath, const char *sdPath)
     return st;
 }
 
+/* Written next to the old file (".new"), read back and compared, and only then put in its place:
+   a power-off or a full card while copying leaves the old file whole, never half of the new one
+   (Luma's loader on a cut .cxi: not found or a panic). From the Yu edition (Yu08083/3ds-recorder). */
 static bool CopyFile(const char *romfsPath, const char *sdPath)
 {
-    char full[160];
-    snprintf(full, sizeof(full), "sdmc:%s", sdPath);
+    char tmp[160], full[168];
+    snprintf(tmp, sizeof(tmp), "%s.new", sdPath);
+    snprintf(full, sizeof(full), "sdmc:%s", tmp);
+    FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, tmp));
     FILE *in = fopen(romfsPath, "rb");
     FILE *out = fopen(full, "wb");
     bool ok = in && out;
     static u8 buf[16384];
     while (ok) {
         const size_t n = fread(buf, 1, sizeof(buf), in);
-        if (!n)
+        if (!n) {
+            ok = !ferror(in);
             break;
+        }
         ok = fwrite(buf, 1, n, out) == n;
     }
     if (in)
         fclose(in);
-    if (out)
-        fclose(out);
-    if (!ok)
+    if (out && fclose(out) != 0)
+        ok = false;
+    ok = ok && CompareFile(romfsPath, tmp) == MODULE_SAME;
+    if (ok) {
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, sdPath));
+        ok = R_SUCCEEDED(FSUSER_RenameFile(g_sd, fsMakePath(PATH_ASCII, tmp), g_sd, fsMakePath(PATH_ASCII, sdPath)));
+    }
+    if (!ok)
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, tmp));
     return ok;
 }
 
@@ -438,6 +452,19 @@ bool recorder_luma_patching_on(void)
     if (R_FAILED(svcGetSystemInfo(&cfg, 0x10000, 3)))
         return false;
     return (cfg >> 2) & 1; /* singleOptions: PATCHGAMES = 2 */
+}
+
+/* Luma started from the SD card (boot.firm there), not from CTRNAND: its loader then looks for
+   /luma/sysmodules/<tid>.cxi on the SD card; started from CTRNAND it looks in CTRNAND and the
+   module the app installs on the SD card is "not found" (C8804478, Luma loader openSysmoduleCxi:
+   isSdMode, GetSystemInfo 0x10000/0x203; field logs 2026-11-21 on Luma 13.4 and 13.5).
+   Unknown (an older Luma): taken as the SD card. */
+bool recorder_luma_sd_mode(void)
+{
+    s64 sd = 1;
+    if (recorder_luma_version() == 0 || R_FAILED(svcGetSystemInfo(&sd, 0x10000, 0x203)))
+        return true;   /* no Luma (an emulator) or no answer: nothing to say */
+    return sd != 0;
 }
 
 u32 recorder_luma_version(void)
@@ -581,7 +608,7 @@ bool recorder_uninstall(bool recordings, const char *selfPath)
     LightLock_Unlock(&g_logLock);
     static const char *const files[] = {REC_DIR_FS "/recorder.log", REC_DIR_FS "/recorder.old.log", REC_DIR_FS "/.system_stop",
                                         REC_DIR_FS "/app.log", REC_DIR_FS "/app.old.log", REC_DIR_FS "/stats.ini",
-                                        REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on",
+                                        REC_LAUNCH_FS, REC_DIR_FS "/.plugin_loader_on", REC_DIR_FS "/.launcher_order.tmp", REC_LAUNCH_FS ".new", REC_CXI_FS ".new",
                                         REC_DIR_FS "/.autostart", REC_DIR_FS "/.boot_try", REC_DIR_FS "/.autostart_failed",
                                         REC_DIR_FS "/no_launcher.txt", REC_DIR_FS "/.launcher_try",
                                         REC_FILES_FS "/.next.tmp", REC_FILES_FS "/.next.info",

@@ -43,6 +43,7 @@ Result svcControlMemoryUnsafe(u32 *out, u32 addr0, u32 size, MemOp op, MemPerm p
 Result svcControlService(u32 op, ...);
 Result svcMapProcessMemoryEx(Handle dstProcess, u32 vaDst, Handle srcProcess, u32 vaSrc, u32 size, u32 flags);   /* Luma 0xA0 */
 Result svcUnmapProcessMemoryEx(Handle process, u32 va, u32 size);                                              /* Luma 0xA1 */
+Result svcControlProcess(Handle process, u32 op, u32 varg2, u32 varg3);                                        /* Luma 0xB3 */
 
 /* ------------------------------------------------------------------ config */
 
@@ -200,13 +201,15 @@ typedef struct {
     s8 launchHold;
     /* appmem_fix=off (not in the app): leave the application memory limit as pm left it (AppMemFix) */
     bool appMemFix;
+    /* ctrpf_capture=off (not in the app): no frames from a CTRPluginFramework menu (CtrpfDma) */
+    bool ctrpf;
     bool abTest;     /* ab_test=on: each recording takes the next AB_* variant (not in the app) */
     bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
     u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
     bool autostart;  /* autostart=on: the recorder starts with the console (launch on startup, AutoApply) */
 } Config;
 
-static Config g_cfg = { .o3dsCore = -1, .launchHold = -1, .appMemFix = true, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
+static Config g_cfg = { .o3dsCore = -1, .launchHold = -1, .appMemFix = true, .ctrpf = true, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
                         .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .codecArm = -1, .bench = false, .n3dsBoost = true, .abTest = false,
                         .replay = false, .saveKey = KEY_X | KEY_SELECT,
 #ifdef REC_TESTBUILD
@@ -817,6 +820,8 @@ static void LoadConfig(void)
             g_cfg.n3dsBoost = strcasecmp(v, "off") != 0;
         else if (strcasecmp(p, "appmem_fix") == 0)
             g_cfg.appMemFix = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(p, "ctrpf_capture") == 0)
+            g_cfg.ctrpf = strcasecmp(v, "off") != 0;
         else if (strcasecmp(p, "launch_hold") == 0)
             g_cfg.launchHold = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
         else if (strcasecmp(p, "codec_bench") == 0)
@@ -2617,6 +2622,8 @@ static bool FindApp(void)
 #define SKIP_LOGGED_MAX 8u
 static u32 g_skipLogged[SKIP_LOGGED_MAX], g_skipLoggedN;
 static u32 g_notAppSkips;   /* frames not taken: not the application's memory */
+static u32 g_ctrpfFrames;   /* frames read from a CTRPluginFramework menu's buffers */
+static PaBackoff g_paBackoff;   /* buffers the kernel refused a DMA from, left alone a moment */
 static bool SkipFirstSeen(u32 pa)
 {
     g_notAppSkips++;
@@ -2655,7 +2662,43 @@ static bool RangeReadable(Handle proc, u32 va, u32 size)
     return true;
 }
 
-static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
+/* A frame of a CTRPluginFramework menu (front.h ctrpf_display_layout): read from the plugin's own
+   buffer in the game, at CTRPF_VA, only when that buffer is what the screen shows: each of its
+   pages is mapped in the game at exactly the displayed address and the ones after it (Luma
+   svcControlProcess, PROCESSOP_GET_PA_FROM_VA). Anything else: not read (DEAD0026). */
+static Result CtrpfDma(Handle *dma, u8 *dst, int sc, u32 pa, u32 fmt, u32 stride, u32 size, DmaConfig *cfg)
+{
+    if (!g_cfg.ctrpf || !ctrpf_display_layout(sc, fmt, stride, size))
+        return (Result)0xDEAD0026;
+    if (!g_appPid && !FindApp())
+        return (Result)0xDEAD0026;
+    Handle app = 0;
+    if (R_FAILED(svcOpenProcess(&app, g_appPid)))
+        return (Result)0xDEAD0026;
+    enum { GET_PA_FROM_VA = 4 };
+    Result rc = (Result)0xDEAD0026;
+    for (unsigned i = 0; i < 2; i++)
+    {
+        const u32 va = ctrpf_display_buffer(sc, i);
+        u32 got = 0;
+        if (R_FAILED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, va)) || got != pa)
+            continue;
+        bool whole = RangeReadable(app, va, size);
+        for (u32 page = (va & ~0xFFFu) + 0x1000u; whole && page < va + size; page += 0x1000u)
+            whole = R_SUCCEEDED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, page)) && got == pa + (page - va);
+        if (whole)
+        {
+            rc = svcStartInterProcessDma(dma, CUR_PROCESS_HANDLE, (u32)dst, app, va, size, cfg);
+            if (R_SUCCEEDED(rc) && g_recording && g_ctrpfFrames++ == 0)
+                Log("%s screen: a CTRPluginFramework menu, read from its buffer at %08lX (pa %08lX)", sc ? "bottom" : "top", va, pa);
+        }
+        break;
+    }
+    svcCloseHandle(app);
+    return rc;
+}
+
+static Result StartFrameDma(Handle *dma, u8 *dst, int sc, u32 pa, u32 fmt, u32 stride, u32 size)
 {
     DmaConfig cfg;
     dmaConfigInitDefault(&cfg);
@@ -2670,13 +2713,16 @@ static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
     const u32 appEnd = app_region_end(*(const volatile u8 *)0x1FF80030, *(const volatile u32 *)0x1FF80040);
     if (pa + size > appEnd || pa + size < pa)
     {
+        const Result menu = CtrpfDma(dma, dst, sc, pa, fmt, stride, size, &cfg);
+        if (R_SUCCEEDED(menu))
+            return menu;
         if (g_recording && SkipFirstSeen(pa))
             Log("FCRAM frame at pa %08lX size %lu outside the application's memory (ends %08lX): skipped", pa, size,
                 appEnd);
         return (Result)0xDEAD0023;
     }
-    static u64 backoffUntil;   /* after a refused DMA: the application's memory is left alone a moment */
-    if (Ticks() < backoffUntil)
+    /* after a refused DMA this buffer is left alone a moment (front.h pa_backoff_*) */
+    if (pa_backoff_active(&g_paBackoff, pa, Ticks()))
         return (Result)0xDEAD0024;
     if (!g_appPid && !FindApp())
     {
@@ -2709,6 +2755,10 @@ static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
     svcCloseHandle(app);
     if (rc == (Result)0xDEAD0025)
     {
+        /* a CTRPluginFramework menu inside the APPLICATION region (a New 3DS) */
+        const Result menu = CtrpfDma(dma, dst, sc, pa, fmt, stride, size, &cfg);
+        if (R_SUCCEEDED(menu))
+            return menu;
         /* this buffer is not mapped where the application's frames are: skipped, nothing reset
            (Wario Land's bottom screen, O3DS 2026-11-07); logged once per buffer (SkipFirstSeen) */
         if (g_recording && SkipFirstSeen(pa))
@@ -2726,7 +2776,7 @@ static Result StartFrameDma(Handle *dma, u8 *dst, u32 pa, u32 size)
     if (R_FAILED(rc))
     {
         g_appPid = g_appBase = 0;
-        backoffUntil = Ticks() + SYSCLOCK_ARM11 / 2;   /* 0.5 s */
+        pa_backoff_set(&g_paBackoff, pa, Ticks() + SYSCLOCK_ARM11 / 2);   /* 0.5 s, this buffer */
     }
     return rc;
 }
@@ -2752,32 +2802,39 @@ static u32 DmasRunning(void)
     return n;
 }
 
-static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStatic)
+/* What became of a frame Capture was asked for: queued; not now, the slots or DMA channels were
+   busy (the swap stays pending and is tried again, see capture_trigger in front.h); not readable. */
+typedef enum { CAP_QUEUED, CAP_BUSY, CAP_UNREADABLE } CapResult;
+
+/* retry: the same swap again after CAP_BUSY; a busy slot then is not counted as one more drop */
+static CapResult Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStatic, bool retry)
 {
     if ((fmt & 7u) > FB_RGBA4)
-        return;   /* not a pixel format: a register read while the game set its screens up */
+        return CAP_UNREADABLE;   /* not a pixel format: a register read while the game set its screens up */
     /* the stride bounded first: a garbage register value times 400 could wrap to a small size */
     if (stride < 240 * Bpp(fmt) || stride > 240u * 4u * 2u)
-        return;
+        return CAP_UNREADABLE;
     /* nor an unaligned one: the encoders read whole words at column starts (a data abort) */
     if (stride & 7u)
-        return;
+        return CAP_UNREADABLE;
     /* the top screen's 800 px mode: neither "normal 2D" (bit 6) nor 3D (bit 5) in its format
        register (as Rosalina's screenshots read it); 800 columns, recorded as 400 (pairs averaged) */
     const bool wide = sc == 0 && (fmt & 0x60u) == 0;
     const u32 size = (sc == 0 ? (wide ? 800u : 400u) : 320u) * stride;
     if (size > g_arenaCap[sc])
-        return;
+        return CAP_UNREADABLE;
     if (!EnsureSlots(sc, size))
     {
-        Drop(DROP_SLOTS_BUSY, sc, 0);
-        return;
+        if (!retry)
+            Drop(DROP_SLOTS_BUSY, sc, 0);
+        return CAP_BUSY;
     }
     const u32 running = DmasRunning();
     if (running >= DMA_MAX_RUNNING)
     {
-        Drop(DROP_DMA_LIMIT, sc, 0);   /* not encoded: no keyframe needed */
-        return;
+        if (!retry)
+            Drop(DROP_DMA_LIMIT, sc, 0);   /* not encoded: no keyframe needed */
+        return CAP_BUSY;
     }
     Slot *slot = NULL;
     for (u32 i = 0; i < g_slotCount[sc] && !slot; i++)
@@ -2785,16 +2842,17 @@ static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStat
             slot = &g_slots[sc * MAX_SLOTS + i];
     if (!slot)
     {
-        Drop(DROP_NO_SLOT, sc, 0);   /* not encoded: no keyframe needed */
-        return;
+        if (!retry)
+            Drop(DROP_NO_SLOT, sc, 0);   /* not encoded: no keyframe needed */
+        return CAP_BUSY;
     }
     Handle h = 0;
-    const Result rc = StartFrameDma(&h, slot->buf, pa, size);
+    const Result rc = StartFrameDma(&h, slot->buf, sc, pa, fmt, stride, size);
     if (R_FAILED(rc))
     {
         g_dmaStartRc = rc;
         Drop(DROP_DMA_START, sc, rc);
-        return;
+        return CAP_UNREADABLE;
     }
     slot->dma = h;
     slot->screen = (u8)sc;
@@ -2809,6 +2867,7 @@ static void Capture(int sc, u32 pa, u32 fmt, u32 stride, u32 timeUs, bool isStat
     if (running + 1 > g_dmaMaxRunning)
         g_dmaMaxRunning = running + 1;
     LightEvent_Signal(&g_convEvent);
+    return CAP_QUEUED;
 }
 
 typedef struct {
@@ -2820,6 +2879,7 @@ typedef struct {
     bool hasCap;
     u8 throttleN;               /* capture slots while throttled */
     bool pend;                  /* a swap since the last capture slot that was not captured */
+    bool busy;                  /* that swap's capture found the slots busy: it is tried again */
     bool precise;               /* that swap was seen within a poll of happening (lastNewUs is its time) */
     u64 swapGapUs;              /* time between the last two swaps */
 } Track;
@@ -2973,7 +3033,8 @@ static u32 PollScreens(void)
         Track *t = &g_track[sc];
         const u32 fps = sc == 1 ? bottomFps : g_cfg.fps;
         const u32 gapUs = 1000000u / fps - (fps > 12u ? 8000u : 0u);   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
-        if (fmt != t->lastFmt || stride != t->lastStride || IsVram(cur) != t->vram)   /* a mode change (800 px, 3D, a program's own) */
+        const bool modeChanged = fmt != t->lastFmt || stride != t->lastStride || IsVram(cur) != t->vram;
+        if (modeChanged)   /* a mode change (800 px, 3D, a program's own) */
         {
             t->lastFmt = fmt;
             t->lastStride = stride;
@@ -2983,7 +3044,8 @@ static u32 PollScreens(void)
                 Log("%s screen: format %03lX stride %lu at %s pa %08lX, %lu s", sc ? "bottom" : "top", fmt, stride,
                     IsVram(cur) ? "VRAM" : "FCRAM", cur, (u32)(nowUs / 1000000u));
         }
-        const bool isNew = cur != t->lastAddr || sel != t->lastSel;
+        /* a new mode on the same buffer is a new picture too (taken once it has settled) */
+        const bool isNew = modeChanged || cur != t->lastAddr || sel != t->lastSel;
         if (isNew)
         {
             if (t->hasCap && nowUs - t->lastRealUs < TORN_US)
@@ -2993,6 +3055,7 @@ static u32 PollScreens(void)
             t->swapGapUs = nowUs - t->lastNewUs;
             t->lastNewUs = nowUs;
             t->pend = true;
+            t->busy = false;
             t->precise = nowUs - g_lastPollUs <= POLL_REC_US * 3u / 2u;
             if (sc == 0 && !IsVram(cur))
             {
@@ -3020,7 +3083,7 @@ static u32 PollScreens(void)
         const u32 phase = (u32)((nowUs - t->lastNewUs) % VBLANK_US);
         const bool late = !isNew && t->pend && t->precise && t->hasCap && nowUs - t->lastCapUs >= 1000000u / fps &&
                           phase >= LATE_AFTER_US && phase <= VBLANK_US - LATE_BEFORE_US;
-        if (!(due && (isNew || isStatic || late)))
+        if (!(due && capture_trigger(isNew, isStatic, late, t->pend, nowUs - t->lastNewUs, STATIC_GAP_US)))
             continue;
         if (t->hasCap && nowUs - t->modeUs < MODE_SETTLE_US)
             continue;   /* the screen's mode just changed: let it settle */
@@ -3037,7 +3100,9 @@ static u32 PollScreens(void)
         }
         t->lastCapUs = nowUs;
         t->hasCap = true;
+        const bool retry = t->busy && !isNew;
         t->pend = false;
+        t->busy = false;
         /* a bottom screen already at its own low rate (bottom_fps) gives up no more frames when the
            card is behind, only when the ring is nearly full: it costs little, and 5 fps would become 2 */
         const bool lowBottom = sc == 1 && bottomFps < g_cfg.fps;
@@ -3075,8 +3140,14 @@ static u32 PollScreens(void)
             g_bottomGap++;
             continue;   /* top screen first, but the bottom keeps 10 fps */
         }
-        t->lastRealUs = nowUs;
-        Capture(sc, cur, fmt, stride, (u32)nowUs, isStatic);
+        /* busy: the swap stays pending, taken at the next chance (late, or once the screen has been
+           still for STATIC_GAP_US): a game that stopped drawing kept an older picture in the video
+           until its next swap (from the Yu edition, Yu08083/3ds-recorder, 2026-11-21) */
+        const CapResult cap = Capture(sc, cur, fmt, stride, (u32)nowUs, isStatic, retry);
+        if (cap == CAP_QUEUED)
+            t->lastRealUs = nowUs;
+        else if (cap == CAP_BUSY && !isStatic)
+            t->pend = t->busy = true;
     }
     g_lastPollUs = nowUs;
     /* a game faster than the recording: every poll, so its swaps' times are known (late captures) */
@@ -3950,6 +4021,8 @@ static void UpdateBoost(void)
 #define PLG_BY_US_FS    DIR_FS "/.plugin_loader_on"   /* the recorder turned the plugin loader on */
 #define USER_PARAM_MAGIC 0x53524550u                    /* "PERS", Rosalina plgloader.c */
 #define ORDER_RESUME     0x52455331u                    /* config[0]: a recording was running ("RES1") */
+#define ORDER_OWNER      0x52454359u                    /* config[1]: written by the recorder ("YCER"), config[2]: the title */
+#define ORDER_TMP_FS     DIR_FS "/.launcher_order.tmp"  /* written whole, then renamed to user_param.bin */
 
 /* Rosalina's PluginLoadParameters (sysmodules/rosalina/include/plugin/plgldr.h) */
 typedef struct {
@@ -4108,6 +4181,49 @@ static int ReadUserParam(u32 *tidLow, bool *resume)
     return ok ? 1 : -1;
 }
 
+/* The game has a 3GX plugin of the user's own: /luma/plugins/default.3gx, or a .3gx in
+   /luma/plugins/<title id>/ (where Rosalina looks). Our launcher order would load our plugin
+   instead of it (cheats, CTRPF menus, mods gone for that game): no order then, the recording
+   runs in the light profile. Unsure (an SD error, a long folder): taken as yes.
+   From the Yu edition (Yu08083/3ds-recorder, 2026-11-21). */
+static bool GameHasPlugin(u64 tid)
+{
+    Handle h = 0;
+    Result rc = FSUSER_OpenFile(&h, g_sd, fsMakePath(PATH_ASCII, "/luma/plugins/default.3gx"), FS_OPEN_READ, 0);
+    if (R_SUCCEEDED(rc))
+    {
+        FSFILE_Close(h);
+        return true;
+    }
+    if (R_SUMMARY(rc) != RS_NOTFOUND)
+        return true;
+    char path[48];
+    snprintf(path, sizeof(path), "/luma/plugins/%016llX", tid);
+    rc = FSUSER_OpenDirectory(&h, g_sd, fsMakePath(PATH_ASCII, path));
+    if (R_FAILED(rc))
+        return R_SUMMARY(rc) != RS_NOTFOUND;
+    bool found = false;
+    u32 scanned = 0, n = 0;
+    FS_DirectoryEntry e;
+    while (scanned < 32 && R_SUCCEEDED(rc = FSDIR_Read(h, &n, 1, &e)) && n)
+    {
+        scanned++;
+        if ((e.attributes & FS_ATTRIBUTE_DIRECTORY) || e.name[0] == '.')
+            continue;
+        u32 len = 0;
+        while (len < sizeof(e.name) / sizeof(e.name[0]) && e.name[len])
+            len++;
+        if (len > 4 && e.name[len - 4] == '.' && e.name[len - 3] == '3' && (e.name[len - 2] | 0x20) == 'g' &&
+            (e.name[len - 1] | 0x20) == 'x')
+        {
+            found = true;
+            break;
+        }
+    }
+    FSDIR_Close(h);
+    return found || R_FAILED(rc) || scanned == 32;
+}
+
 /* At start: in which memory mode, whether the launcher plugin started us; removes our order.
    True: a recording ran when the game rebooted the console, so it goes on. */
 static bool AfterReboot(void)
@@ -4202,6 +4318,11 @@ static void WriteGameOrder(bool wasRecording)
         g_order.skip = USER_PARAM_FS " belongs to another program";
         return;
     }
+    if (GameHasPlugin(g_order.tid))
+    {
+        g_order.skip = "the game has its own plugin (kept; the recording runs in the light profile)";
+        return;
+    }
     struct { u32 magic; PluginLoadParams p; } buf;
     memset(&buf, 0, sizeof(buf));
     buf.magic = USER_PARAM_MAGIC;
@@ -4213,19 +4334,33 @@ static void WriteGameOrder(bool wasRecording)
     buf.p.persistent = 0;
     buf.p.lowTitleId = (u32)g_order.tid;
     buf.p.config[0] = wasRecording ? ORDER_RESUME : 0;
+    buf.p.config[1] = ORDER_OWNER;   /* MapPluginMemory maps only a plugin started by this order */
+    buf.p.config[2] = (u32)g_order.tid;
     snprintf(buf.p.path, sizeof(buf.p.path), "%s", LAUNCH_3GX_FS);
     FSUSER_CreateDirectory(g_sd, fsMakePath(PATH_ASCII, "/luma/plugins"), 0);
-    const FS_Path p = fsMakePath(PATH_ASCII, USER_PARAM_FS);
-    FSUSER_DeleteFile(g_sd, p);
+    /* written whole to a file of ours first, then renamed: a power-off while writing leaves no
+       half order for Rosalina (from the Yu edition) */
+    const FS_Path tmp = fsMakePath(PATH_ASCII, ORDER_TMP_FS);
+    FSUSER_DeleteFile(g_sd, tmp);
     Handle f = 0;
-    g_order.rc = FSUSER_OpenFile(&f, g_sd, p, FS_OPEN_WRITE | FS_OPEN_CREATE, 0);
+    g_order.rc = FSUSER_OpenFile(&f, g_sd, tmp, FS_OPEN_WRITE | FS_OPEN_CREATE, 0);
     if (R_SUCCEEDED(g_order.rc))
     {
         g_order.rc = FSFILE_Write(f, &g_order.done, 0, &buf, sizeof(buf), FS_WRITE_FLUSH);
-        FSFILE_Close(f);
+        const Result closed = FSFILE_Close(f);
+        if (R_SUCCEEDED(g_order.rc))
+            g_order.rc = closed;
+    }
+    if (R_SUCCEEDED(g_order.rc) && g_order.done == sizeof(buf))
+    {
+        FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
+        g_order.rc = FSUSER_RenameFile(g_sd, tmp, g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
     }
     if (R_FAILED(g_order.rc) || g_order.done != sizeof(buf))
+    {
+        FSUSER_DeleteFile(g_sd, tmp);
         g_order.skip = "writing failed";
+    }
 }
 
 /* After the recording is saved: the log line, and the plugin loader on if it is off. */
@@ -4757,15 +4892,16 @@ static void EarlyLoader(void)
     bool resume = false;
     if (!g_bootStart || !g_sd || mode == 0 || mode >= 6 || ReadUserParam(&tidLow, &resume) <= 0)
         return;
-    if (NoPlugin(tidLow))   /* the game needs all of its memory: the order is taken back */
+    const bool own = GameHasPlugin(0x0004000000000000ull | tidLow);
+    if (NoPlugin(tidLow) || own)   /* the game needs all of its memory, or has its own plugin: the order is taken back */
     {
         u32 tries = 0;
         bool ok = false;
         for (; tries < 60 && !(ok = PluginOrderCancel()); tries++)   /* Rosalina's port: see below */
             svcSleepThread(100 * 1000 * 1000);
         FSUSER_DeleteFile(g_sd, fsMakePath(PATH_ASCII, USER_PARAM_FS));
-        Log("start with the console in memory mode %lu: game %08lX needs all of its memory: launcher order taken back (%s, %lu tries)",
-            mode, tidLow, ok ? "ok" : "FAILED: the plugin may still go in", tries);
+        Log("start with the console in memory mode %lu: game %08lX %s: launcher order taken back (%s, %lu tries)",
+            mode, tidLow, own ? "has its own plugin" : "needs all of its memory", ok ? "ok" : "FAILED: the plugin may still go in", tries);
         return;
     }
     /* Rosalina makes its port once mcu is up (its main(): LumaConfig_LoadMcuConfig before the
@@ -4989,8 +5125,12 @@ static bool MapPluginMemory(void)
         magic = h[0];
         heapVa = h[2];
         heapSize = h[3];
+        /* PluginHeader.config (+0x80) is our order's config: our plugin, not one of the user's */
+        const bool ours = h[0x80 / 4 + 1] == ORDER_OWNER && h[0x80 / 4 + 2] == g_plgTid;
         svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, PLG_HDR_VA, 0x1000u);
-        if (magic != PLG_MAGIC || heapSize < MB || heapSize > 16u * MB || (heapVa & 0xFFFu))
+        if (!ours)
+            Log("plugin in game %08lX was not started by our order: its memory is left alone", g_plgTid);
+        if (!ours || magic != PLG_MAGIC || heapSize < MB || heapSize > 16u * MB || (heapVa & 0xFFFu))
             rc = -1;
         else
             /* MAPEXFLAGS_PRIVATE: mapped like our own heap (0xBB05), so FS writes and DMA accept it */
@@ -5294,7 +5434,8 @@ static bool StartRecordingAs(bool replay)
     g_huffIn = g_huffOut = 0;
     g_torn[0] = g_torn[1] = 0;
     g_launchHeld = g_unsettled = g_bottomGap = 0;
-    g_notAppSkips = g_skipLoggedN = 0;
+    g_notAppSkips = g_skipLoggedN = g_ctrpfFrames = 0;
+    memset(&g_paBackoff, 0, sizeof(g_paBackoff));
     /* the overhang only in the normal profile: the light ones have no memory to spare */
     const u32 over = lite && !g_inPlg ? 0u : RingOver();   /* the plugin's: mirrored, no memory */
     /* 8 MB rides out ~3 s of SD stall at 2.5 MB/s */
@@ -5565,10 +5706,10 @@ static void LogDrops(void)
 {
     Log("video drops: ring full %lu, no free slot %lu, DMA timeout %lu, DMA error %lu, DMA start failed %lu (last rc %08lX), "
         "slots busy %lu, DMA limit %lu (most running at once %lu); not taken: program starting %lu, screens unsettled %lu, "
-        "bottom behind the top %lu, not the application's memory %lu; encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
+        "bottom behind the top %lu, not the application's memory %lu (CTRPF menu frames read %lu); encode avg %lu / %lu us, max %lu / %lu us, over 33 ms %lu / %lu (top / bottom); %s",
         g_drops[DROP_RING], g_drops[DROP_NO_SLOT], g_drops[DROP_DMA_TIMEOUT], g_drops[DROP_DMA_ERROR],
         g_drops[DROP_DMA_START], (u32)g_dmaStartRc, g_drops[DROP_SLOTS_BUSY], g_drops[DROP_DMA_LIMIT], g_dmaMaxRunning,
-        g_launchHeld, g_unsettled, g_bottomGap, g_notAppSkips,
+        g_launchHeld, g_unsettled, g_bottomGap, g_notAppSkips, g_ctrpfFrames,
         g_shared.framesTop ? (u32)(g_encodeSumUs[0] / g_shared.framesTop) : 0,
         g_shared.framesBot ? (u32)(g_encodeSumUs[1] / g_shared.framesBot) : 0, g_encodeMaxUs[0], g_encodeMaxUs[1],
         g_encodeSlow[0], g_encodeSlow[1], CpuState());

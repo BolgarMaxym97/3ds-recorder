@@ -237,6 +237,7 @@ const char *const TEXT_JA[S_COUNT] = {
     [S_PLAY_FAILED] = "録画を開けませんでした。",
     [S_MSG_NO_DSP] = "このプレーヤーでは音が出ません。本体のDSPファームウェアがダンプされていません。DSP1を一度起動してください（/3ds/dspfirm.cdcが保存されます）。録画自体には音が入っています。",
     [S_MSG_START_OLD_LUMA] = "レコーダーを起動できませんでした（%s、%08lX）。Luma3DSを最新版に更新してから、もう一度お試しください。",
+    [S_MSG_START_NAND_LUMA] = "レコーダーを起動できませんでした（%s、%08lX）。Luma3DSが本体のメモリーから起動しているため、レコーダーをそこで探しています。最新版Luma3DSのboot.firmをSDカードのルートにコピーし、本体を再起動してから、もう一度お試しください。",
     [S_PL_SEEK] = "±10秒",
     [S_PL_PAUSE] = "一時停止",
     [S_PL_BACK] = "ギャラリー",

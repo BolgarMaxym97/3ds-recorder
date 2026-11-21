@@ -56,6 +56,9 @@ turned on or restarts, with Replay as you left it, and you never have to open th
   copy recordings to a computer: the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) makes the MP4 in
   the browser much faster than the console, and the file is not uploaded anywhere.
 - `.r3d` is this recorder's own format, not RED's: video editors do not open it, use the MP4.
+- **On a computer, in high quality:** the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) also makes bigger, sharper videos (2× or 3×), one
+  screen or both side by side, for YouTube or for editing. Need DNxHR, a lossless file or one file per screen: the
+  r3d2video program. Both ways: [pc-converter.md](pc-converter.md).
 - **Work With Lid Closed** (Settings → App, on at first): while the app converts, joins recordings or saves Replay
   clips, close the lid — the screens go dark, the work goes on, and the console sleeps once everything is done (or when
   the battery is nearly empty).
@@ -99,6 +102,9 @@ they start and when they close. A New 3DS does not restart for them.
   smooth there (about 12 frames a second in Pokémon Ultra Moon, 18 in Smash Bros). Recording only the top screen
   (Settings → Recording → Screens → Top) makes it smoother.
 - When such a game closes, the recording is saved; open 3DS Recorder to record again, or use Launch On Startup.
+- **A game with its own plugin** (a `.3gx` in `/luma/plugins/<title id>/`, or `/luma/plugins/default.3gx`): the
+  recorder leaves your plugin in place and loads none of its own. It still comes back in that game when it starts with
+  the console (Launch On Startup), with fewer frames, as in the next point.
 - Some games need every bit of that memory and crash with 2 MB less (Monster Hunter 4G, X and XX): the recorder loads
   no plugin into them, so they run as without it (unless Launch On Startup brought the recorder back with the
   console: it then records and keeps Replay in a smaller buffer, paused while the HOME Menu is open). A game that goes
@@ -106,13 +112,18 @@ they start and when they close. A New 3DS does not restart for them.
 
 ## Limits
 
+- **Plugin menus:** CTRPluginFramework menus are recorded. A 3GX plugin that draws its own screens elsewhere leaves
+  the game's last picture in the video while its menu is open.
+- **NTR streaming** competes with the recorder for the console: stop the recorder (or turn off Launch On Startup)
+  while you stream with NTR.
 - **DS and GBA games can't be recorded:** they run in a separate mode of the console.
 - **Long recordings** continue in a new file every 4 GB or every hour (a 1–2 second gap): the SD card's FAT32 limit.
 - **Fast 3D scenes on a slow SD card** may be recorded at a lower frame rate for a moment.
 - **Games that use nearly all of an Old 3DS's processor** (Yo-kai Watch, for one) leave the recorder little time:
   frames are thinned out evenly, the bottom screen's first (about 28 frames a second on top and 10 below there), and
   the game itself is not slowed.
-- On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: the left half.
+- On a New 3DS, the few games that use the **800-pixel wide top screen** are recorded at 400 pixels: the whole picture,
+  each two columns made one (a little softer).
 
 ## Removing it
 

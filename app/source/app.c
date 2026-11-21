@@ -359,12 +359,13 @@ void app_init(App *a, const char *selfPath)
     const bool autoStart = (!a->st.running || outdated) && a->lumaModules;
     if (a->cfg.guideSeen) /* else after the first run's language and guide (in its language) */
         tell_system_stop(a);
-    app_log("app: %s, lang %s, guide %s, module %s (state %lu, file %s), Luma modules %s, SD free %lu MB, "
+    app_log("app: %s, lang %s, guide %s, module %s (state %lu, file %s), Luma modules %s%s, SD free %lu MB, "
             "%lu recordings (%llu MB)%s",
             n3ds ? "New 3DS" : "Old 3DS", LANGS[a->cfg.lang].code, a->cfg.guideSeen ? "seen" : "first run",
             a->st.running ? "running" : "not running", (unsigned long)a->st.state,
             a->moduleFile == MODULE_SAME ? "same" : a->moduleFile == MODULE_DIFFERENT ? "different" : "missing",
-            a->lumaModules ? "on" : "OFF", (unsigned long)a->sdFreeMb, (unsigned long)a->files.count,
+            a->lumaModules ? "on" : "OFF", recorder_luma_sd_mode() ? "" : ", Luma STARTED FROM CTRNAND",
+            (unsigned long)a->sdFreeMb, (unsigned long)a->files.count,
             (unsigned long long)(a->files.bytes >> 20), outdated ? ", outdated module: restarting it" : "");
     if (autoStart) {
         /* The recorder was not running: the console has been turned on (or restarted) since it last
@@ -473,7 +474,7 @@ static bool run_pending(App *a)
     const int act = a->pending;
     a->pending = ACT_NONE;
     a->busy = NULL;
-    char buf[256];
+    char buf[512];   /* the longest message (S_MSG_START_NAND_LUMA, Ukrainian) is ~370 bytes */
     app_log("action %d done: rc %08lX, ok %d, step '%s'", act, (unsigned long)g_workRc, g_workOk, g_workStep);
     if (act == ACT_START) {
         g_infoModuleWanted = true; /* the module file may have been installed */
@@ -483,9 +484,12 @@ static bool run_pending(App *a)
             if (a->screen == SCR_FIRSTRUN)
                 go(a, SCR_PANEL, 0);
         } else {
-            /* C8804478 (FS: not found) from pm when it launched the module: seen on Luma 13.3.3,
-               gone after an update to 13.5.0 (field logs 2026-11-20, issue #4) */
-            snprintf(buf, sizeof(buf), T(g_workRc == (Result)0xC8804478 ? S_MSG_START_OLD_LUMA : S_MSG_START_FAILED),
+            /* C8804478 (FS: not found) from pm when it launched the module. Luma started from
+               CTRNAND looks for the module there, not on the SD card (recorder_luma_sd_mode); else
+               seen on Luma 13.3.3 and gone after an update (field logs 2026-11-20/21, issue #4) */
+            const bool notFound = g_workRc == (Result)0xC8804478;
+            snprintf(buf, sizeof(buf),
+                     T(!notFound ? S_MSG_START_FAILED : !recorder_luma_sd_mode() ? S_MSG_START_NAND_LUMA : S_MSG_START_OLD_LUMA),
                      g_workStep, (unsigned long)g_workRc);
             say(a, buf);
         }

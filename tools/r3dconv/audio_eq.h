@@ -12,6 +12,9 @@
  * matches it to the sample, test 2026-11-03).
  */
 #include <math.h>
+#ifndef M_PI   /* not in strict C11 on glibc / MinGW */
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdint.h>
 
 #define AUDIO_EQ_FREQ_HZ 4000.0

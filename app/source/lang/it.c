@@ -237,6 +237,7 @@ const char *const TEXT_IT[S_COUNT] = {
     [S_PLAY_FAILED] = "Impossibile aprire la registrazione.",
     [S_MSG_NO_DSP] = "Nessun audio in questo lettore: il firmware DSP della console non è stato estratto. Avvia DSP1 una volta (salva /3ds/dspfirm.cdc). Le registrazioni hanno comunque l’audio.",
     [S_MSG_START_OLD_LUMA] = "Impossibile avviare il registratore (%s, %08lX). Aggiorna Luma3DS all’ultima versione e riprova.",
+    [S_MSG_START_NAND_LUMA] = "Impossibile avviare il registratore (%s, %08lX). Luma3DS è stato avviato dalla memoria della console e cerca lì il registratore. Copia boot.firm dall’ultima versione di Luma3DS nella radice della scheda SD, riavvia la console e riprova.",
     [S_PL_SEEK] = "±10 s",
     [S_PL_PAUSE] = "Pausa",
     [S_PL_BACK] = "Galleria",

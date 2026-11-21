@@ -237,6 +237,7 @@ const char *const TEXT_DE[S_COUNT] = {
     [S_PLAY_FAILED] = "Die Aufnahme konnte nicht geöffnet werden.",
     [S_MSG_NO_DSP] = "Kein Ton in diesem Player: Die DSP-Firmware der Konsole wurde nicht gedumpt. Starte einmal DSP1 (es speichert /3ds/dspfirm.cdc). Die Aufnahmen selbst haben Ton.",
     [S_MSG_START_OLD_LUMA] = "Der Rekorder konnte nicht gestartet werden (%s, %08lX). Aktualisiere Luma3DS auf die neueste Version und versuche es erneut.",
+    [S_MSG_START_NAND_LUMA] = "Der Rekorder konnte nicht gestartet werden (%s, %08lX). Luma3DS wurde aus dem Konsolenspeicher gestartet und sucht den Rekorder dort. Kopiere boot.firm aus der neuesten Luma3DS-Version ins Hauptverzeichnis der SD-Karte, starte die Konsole neu und versuche es erneut.",
     [S_PL_SEEK] = "±10 s",
     [S_PL_PAUSE] = "Pause",
     [S_PL_BACK] = "Galerie",

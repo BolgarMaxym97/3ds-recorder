@@ -237,6 +237,7 @@ const char *const TEXT_ES[S_COUNT] = {
     [S_PLAY_FAILED] = "No se pudo abrir la grabación.",
     [S_MSG_NO_DSP] = "Sin sonido en este reproductor: no se ha volcado el firmware DSP de la consola. Ejecuta DSP1 una vez (guarda /3ds/dspfirm.cdc). Las grabaciones sí tienen sonido.",
     [S_MSG_START_OLD_LUMA] = "No se pudo iniciar la grabadora (%s, %08lX). Actualiza Luma3DS a la última versión y vuelve a intentarlo.",
+    [S_MSG_START_NAND_LUMA] = "No se pudo iniciar la grabadora (%s, %08lX). Luma3DS se inició desde la memoria de la consola, así que busca la grabadora allí. Copia boot.firm de la última versión de Luma3DS en la raíz de la tarjeta SD, reinicia la consola y vuelve a intentarlo.",
     [S_PL_SEEK] = "±10 s",
     [S_PL_PAUSE] = "Pausa",
     [S_PL_BACK] = "Galería",

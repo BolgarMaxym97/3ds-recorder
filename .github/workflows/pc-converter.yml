@@ -1,0 +1,92 @@
+# r3d2video: the .r3d -> high-quality video converter for computers (tools/r3d2video.py).
+# Tests it on Linux with a synthetic recording, builds a Windows zip (r3d2video.exe + r3dconv.exe),
+# and checks the zip on Windows. A published release gets the zip as one more asset.
+# Contributed by noctis1008-wq (fork noctis1008-wq/3ds-recorder, branch pc-converter).
+name: PC converter
+
+on:
+  push:
+    branches: [main]
+    paths: ['tools/r3d2video.py', 'tools/r3dconv/**', 'codec/**', 'tests/pcconv/**', '.github/workflows/pc-converter.yml']
+  pull_request:
+    paths: ['tools/r3d2video.py', 'tools/r3dconv/**', 'codec/**', 'tests/pcconv/**', '.github/workflows/pc-converter.yml']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg mingw-w64
+      - name: End-to-end test (every preset and layout)
+        run: bash tests/pcconv/run.sh
+      - name: r3dconv.exe (MinGW) and a sample recording for the Windows check
+        run: |
+          mkdir -p dist
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Icodec/include -static -o dist/r3dconv.exe \
+            tools/r3dconv/r3dconv.c codec/source/codec.c codec/source/huff.c -lm
+          cc -std=gnu11 -O2 -Icodec/include -o make_r3d tests/pcconv/make_r3d.c codec/source/codec.c -lm
+          ./make_r3d dist/sample.r3d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r3dconv-win
+          path: dist/*
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: r3dconv-win
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: r3d2video.exe
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --console --name r3d2video --distpath dist tools/r3d2video.py
+      - name: Check the exe on Windows
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          .\dist\r3d2video.exe --preset youtube --layout both --out check dist\sample.r3d
+          if (-not (Test-Path check\sample_youtube.mp4)) { throw "no output" }
+          .\dist\r3d2video.exe --preset resolve --layout split --out check dist\sample.r3d
+          if (-not (Test-Path check\sample_resolve_bottom.mov)) { throw "no split output" }
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item dist\r3d2video.exe, dist\r3dconv.exe pkg\
+          Copy-Item docs\pc-converter.md pkg\README.md
+          Copy-Item docs\pc-converter.ja.md pkg\README.ja.md
+          Copy-Item docs\pc-converter.uk.md pkg\README.uk.md
+          Compress-Archive -Path pkg\* -DestinationPath r3d2video-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r3d2video-windows
+          path: r3d2video-windows.zip
+
+  release-asset:
+    if: github.event_name == 'release'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: r3d2video-windows
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" r3d2video-windows.zip --clobber --repo "$GITHUB_REPOSITORY"

@@ -2,8 +2,8 @@
  * r3dconv — decodes a 3DS Recorder .r3d file into raw RGB24 video on stdout,
  * for ffmpeg (see tools/r3d2mp4.sh).
  *
- * Usage: r3dconv [--wav out.wav] <file.r3d> [fps]   (fps defaults to the file header, else 30)
- *        r3dconv --info [--wav out.wav] <file.r3d>  (summary only; with --wav: audio only)
+ * Usage: r3dconv [--layout L] [--wav out.wav] <file.r3d> [fps]   (fps defaults to the file header, else 30)
+ *        r3dconv --info [--layout L] [--wav out.wav] <file.r3d>  (summary only; with --wav: audio only)
  * --wav writes the recording's audio (R3DA, version 4) as a 16-bit stereo WAV
  * at the DSP rate, placed by timestamps (audio_place.h), padded with silence to
  * the length of the video. --repair first drops unfinished frames and
@@ -12,10 +12,15 @@
  * reordered quiet NSMB2 menu music). The WAV gets a treble cut like the
  * console's speaker path (audio_eq.h); --no-eq writes the DSP mix as recorded.
  * Output: width x height RGB24 frames at a constant rate, built from the
- * frame timestamps (a screen keeps its last picture until a new one arrives):
+ * frame timestamps (a screen keeps its last picture until a new one arrives).
+ * By default the layout follows what the file holds:
  *   both screens: 400 x 480, top above, bottom centred below
  *   bottom screen only: 400 x 240, centred
  *   top only:     400 x 240
+ * --layout picks one (for tools/r3d2video.py; exit code 3 if the file lacks a screen it needs):
+ *   both    400 x 480 as above        top     400 x 240, the top screen
+ *   bottom  320 x 240, the bottom screen at its own size
+ *   side    720 x 240, top on the left, bottom on the right
  * The size line "WxH fps" is printed to stderr before the frames.
  * Reading stops at the first unknown record (an unclosed file ends in stale
  * SD data, see codec/include/r3d_format.h).
@@ -30,6 +35,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 typedef struct {
     uint32_t cols, rows, n;
@@ -114,6 +123,10 @@ int main(int argc, char **argv)
     const char *wavPath = NULL;
     int repair = 0;   /* --repair: drop partial frames and re-sequence (recordings before the cache fix) */
     int useEq = 1;    /* --no-eq: no treble cut */
+    const char *layoutName = NULL;   /* --layout: both, top, bottom, side (default: what the file holds) */
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);   /* raw frames: no \n -> \r\n */
+#endif
     for (;;) {
         if (argc > argi && strcmp(argv[argi], "--info") == 0) {
             info = 1;
@@ -124,6 +137,9 @@ int main(int argc, char **argv)
         } else if (argc > argi && strcmp(argv[argi], "--repair") == 0) {
             repair = 1;
             argi++;
+        } else if (argc > argi + 1 && strcmp(argv[argi], "--layout") == 0) {
+            layoutName = argv[argi + 1];
+            argi += 2;
         } else if (argc > argi + 1 && strcmp(argv[argi], "--wav") == 0) {
             wavPath = argv[argi + 1];
             argi += 2;
@@ -132,7 +148,8 @@ int main(int argc, char **argv)
         }
     }
     if (argc <= argi) {
-        fprintf(stderr, "usage: %s [--info] [--repair] [--no-eq] [--wav out.wav] <file.r3d> [fps]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--info] [--repair] [--no-eq] [--layout both|top|bottom|side] [--wav out.wav] <file.r3d> [fps]\n",
+                argv[0]);
         return 2;
     }
     FILE *f = fopen(argv[argi], "rb");
@@ -151,7 +168,28 @@ int main(int argc, char **argv)
     }
     const int bottomOnly = fh.mode == R3D_MODE_FULL_BOTTOM;   /* 400 x 240, the bottom screen centred */
     const int both = fh.mode != R3D_MODE_FULL_TOP && !bottomOnly;
-    const uint32_t outW = 400, outH = both ? 480 : 240;
+    const int hasTop = !bottomOnly, hasBottom = both || bottomOnly;
+    /* where each screen goes; show* = 0: left out */
+    uint32_t outW = 400, outH = both ? 480 : 240, topX = 0, topY = 0, botX = 40, botY = both ? 240 : 0;
+    int showTop = hasTop, showBot = hasBottom;
+    if (layoutName) {
+        if (strcmp(layoutName, "both") == 0) {
+            outW = 400, outH = 480, topX = 0, topY = 0, botX = 40, botY = 240, showTop = showBot = 1;
+        } else if (strcmp(layoutName, "top") == 0) {
+            outW = 400, outH = 240, topX = topY = 0, showTop = 1, showBot = 0;
+        } else if (strcmp(layoutName, "bottom") == 0) {
+            outW = 320, outH = 240, botX = botY = 0, showTop = 0, showBot = 1;
+        } else if (strcmp(layoutName, "side") == 0) {
+            outW = 720, outH = 240, topX = topY = 0, botX = 400, botY = 0, showTop = showBot = 1;
+        } else {
+            fprintf(stderr, "unknown layout '%s' (both, top, bottom, side)\n", layoutName);
+            return 2;
+        }
+        if ((showTop && !hasTop) || (showBot && !hasBottom)) {
+            fprintf(stderr, "this recording has no %s screen (layout '%s')\n", showTop && !hasTop ? "top" : "bottom", layoutName);
+            return 3;
+        }
+    }
     fprintf(stderr, "%ux%u %u\n", outW, outH, fps);
 
     Screen scr[2] = { { 400, 240, 400 * 240, NULL, 0, 1, 0, 0 }, { 320, 240, 320 * 240, NULL, 0, 1, 0, 0 } };
@@ -251,11 +289,11 @@ int main(int argc, char **argv)
         if (!info) {
             while ((uint64_t)emitted * 1000000u / fps < rh.timeUs) {
                 memset(rgb, 0, (size_t)outW * outH * 3);
-                if (!bottomOnly) {
-                    put_screen(rgb, outW, &scr[0], 0, 0);
+                if (showTop) {
+                    put_screen(rgb, outW, &scr[0], topX, topY);
                 }
-                if (both || bottomOnly) {
-                    put_screen(rgb, outW, &scr[1], 40, both ? 240 : 0);
+                if (showBot) {
+                    put_screen(rgb, outW, &scr[1], botX, botY);
                 }
                 fwrite(rgb, 1, (size_t)outW * outH * 3, stdout);
                 emitted++;

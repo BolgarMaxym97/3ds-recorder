@@ -452,7 +452,7 @@
       if (fps === 0 || fps > 60) fps = 30;
       const bottomOnly = mode === MODE_FULL_BOTTOM; // 400 x 240, the bottom screen centred
       const both = mode !== MODE_FULL_TOP && !bottomOnly;
-      this.hdr = { fps, both, audio: audioRate !== 0, audioRate: audioRate || AUDIO_RATE_MHZ, width: 400, height: both ? 480 : 240 };
+      this.hdr = { fps, both, bottomOnly, audio: audioRate !== 0, audioRate: audioRate || AUDIO_RATE_MHZ, width: 400, height: both ? 480 : 240 };
       this.scr = [
         { cols: 400, px: new Uint16Array(400 * 240), needKey: true, seen: false, ox: 0, oy: 0, shown: !bottomOnly },
         { cols: 320, px: new Uint16Array(320 * 240), needKey: true, seen: false, ox: 40, oy: both ? 240 : 0, shown: both || bottomOnly },

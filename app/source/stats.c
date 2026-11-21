@@ -73,7 +73,7 @@ static void LoadState(void)
         if (!ok) {
             const u64 t = svcGetSystemTick() ^ (osGetTime() << 20);
             for (int i = 0; i < 5; i++)
-                bytes[i] = (u8)(t >> (i * 8) ^ t >> (i * 8 + 40));
+                bytes[i] = (u8)(t >> (i * 8) ^ t >> ((i * 8 + 40) & 63));   /* a shift of 64+ is undefined */
         }
         stats_id_encode(bytes, g_state.id);
         mkdir("sdmc:/3ds", 0777);
@@ -275,6 +275,16 @@ static void LogDumpDates(void)
         logged++;
     }
     closedir(d);
+    /* Luma writes its dumps with its own clock (2001-02-14 on a console at 2026-11-21, field logs
+       2026-11-21): app.log, just written through the system, gives that clock's "now" beside it */
+    u64 now = 0;
+    if (logged && R_SUCCEEDED(archive_getmtime(REC_APP_LOG, &now))) {
+        const time_t t = (time_t)now;
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        app_log("stats: app.log file dated %04d-%02d-%02d %02d:%02d:%02d (the same clock, now)", tm.tm_year + 1900,
+                tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
 }
 
 static void SendDump(void)

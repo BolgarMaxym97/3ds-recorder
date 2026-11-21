@@ -130,6 +130,40 @@ int main(void)
     CHECK(app_region_end(7, 0) - 0x20000000u == 0x0B200000u);
     CHECK(!app_limit_stuck(6, app_region_end(6, 0) - 0x20000000u));
 
+    /* a picture is taken: new swap, still VRAM refresh, late; a pending swap once it has stayed */
+    CHECK(capture_trigger(true, false, false, false, 0, 100000u));
+    CHECK(capture_trigger(false, true, false, false, 0, 100000u));
+    CHECK(capture_trigger(false, false, true, true, 0, 100000u));
+    CHECK(!capture_trigger(false, false, false, false, 500000u, 100000u));   /* nothing pending */
+    CHECK(!capture_trigger(false, false, false, true, 99999u, 100000u));     /* pending, not yet still */
+    CHECK(capture_trigger(false, false, false, true, 100000u, 100000u));     /* the game stopped drawing */
+
+    /* a CTRPluginFramework menu: RGB565, 480-byte rows, the top screen in 2D, whole screens */
+    CHECK(ctrpf_display_layout(0, 0x42, 480, 400 * 480));
+    CHECK(ctrpf_display_layout(1, 0x02, 480, 320 * 480));
+    CHECK(!ctrpf_display_layout(0, 0x02, 480, 400 * 480));   /* top not in the 2D mode */
+    CHECK(!ctrpf_display_layout(0, 0x41, 720, 400 * 720));   /* BGR8: a game's own */
+    CHECK(!ctrpf_display_layout(0, 0x42, 480, 400 * 480 - 1));
+    CHECK(!ctrpf_display_layout(2, 0x02, 480, 320 * 480));
+    CHECK(ctrpf_display_buffer(0, 0) == 0x06000000u && ctrpf_display_buffer(0, 1) == 0x0602EE00u);
+    CHECK(ctrpf_display_buffer(1, 0) == 0x0605DC00u && ctrpf_display_buffer(1, 1) == 0x06083400u);
+
+    /* a refused buffer is left alone a moment, the others not */
+    {
+        PaBackoff b = { { 0 }, { 0 } };
+        CHECK(!pa_backoff_active(&b, 0x20205490u, 0));
+        pa_backoff_set(&b, 0x20205490u, 500);
+        CHECK(pa_backoff_active(&b, 0x20205490u, 499));
+        CHECK(!pa_backoff_active(&b, 0x20205490u, 500));
+        CHECK(!pa_backoff_active(&b, 0x2024B9A0u, 100));   /* the game's other buffer goes on */
+        pa_backoff_set(&b, 0x20205490u, 900);              /* refused again: the same entry, later */
+        CHECK(pa_backoff_active(&b, 0x20205490u, 800));
+        for (uint32_t i = 1; i <= 4; i++)
+            pa_backoff_set(&b, 0x21000000u + i, 1000 + i);  /* more buffers than entries: the first to end goes */
+        CHECK(pa_backoff_active(&b, 0x21000004u, 1000));
+        CHECK(!pa_backoff_active(&b, 0x20205490u, 800));
+    }
+
     if (!g_fail)
         printf("test_front: ok\n");
     return g_fail;

@@ -404,8 +404,13 @@ static bool do_next_item(void)
             snprintf(name, sizeof(name), "%s", it->name);
     }
     GalItem copy = {0};
-    if (needInfo)
-        copy = *find(name);
+    if (needInfo) {   /* found under the same lock (a NULL here would be a list changed underneath) */
+        const GalItem *found = find(name);
+        if (found)
+            copy = *found;
+        else
+            name[0] = 0;
+    }
     LightLock_Unlock(&g_lock);
     if (!name[0])
         return false;

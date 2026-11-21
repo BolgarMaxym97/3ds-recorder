@@ -237,6 +237,7 @@ const char *const TEXT_ZH_HANS[S_COUNT] = {
     [S_PLAY_FAILED] = "无法打开录像。",
     [S_MSG_NO_DSP] = "此播放器没有声音：主机的DSP固件尚未提取。请运行一次DSP1（它会保存/3ds/dspfirm.cdc）。录像本身是有声音的。",
     [S_MSG_START_OLD_LUMA] = "无法启动录制器（%s，%08lX）。请将Luma3DS更新到最新版本，然后重试。",
+    [S_MSG_START_NAND_LUMA] = "无法启动录制器（%s，%08lX）。Luma3DS是从主机内存启动的，因此会在那里寻找录制器。请将最新版Luma3DS的boot.firm复制到SD卡根目录，重启主机后再试。",
     [S_PL_SEEK] = "±10秒",
     [S_PL_PAUSE] = "暂停",
     [S_PL_BACK] = "图库",

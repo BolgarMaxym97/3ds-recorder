@@ -237,6 +237,7 @@ const char *const TEXT_ZH_HANT[S_COUNT] = {
     [S_PLAY_FAILED] = "無法開啟錄影。",
     [S_MSG_NO_DSP] = "此播放器沒有聲音：主機的 DSP 韌體尚未提取。請執行一次 DSP1（會儲存 /3ds/dspfirm.cdc）。錄影本身是有聲音的。",
     [S_MSG_START_OLD_LUMA] = "無法啟動錄影器（%s，%08lX）。請將 Luma3DS 更新到最新版本，然後再試一次。",
+    [S_MSG_START_NAND_LUMA] = "無法啟動錄影器（%s，%08lX）。Luma3DS 是從主機記憶體啟動的，因此會在那裡尋找錄影器。請將最新版 Luma3DS 的 boot.firm 複製到 SD 卡根目錄，重新啟動主機後再試一次。",
     [S_PL_SEEK] = "±10 秒",
     [S_PL_PAUSE] = "暫停",
     [S_PL_BACK] = "圖庫",
