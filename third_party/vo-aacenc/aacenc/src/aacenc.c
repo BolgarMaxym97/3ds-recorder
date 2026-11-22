@@ -1,5 +1,6 @@
 /*
  ** Copyright 2003-2010, VisualOn, Inc.
+ ** Modified for 3DS Recorder: AAC samples in MP4 without empty fill elements (from Yu08083/3ds-recorder y02).
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
  ** you may not use this file except in compliance with the License.
@@ -328,6 +329,7 @@ VO_U32 VO_API voAACEncSetParam(VO_HANDLE hCodec, VO_S32 uParamID, VO_PTR pData)
 
 	switch(uParamID)
 	{
+	case VO_PID_AAC_MP4_ENCPARAM:
 	case VO_PID_AAC_ENCPARAM:  /* init aac encoder parameter*/
 		AacInitDefaultConfig(&config);
 		if(pData == NULL)
@@ -393,6 +395,7 @@ VO_U32 VO_API voAACEncSetParam(VO_HANDLE hCodec, VO_S32 uParamID, VO_PTR pData)
 		ret = AacEncOpen(hAacEnc, config);
 		if(ret)
 			return VO_ERR_AUDIO_UNSFEATURE;
+		hAacEnc->qcOut.omitRawFill = uParamID == VO_PID_AAC_MP4_ENCPARAM;
 		break;
 	case VO_PID_AUDIO_FORMAT:	/* init pcm channel and samplerate*/
 		AacInitDefaultConfig(&config);

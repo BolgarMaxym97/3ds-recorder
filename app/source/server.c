@@ -49,6 +49,10 @@ typedef struct {
     int err;                        /* errno of a failed send, for the log */
 } Client;
 
+/* Buttons In Video (mp4_inputs): the page draws the buttons when the browser makes the video */
+static volatile bool g_keys;
+void server_set_inputs(bool on) { g_keys = on; }
+
 static Thread g_thread;
 static volatile bool g_quit;
 static LightLock g_lock;
@@ -183,13 +187,14 @@ static char *rec_json(void)
             FSFILE_Close(f);
         }
     }
-    char *out = malloc(640);
+    char *out = malloc(768);
     if (out)
-        snprintf(out, 640,
+        snprintf(out, 768,
                  "{\"name\":\"%s\",\"size\":%llu,\"ms\":%lu,\"closed\":%s,\"both\":%s,\"audio\":%s,\"fps\":%u,"
-                 "\"ok\":%s,\"prep\":\"%s\",\"prepPct\":%d,\"mp4\":%llu,%s}",
+                 "\"keys\":%s,\"ok\":%s,\"prep\":\"%s\",\"prepPct\":%d,\"mp4\":%llu,%s}",
                  it.name, (unsigned long long)it.bytes, (unsigned long)it.durationMs, it.ended ? "true" : "false",
                  it.both ? "true" : "false", it.audio ? "true" : "false", (unsigned)it.fps,
+                 g_keys && it.inputs ? "true" : "false",
                  it.readable && it.bytes ? "true" : "false", prepName[ps], permille < 0 ? 0 : permille,
                  (unsigned long long)mp4, g_info);
     return out;

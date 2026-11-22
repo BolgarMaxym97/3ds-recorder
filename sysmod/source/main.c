@@ -96,14 +96,23 @@ static u32 g_block = BLOCK;           /* this recording's write block (BLOCK_LIT
 #define MAX_FILE       ((u64)g_cfg.maxFileMb * MB)   /* then the recording goes on in a new file */
 #define MIN_SD_FREE_MB 64u
 /* Replay buffer (config replay=on): the stream goes round in a file of a fixed size instead of a
-   growing one, so the card always holds the last half a minute and more; a hotkey makes a clip of
+   growing one, so the card always holds the last replay_sec seconds and more; a hotkey makes a clip of
    the last REPLAY_CLIP_US (r3d_format.h: R3dRingInfo). Two such files: a saved clip takes one away
    (renamed, nothing copied), the buffer goes on in the other while a new one is made.
-   256 MB: 30 s of both screens at up to 8.5 MB/s (a card takes ~5.4 on an Old 3DS). */
-#define REPLAY_BYTES    (256ull * MB)
-#define REPLAY_DATA_OFF BLOCK          /* the ring's data starts a write block into the file */
-#define REPLAY_CLIP_US  30000000ull
+   Its size: replay_sec of both screens at up to 8.5 MB/s (a card takes ~5.4 on an Old 3DS), in whole
+   REPLAY_STEPs: 30 s 256 MB, 15 s 128 MB, 1 min 512 MB, 2 min 1 GB, 5 min 2.5 GB (under FAT32's 4 GB).
+   REPLAY_BYTES / REPLAY_CLIP_US are the running buffer's (its length when it started); a file is made
+   for the length the settings have now (REPLAY_FILE_BYTES). */
 #define REPLAY_STEP     (16ull * MB)   /* a new file grows in steps this big (32 MB stalled the writer 1-1.5 s) */
+static u32 g_replaySecNow = 30;        /* the running buffer's clip length (replay_sec when it started) */
+static inline u64 ReplayBytesFor(u32 sec)
+{
+    const u64 b = ((u64)sec * 17u * MB / 2u + REPLAY_STEP - 1u) / REPLAY_STEP * REPLAY_STEP;
+    return b < 128ull * MB ? 128ull * MB : b;
+}
+#define REPLAY_BYTES    ReplayBytesFor(g_replaySecNow)
+#define REPLAY_DATA_OFF BLOCK          /* the ring's data starts a write block into the file */
+#define REPLAY_CLIP_US  ((u64)g_replaySecNow * 1000000ull)
 #define REPLAY_RETRY_US 3000000ull     /* between tries to start the buffer */
 #define REPLAY_BEAT_US  4000000ull     /* the app's beat older than this: the app is off the screen */
 #define MAX_REC_US      3600000000ull  /* a recording goes on in a new file after an hour: timeUs (32 bits) wraps at 71.6 min */
@@ -207,15 +216,23 @@ typedef struct {
     bool replay;     /* replay=on: the replay buffer runs whenever nothing else is recorded */
     u32 saveKey;     /* replay_hotkey: KEY_* mask that saves the buffer's last 30 s as a clip */
     bool autostart;  /* autostart=on: the recorder starts with the console (launch on startup, AutoApply) */
+    bool inputs;     /* inputs=on (the default): the buttons pressed go into the recording (R3DI, InputPoll) */
+    u32 replaySec;   /* replay_sec: a clip's length, 15 / 30 / 60 / 120 / 300 (ReplayBytes) */
+    bool mainBottom; /* main_screen=bottom: with both screens, the bottom one keeps its frames first (PollScreens) */
 } Config;
 
 static Config g_cfg = { .o3dsCore = -1, .launchHold = -1, .appMemFix = true, .ctrpf = true, .hotkey = KEY_R | KEY_SELECT, .fps = 30, .top = true, .bottom = true, .led = 2, .audio = true,
                         .audioDebug = false, .maxFileMb = REC_MAX_FILE_MB, .huff = false, .intra = false, .lossless = false, .c420 = -1, .codecArm = -1, .bench = false, .n3dsBoost = true, .abTest = false,
-                        .replay = false, .saveKey = KEY_X | KEY_SELECT,
+                        .replay = false, .saveKey = KEY_X | KEY_SELECT, .inputs = true, .replaySec = 30, .mainBottom = false,
 #ifdef REC_TESTBUILD
                         .n3dsTest = true,
 #endif
                       };
+
+/* main_screen: the screen that keeps its frames first (the top one unless the game is played on the
+   bottom one); the other is the second */
+static inline int SecondScreen(void) { return g_cfg.mainBottom ? 0 : 1; }
+
 
 static const char *ScreensName(void)
 {
@@ -778,6 +795,15 @@ static void LoadConfig(void)
         }
         else if (strcasecmp(p, "replay") == 0)
             g_cfg.replay = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "replay_sec") == 0)
+        {
+            const u32 r = (u32)atoi(v);
+            g_cfg.replaySec = r == 15 || r == 30 || r == 60 || r == 120 || r == 300 ? r : 30;
+        }
+        else if (strcasecmp(p, "inputs") == 0)
+            g_cfg.inputs = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(p, "main_screen") == 0)
+            g_cfg.mainBottom = strcasecmp(v, "bottom") == 0;
         else if (strcasecmp(p, "autostart") == 0)
             g_cfg.autostart = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "fps") == 0)
@@ -1053,7 +1079,9 @@ static bool   g_replay;
    the producer is idle. */
 typedef struct { u64 at, us; u32 timeUs; u8 screen; } KeyMark;
 #define KEYMARKS        256u
-#define KEYMARK_GAP_US  500000ull
+/* 128 marks a screen cover the clip with room to spare: 0.5 s apart up to 50 s, then a hundredth of it
+   (5 min: 3 s; a clip starts at a key frame not later than its length ago, they come every 4 s anyway) */
+#define KEYMARK_GAP_US  (g_replaySecNow <= 50u ? 500000ull : (u64)g_replaySecNow * 10000ull)
 /* In the replay buffer a screen gets a key frame at least this often, by time: XR32's come every
    KEYFRAME_EVERY frames, minutes apart on a screen that changes now and then, and a screen that
    does not change at all gets no frame (a clip must start at a key frame of each screen). */
@@ -1233,7 +1261,7 @@ static bool g_lidShut;
 
 /* ------------------------------------------------------------------ replay buffer's files */
 
-#define REPLAY_FILE_BYTES (REPLAY_DATA_OFF + REPLAY_BYTES)
+#define REPLAY_FILE_BYTES (REPLAY_DATA_OFF + ReplayBytesFor(g_cfg.replaySec))
 static const char *const REPLAY_FS[2] = { REC_DIR_FS "/.replay0.tmp", REC_DIR_FS "/.replay1.tmp" };
 static volatile bool g_rpReady[2];     /* the file is there at its full size */
 static u32    g_rpCur;                 /* the one the buffer uses (next) */
@@ -2273,12 +2301,17 @@ static void AudioMain(void *arg)
 /* Converter thread: queued audio frames and the periodic DSP snapshot into the ring. */
 static void DrainAudioImpl(void);
 
+static void DrainInputs(void);
+static volatile bool g_inOn;   /* this recording keeps the buttons (InputStart) */
+
 static void DrainAudio(void)
 {
     g_convInAudio = true;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (g_aq)
         DrainAudioImpl();
+    if (g_inOn)
+        DrainInputs();
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     g_convInAudio = false;
 }
@@ -2337,6 +2370,203 @@ static void DrainAudioImpl(void)
     RingCommit(adv);
     g_lastSnapUs = nowUs;
     g_dspSnaps++;
+}
+
+/* ------------------------------------------------------------------ the buttons (R3DI) */
+
+/*
+ * The buttons, the Circle Pad and the touch screen go into the recording, for an overlay the
+ * converters draw (codec/source/inputs.c). They come from the HID module's shared memory (hid:USER,
+ * a session only while recording): its rings hold the last 8 pad readings (~4 ms apart) and touch
+ * readings, so the main loop (2-20 ms) catches a quick tap. A sample is queued when the state
+ * changes (the stick by 3 steps or more) and once a second anyway (a Replay clip shows the state
+ * within a second of its start); the converter writes what is queued as R3DI records each round.
+ */
+#define HID_SHM_VA     0x10000000u
+#define INPUT_Q        256u
+#define INPUT_BEAT_US  1000000u
+typedef struct {
+    u32 us;
+    R3dInputSample s;   /* dtMs filled when written */
+} InputItem;
+static Handle    g_hidSrv, g_hidMem;
+static vu32     *g_hidShm;
+static InputItem g_inQ[INPUT_Q];
+static volatile u32 g_inHead, g_inTail;   /* main thread produces, converter / packer consumes */
+static u32       g_inPadId, g_inBeatUs, g_inSamples, g_inRecords, g_inLost;
+static R3dInputSample g_inLast;
+static bool      g_inHave;
+static Result    g_inRc;
+
+static void HidClose(void)
+{
+    if (g_hidShm)
+        svcUnmapMemoryBlock(g_hidMem, HID_SHM_VA);
+    g_hidShm = NULL;
+    if (g_hidMem)
+        svcCloseHandle(g_hidMem);
+    if (g_hidSrv)
+        svcCloseHandle(g_hidSrv);
+    g_hidMem = g_hidSrv = 0;
+}
+
+/* hid:USER GetIPCHandles: the shared memory (mapped read-only) and five events (not used: closed) */
+static Result HidOpen(void)
+{
+    Result rc = srvGetServiceHandle(&g_hidSrv, "hid:USER");
+    if (R_FAILED(rc))
+    {
+        g_hidSrv = 0;
+        return rc;
+    }
+    u32 *cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(0xA, 0, 0);
+    rc = svcSendSyncRequest(g_hidSrv);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)cmd[1];
+    if (R_SUCCEEDED(rc))
+    {
+        g_hidMem = cmd[3];
+        for (u32 i = 4; i <= 8; i++)
+            if (cmd[i])
+                svcCloseHandle(cmd[i]);
+        rc = svcMapMemoryBlock(g_hidMem, HID_SHM_VA, MEMPERM_READ, MEMPERM_DONTCARE);
+        if (R_SUCCEEDED(rc))
+            g_hidShm = (vu32 *)HID_SHM_VA;
+    }
+    /* the session no longer: hid:USER has few, and a game started later needs one; the shared memory
+       stays mapped (our handle keeps it) and HID updates it for every client */
+    if (g_hidSrv)
+        svcCloseHandle(g_hidSrv);
+    g_hidSrv = 0;
+    if (R_FAILED(rc))
+        HidClose();
+    return rc;
+}
+
+/* Recording start: the buttons on (inputs=on) when the HID shared memory is there. */
+static void InputStart(bool on)
+{
+    g_inOn = false;
+    g_inHead = g_inTail = 0;
+    g_inPadId = 8;
+    g_inBeatUs = 0;
+    g_inSamples = g_inRecords = g_inLost = 0;
+    g_inHave = false;
+    g_inRc = 0;
+    if (!on)
+        return;
+    if (!g_hidShm)
+        g_inRc = HidOpen();
+    g_inOn = g_hidShm != NULL;
+}
+
+static s8 StickAxis(s16 raw)
+{
+    if (raw > -8 && raw < 8)
+        return 0;   /* the stick at rest wanders a little */
+    s32 v = raw * 127 / 150;
+    return (s8)(v > 127 ? 127 : v < -127 ? -127 : v);
+}
+
+static bool InputChanged(const R3dInputSample *a, const R3dInputSample *b)
+{
+    const int dx = a->cx - b->cx, dy = a->cy - b->cy;
+    return a->keys != b->keys || a->tx != b->tx || a->ty != b->ty || dx > 2 || dx < -2 || dy > 2 || dy < -2 ||
+           (a->cx == 0) != (b->cx == 0) || (a->cy == 0) != (b->cy == 0);
+}
+
+/* Main thread, every loop while recording: the pad readings since the last poll. */
+static void InputPoll(void)
+{
+    const vu32 *m = g_hidShm;
+    const u32 id = m[4];
+    if (id > 7)
+        return;
+    const u32 nowUs = TicksToUs(Ticks() - g_recStartTick);
+    const u32 n = g_inPadId > 7 ? 1u : (id - g_inPadId) & 7u;
+    g_inPadId = id;
+    /* the touch ring: x, y and whether it is touched (not a bit of the pad's buttons: no touch was
+       ever recorded that way, O3DS 2026-11-22) */
+    const u32 tid = m[42 + 4];
+    const u32 touch = tid < 8 ? m[42 + 8 + tid * 2] : 0;
+    const bool touched = tid < 8 && (m[42 + 8 + tid * 2 + 1] & 1u);
+    const bool beat = nowUs - g_inBeatUs >= INPUT_BEAT_US;
+    for (u32 k = 0; k < (n ? n : beat ? 1u : 0u); k++)
+    {
+        const u32 e = (id - (n ? n - 1 - k : 0)) & 7u;
+        const u32 keys = m[10 + e * 4], cp = m[10 + e * 4 + 3];
+        R3dInputSample smp = {0, (u16)(keys & 0xFFFu), StickAxis((s16)(cp & 0xFFFFu)), StickAxis((s16)(cp >> 16)),
+                              R3D_TOUCH_NONE, R3D_TOUCH_NONE};
+        if (touched)
+        {
+            const u32 x = touch & 0xFFFFu, y = touch >> 16;
+            if (x < 320 && y < 240)
+                smp.tx = (u8)(x / 2), smp.ty = (u8)y;
+        }
+        if (g_inHave && !InputChanged(&smp, &g_inLast) && !(beat && k + 1 == (n ? n : 1u)))
+            continue;
+        const u32 head = g_inHead;
+        if (head - __atomic_load_n(&g_inTail, __ATOMIC_ACQUIRE) >= INPUT_Q)
+        {
+            g_inLost++;
+            continue;
+        }
+        const u32 back = (n ? n - 1 - k : 0) * 4000u;   /* the readings come ~4 ms apart */
+        u32 us = nowUs > back ? nowUs - back : 0;
+        if (g_inHave && (s32)(us - g_inBeatUs) < 0 && g_inSamples)
+            us = g_inBeatUs;   /* never before the sample queued last */
+        g_inQ[head % INPUT_Q] = (InputItem){us, smp};
+        __atomic_store_n(&g_inHead, head + 1, __ATOMIC_RELEASE);
+        g_inLast = smp;
+        g_inHave = true;
+        g_inBeatUs = us;
+        g_inSamples++;
+    }
+}
+
+/* Converter / packer (inside DrainAudio): the queued samples into the ring, R3D_INPUT_MAX a record. */
+static void DrainInputs(void)
+{
+    for (;;)
+    {
+        const u32 tail = g_inTail, head = __atomic_load_n(&g_inHead, __ATOMIC_ACQUIRE);
+        u32 n = head - tail;
+        if (!n)
+            return;
+        if (n > R3D_INPUT_MAX)
+            n = R3D_INPUT_MAX;
+        const u32 first = g_inQ[tail % INPUT_Q].us;
+        u32 k = 1;   /* a record spans at most 65 s (dtMs) */
+        while (k < n && g_inQ[(tail + k) % INPUT_Q].us - first < 65000000u)
+            k++;
+        n = k;
+        const u32 stored = (n * sizeof(R3dInputSample) + 15u) & ~15u;
+        u32 adv = 0;
+        R3dRecHeader *h = RingReserve(stored, &adv);
+        if (h)
+        {
+            R3dInputSample *o = (R3dInputSample *)(h + 1);
+            for (u32 i = 0; i < n; i++)
+            {
+                const InputItem *it = &g_inQ[(tail + i) % INPUT_Q];
+                o[i] = it->s;
+                o[i].dtMs = (u16)((it->us - first) / 1000u);
+            }
+            memset((u8 *)o + n * sizeof(R3dInputSample), 0, stored - n * sizeof(R3dInputSample));
+            h->magic = R3D_MAGIC_INPUT;
+            h->len = stored;
+            h->timeUs = first;
+            h->screen = R3D_STREAM_INPUT;
+            h->srcFormat = 0;
+            h->cols = (u16)n;
+            RingCommit(adv);
+            g_inRecords++;
+        }
+        else
+            g_inLost += n;
+        __atomic_store_n(&g_inTail, tail + n, __ATOMIC_RELEASE);
+    }
 }
 
 static volatile bool g_boosted;
@@ -2418,7 +2648,7 @@ static void ConverterStep(void)
            the bottom screen ran behind the top one. The top screen keeps its lead where frames
            are captured (PollScreens: the bottom one waits behind a busy top screen). */
         if (s->state == 2 && (!next || s->startTick < next->startTick ||
-                              (s->startTick == next->startTick && s->screen < next->screen)))
+                              (s->startTick == next->startTick && s->screen != SecondScreen())))
             next = s;
     }
     if (!next)
@@ -2662,37 +2892,70 @@ static bool RangeReadable(Handle proc, u32 va, u32 size)
     return true;
 }
 
+/* Where CTRPF's buffers are: Luma's GET_PA_FROM_VA walks the game's page tables without a lock and
+   took the kernel down while the plugin changed the game's memory, asked on every frame (O3DS
+   2026-11-22, Mario Kart 7 with its plugin's menu and the Replay buffer on), and again when asked
+   only when the menu flipped its two buffers. A plugin's buffers stay where they are while the game
+   runs, so each one is asked about once per game (its first page; the plugin's memory is one
+   block), at most every CTRPF_PROBE_TICKS while one is not known yet; then never again. */
+typedef struct
+{
+    u32 pid;
+    u32 pa[2][2];   /* [screen][buffer]: 0 not known (yet) */
+    u64 nextProbe;
+} CtrpfMap;
+static CtrpfMap g_ctrpfMap;
+#define CTRPF_PROBE_TICKS (5ull * SYSCLOCK_ARM11)
+
+static int CtrpfMatch(int sc, u32 pa)
+{
+    for (int i = 0; i < 2; i++)
+        if (g_ctrpfMap.pa[sc][i] && g_ctrpfMap.pa[sc][i] == pa)
+            return i;
+    return -1;
+}
+
 /* A frame of a CTRPluginFramework menu (front.h ctrpf_display_layout): read from the plugin's own
-   buffer in the game, at CTRPF_VA, only when that buffer is what the screen shows: each of its
-   pages is mapped in the game at exactly the displayed address and the ones after it (Luma
-   svcControlProcess, PROCESSOP_GET_PA_FROM_VA). Anything else: not read (DEAD0026). */
+   buffer in the game, at CTRPF_VA, when the screen shows that buffer's address (CtrpfMap).
+   Anything else: not read (DEAD0026). */
 static Result CtrpfDma(Handle *dma, u8 *dst, int sc, u32 pa, u32 fmt, u32 stride, u32 size, DmaConfig *cfg)
 {
     if (!g_cfg.ctrpf || !ctrpf_display_layout(sc, fmt, stride, size))
         return (Result)0xDEAD0026;
     if (!g_appPid && !FindApp())
         return (Result)0xDEAD0026;
+    sc = sc ? 1 : 0;
+    if (g_ctrpfMap.pid != g_appPid)
+        memset(&g_ctrpfMap, 0, sizeof(g_ctrpfMap)), g_ctrpfMap.pid = g_appPid;
+    int i = CtrpfMatch(sc, pa);
+    const bool unknown = !g_ctrpfMap.pa[sc][0] || !g_ctrpfMap.pa[sc][1];
+    const u64 now = Ticks();
+    if (i < 0 && (!unknown || now < g_ctrpfMap.nextProbe))
+        return (Result)0xDEAD0026;
     Handle app = 0;
     if (R_FAILED(svcOpenProcess(&app, g_appPid)))
         return (Result)0xDEAD0026;
-    enum { GET_PA_FROM_VA = 4 };
-    Result rc = (Result)0xDEAD0026;
-    for (unsigned i = 0; i < 2; i++)
+    if (i < 0)
     {
-        const u32 va = ctrpf_display_buffer(sc, i);
-        u32 got = 0;
-        if (R_FAILED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, va)) || got != pa)
-            continue;
-        bool whole = RangeReadable(app, va, size);
-        for (u32 page = (va & ~0xFFFu) + 0x1000u; whole && page < va + size; page += 0x1000u)
-            whole = R_SUCCEEDED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, page)) && got == pa + (page - va);
-        if (whole)
+        enum { GET_PA_FROM_VA = 4 };
+        g_ctrpfMap.nextProbe = now + CTRPF_PROBE_TICKS;
+        for (int k = 0; k < 2; k++)
         {
-            rc = svcStartInterProcessDma(dma, CUR_PROCESS_HANDLE, (u32)dst, app, va, size, cfg);
-            if (R_SUCCEEDED(rc) && g_recording && g_ctrpfFrames++ == 0)
-                Log("%s screen: a CTRPluginFramework menu, read from its buffer at %08lX (pa %08lX)", sc ? "bottom" : "top", va, pa);
+            const u32 va = ctrpf_display_buffer(sc, (unsigned)k);
+            u32 got = 0;
+            if (!g_ctrpfMap.pa[sc][k] && RangeReadable(app, va, 1) &&
+                R_SUCCEEDED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, va)))
+                g_ctrpfMap.pa[sc][k] = got;
         }
-        break;
+        i = CtrpfMatch(sc, pa);
+    }
+    Result rc = (Result)0xDEAD0026;
+    const u32 va = i < 0 ? 0 : ctrpf_display_buffer(sc, (unsigned)i);
+    if (va && RangeReadable(app, va, size))
+    {
+        rc = svcStartInterProcessDma(dma, CUR_PROCESS_HANDLE, (u32)dst, app, va, size, cfg);
+        if (R_SUCCEEDED(rc) && g_recording && g_ctrpfFrames++ == 0)
+            Log("%s screen: a CTRPluginFramework menu, read from its buffer at %08lX (pa %08lX)", sc ? "bottom" : "top", va, pa);
     }
     svcCloseHandle(app);
     return rc;
@@ -2887,7 +3150,7 @@ static Track g_track[2];
 
 static bool IsVram(u32 pa) { return pa >= VRAM_PA && pa < VRAM_PA + VRAM_SIZE; }
 #define THROTTLE_HARD_PCT 85u        /* ring this full: the bottom screen pauses */
-#define BOTTOM_MIN_GAP_US 100000u     /* behind a busy top screen the bottom still gets 10 fps */
+/* behind a busy main screen the second one still gets a frame every second_gap_us (front.h) */
 #define TORN_US           4000u       /* a swap this soon after a capture started: its DMA may read a frame being drawn */
 #define POLL_EARLY_US     3000u       /* wake this long before the next capture is due */
 /* No DMA from a screen this long after its mode changed: the game is setting its screens up then.
@@ -2919,8 +3182,9 @@ static u32 g_paceTicks;
 static u32 PaceRate(int sc)
 {
     const bool both = g_cfg.top && g_cfg.bottom;
-    const u32 cut = !both ? g_paceCut / 2u : sc == 1 ? g_paceCut * 2u / 3u : g_paceCut / 3u;
-    const u32 most = !both || sc == 0 ? PACE_FULL / 2u : PACE_FULL * 5u / 8u;
+    const bool second = sc == SecondScreen();
+    const u32 cut = !both ? g_paceCut / 2u : second ? g_paceCut * 2u / 3u : g_paceCut / 3u;
+    const u32 most = !both || !second ? PACE_FULL / 2u : PACE_FULL * 5u / 8u;
     return PACE_FULL - (cut < most ? cut : most);
 }
 
@@ -2983,7 +3247,7 @@ static bool LaunchHold(void)
 }
 static u32 g_launchHeld;   /* captures not taken: a program was starting (launch_hold) */
 static u32 g_unsettled;    /* captures not taken: both screens at one FCRAM address */
-static u32 g_bottomGap;    /* bottom-screen captures left for a busy top screen (BOTTOM_MIN_GAP_US) */
+static u32 g_bottomGap;    /* second-screen captures left for a busy main screen (second_gap_us) */
 
 /* Captures the screens that swapped (or a still VRAM one now and then). Returns how long the main
    loop may sleep: until shortly before the next capture is due, polling every POLL_REC_US from
@@ -3017,7 +3281,10 @@ static u32 PollScreens(void)
     }
     /* the bottom screen at its own, lower rate when both are recorded (bottom_fps): a still menu
        there takes no DMA and no encoding the top screen could use (issue #18) */
-    const u32 bottomFps = g_cfg.top && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : g_cfg.fps;
+    /* (main_screen=bottom: the top one is the second, at that rate) */
+    const bool bothScreens = g_cfg.top && g_cfg.bottom;
+    const int second = SecondScreen();
+    const u32 bottomFps = bothScreens && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : g_cfg.fps;
     const u32 fill = RingFill();
     u64 wakeUs = nowUs + 20000u;
     if (g_paced)
@@ -3031,7 +3298,7 @@ static u32 PollScreens(void)
         const u32 fmt = REG32(base + 0x70), sel = REG32(base + 0x78) & 1u, stride = REG32(base + 0x90);
         const u32 cur = sel ? b : a;
         Track *t = &g_track[sc];
-        const u32 fps = sc == 1 ? bottomFps : g_cfg.fps;
+        const u32 fps = sc == second ? bottomFps : g_cfg.fps;
         const u32 gapUs = 1000000u / fps - (fps > 12u ? 8000u : 0u);   /* 30 fps -> 25 ms: tolerates 60 Hz jitter */
         const bool modeChanged = fmt != t->lastFmt || stride != t->lastStride || IsVram(cur) != t->vram;
         if (modeChanged)   /* a mode change (800 px, 3D, a program's own) */
@@ -3105,7 +3372,7 @@ static u32 PollScreens(void)
         t->busy = false;
         /* a bottom screen already at its own low rate (bottom_fps) gives up no more frames when the
            card is behind, only when the ring is nearly full: it costs little, and 5 fps would become 2 */
-        const bool lowBottom = sc == 1 && bottomFps < g_cfg.fps;
+        const bool lowBottom = sc == second && bottomFps < g_cfg.fps;
         if (g_paced)
         {
             if (!lowBottom && !PaceTake(sc))
@@ -3125,8 +3392,8 @@ static u32 PollScreens(void)
             const bool hard = fill > g_ringSize / 100u * THROTTLE_HARD_PCT;
             const bool both = g_cfg.top && g_cfg.bottom;
             const bool skip = !both               ? ++t->throttleN % 2u != 0u
-                              : sc == 1 && lowBottom ? hard
-                              : sc == 1           ? hard || (g_bottomKeep == 1u ? ++t->throttleN % 2u != 0u
+                              : sc == second && lowBottom ? hard
+                              : sc == second      ? hard || (g_bottomKeep == 1u ? ++t->throttleN % 2u != 0u
                                                                         : ++t->throttleN % 3u == 0u)
                               : hard && ++t->throttleN % 2u != 0u;
             if (skip)
@@ -3135,10 +3402,10 @@ static u32 PollScreens(void)
                 continue;
             }
         }
-        if (sc == 1 && g_cfg.top && BusySlots(0) >= 2 && nowUs - t->lastRealUs < BOTTOM_MIN_GAP_US)
+        if (second_yields(sc == second, bothScreens, BusySlots(1 - second), nowUs - t->lastRealUs, second_gap_us(g_isNew3ds)))
         {
             g_bottomGap++;
-            continue;   /* top screen first, but the bottom keeps 10 fps */
+            continue;   /* the main screen first, the second keeps 10 fps (New 3DS) or 5 (Old 3DS) */
         }
         /* busy: the swap stays pending, taken at the next chance (late, or once the screen has been
            still for STATIC_GAP_US): a game that stopped drawing kept an older picture in the video
@@ -5001,11 +5268,13 @@ static bool RecordFits(const R3dRecHeader *h, u32 prevUs, bool haveTime, u64 at,
         return h->len < 64u * MB && at + sizeof(*h) + h->len <= size;
     if (m != R3D_MAGIC_FRAME && m != R3D_MAGIC_XFRAME && m != R3D_MAGIC_YFRAME && m != R3D_MAGIC_HFRAME &&
         m != R3D_MAGIC_QFRAME && m != R3D_MAGIC_CFRAME &&
-        m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END)
+        m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END && m != R3D_MAGIC_INPUT)
         return false;
     if (h->len > 2u * MB || at + sizeof(*h) + h->len > size)
         return false;
-    if (m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END && (h->screen & 0x3F) > 1)
+    if (m == R3D_MAGIC_INPUT && (h->len & 15u || h->cols == 0 || h->cols > R3D_INPUT_MAX || h->screen != R3D_STREAM_INPUT))
+        return false;
+    if (m != R3D_MAGIC_AUDIO && m != R3D_MAGIC_END && m != R3D_MAGIC_INPUT && (h->screen & 0x3F) > 1)
         return false;
     return !haveTime || (h->timeUs + 2000000u >= prevUs && h->timeUs <= prevUs + 60000000u);
 }
@@ -5461,6 +5730,10 @@ static bool StartRecordingAs(bool replay)
     /* New 3DS: ~60 MB of SYSTEM memory free with a game running (tester's logs, 2026-11-08); a
        bigger ring rides out a slow card's long spells (Flashback's notes: ~220 frames a minute lost
        on a SanDisk Ultra with ~3 MB, none with ~25 MB). 24 MB stays free for HOME and applets. */
+    /* the sound's queue before the ring: the ring takes what is left, and the sound went without when
+       little was (Mario Kart 7 with a CTRPF plugin, 5 MB less SYSTEM memory: the replay buffer's extra
+       buffers left none, "audio off (no memory)", O3DS 2026-11-22) */
+    void *aqFirst = !g_inPlg && g_cfg.audio && g_arena[0] && g_arena[1] && prevOk ? BigAlloc(g_aqCap * sizeof(AudioItem)) : NULL;
     static const u32 bigRings[] = { 24u * MB, 16u * MB };
     for (u32 i = 0; i < 2 && isN3ds && !lite && !g_ring && g_arena[0] && g_arena[1] && prevOk; i++)
         if ((g_ring = BigAllocChunked(bigRings[i] + over, 24u * MB)) != NULL)
@@ -5468,6 +5741,18 @@ static bool StartRecordingAs(bool replay)
     for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && prevOk; i++)
         if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i] + over)) != NULL)
             g_ringSize = ringSizes[i];
+    if (!g_ring && aqFirst && (u32)aqFirst + ((g_aqCap * sizeof(AudioItem) + 0xFFFu) & ~0xFFFu) == g_bigTop)
+    {
+        /* no ring beside the queue: the ring first, as before 1.6.0 (the sound then goes without
+           rather than the recording) */
+        u32 out = 0;
+        svcControlMemoryUnsafe(&out, (u32)aqFirst, g_bigTop - (u32)aqFirst, MEMOP_FREE, (MemPerm)0);
+        g_bigTop = (u32)aqFirst;
+        aqFirst = NULL;
+        for (u32 i = 0; i < sizeof(ringSizes) / sizeof(ringSizes[0]) && !g_ring && g_arena[0] && g_arena[1] && prevOk; i++)
+            if (ringSizes[i] <= ringMax && (g_ring = BigAlloc(ringSizes[i] + over)) != NULL)
+                g_ringSize = ringSizes[i];
+    }
     g_ringOver = !g_ring ? 0u : g_ringMirror ? over : !g_inPlg ? over : 0u;
     if (!g_ring)
     {
@@ -5483,7 +5768,7 @@ static bool StartRecordingAs(bool replay)
     memset(g_slots, 0, sizeof(g_slots));
     memset(g_track, 0, sizeof(g_track));
     g_lastPollUs = 0;
-    g_aq = !g_cfg.audio ? NULL : g_inPlg ? plgAq : BigAlloc(g_aqCap * sizeof(AudioItem));
+    g_aq = !g_cfg.audio ? NULL : g_inPlg ? plgAq : aqFirst ? aqFirst : BigAlloc(g_aqCap * sizeof(AudioItem));
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
     g_audioFrames = g_audioDropped = g_dspSnaps = g_dspOffPolls = 0;
@@ -5527,6 +5812,8 @@ static bool StartRecordingAs(bool replay)
     }
     g_allocated = replay ? REPLAY_FILE_BYTES : prepared ? g_prepReached : FIRST_ALLOC;
     g_replay = replay;
+    if (replay)
+        g_replaySecNow = g_cfg.replaySec;   /* the files were made for this length (ReplayPrepMain) */
     g_keyN = g_replayAgain = 0;
     for (int sc = 0; sc < 2; sc++)
     {
@@ -5552,6 +5839,7 @@ static bool StartRecordingAs(bool replay)
     g_appSwapUs = 0;
     g_appSwapSeen = false;
 
+    InputStart(g_cfg.inputs && !g_cfg.audioDebug);
     R3dFileHeader *fh = (R3dFileHeader *)g_ring;
     memset(fh, 0, sizeof(*fh));
     fh->magic = R3D_MAGIC_FILE;
@@ -5560,6 +5848,7 @@ static bool StartRecordingAs(bool replay)
     fh->mode = !g_cfg.bottom ? R3D_MODE_FULL_TOP : !g_cfg.top ? R3D_MODE_FULL_BOTTOM : R3D_MODE_FULL_BOTH;
     fh->fps = (u8)g_cfg.fps;
     fh->audioRate = g_aq ? R3D_AUDIO_RATE_MHZ : 0;
+    fh->flags = g_inOn ? R3D_FILE_INPUT : 0;
     g_recStartMs = osGetTime();
     fh->startTimeMs = g_recStartMs;
     g_fileHdr = *fh;
@@ -5583,12 +5872,13 @@ static bool StartRecordingAs(bool replay)
     }
     else
         LedRecording();
-    Log("%s started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, bottom fps %lu (0: same), audio %s, ring %lu KB, %s memory profile%s, "
-        "SYSTEM free %lu KB, SD free %lu MB, %s)",
+    Log("%s started (%sfile %llu MB%s, PDN_DSP_CNT %02X, fps %lu, %s, main screen %s, second screen fps %lu (0: same), audio %s, "
+        "buttons %s, ring %lu KB, %s memory profile%s, SYSTEM free %lu KB, SD free %lu MB, %s)",
         replay ? "replay buffer" : "recording", g_cfg.audioDebug ? "AUDIO DEBUG: no video, raw DSP polls; " : "", g_allocated / MB, prepared ? " prepared" : "",
-        *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, ScreensName(),
+        *(const volatile u8 *)PDN_DSP_CNT_VA, g_cfg.fps, ScreensName(), g_cfg.mainBottom ? "bottom" : "top",
         g_cfg.top && g_cfg.bottom && g_cfg.bottomFps && g_cfg.bottomFps < g_cfg.fps ? g_cfg.bottomFps : 0u,
-        g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_ringSize / KB, lite ? "light" : "normal",
+        g_aq ? "on" : g_cfg.audio ? "off (no memory)" : "off", g_inOn ? "on" : g_cfg.inputs ? "off (no HID)" : "off",
+        g_ringSize / KB, lite ? "light" : "normal",
         g_inPlg ? " in the launcher plugin's memory" : "",
         g_shared.sysFreeKb, sdFree,
         CpuState());
@@ -5744,14 +6034,15 @@ static void WriteEnd(void)
 /* HOME in a game that needs extra memory (Old 3DS): HOME Menu wants SYSTEM memory a moment after
    the button, sooner than the ring reaches the SD (0.5-2.6 s). The capture buffers, the previous
    frames and the audio queue go back at once (~1.9 MB, light profile); the ring follows when it is
-   written. Allocation order: arenas and previous frames, then the ring, then the audio queue. */
+   written. Allocation order: arenas and previous frames, the audio queue (since 1.6.0; or after the ring when
+   it did not fit first), then the ring. */
 static void ReleaseEncoderMemory(void *aq)
 {
     u32 out = 0;
     const u32 ringVa = (u32)g_ring;
     if (ringVa > g_bigLow)
         svcControlMemoryUnsafe(&out, g_bigLow, ringVa - g_bigLow, MEMOP_FREE, (MemPerm)0);
-    if (aq && (u32)aq < g_bigTop)
+    if (aq && (u32)aq > ringVa && (u32)aq < g_bigTop)   /* (a queue made before the ring went with the first part) */
     {
         svcControlMemoryUnsafe(&out, (u32)aq, g_bigTop - (u32)aq, MEMOP_FREE, (MemPerm)0);
         g_bigTop = (u32)aq;
@@ -5921,7 +6212,8 @@ static void StopRecording(const char *why, bool releaseFirst)
         ConvWaitOut();
     while (g_audioInPoll)   /* the audio thread sees g_recording == false from its next poll */
         svcSleepThread(1 * 1000 * 1000);
-    for (u32 i = 0; i < (releaseFirst ? 0u : 100u) && g_aq && g_aqTail != g_aqHead; i++)   /* queued audio into the ring */
+    for (u32 i = 0; i < (releaseFirst ? 0u : 100u) &&
+                    ((g_aq && g_aqTail != g_aqHead) || (g_inOn && g_inTail != g_inHead)); i++)   /* queued audio and buttons into the ring */
     {
         LightEvent_Signal(&g_convEvent);
         LightEvent_Signal(&g_packEvent);
@@ -5929,10 +6221,18 @@ static void StopRecording(const char *why, bool releaseFirst)
     }
     void *const aq = g_aq;
     g_aq = NULL;   /* the converter stops touching the ring for audio ... */
+    const bool hadInputs = g_inOn;
+    g_inOn = false;   /* ... and for the buttons ... */
     g_audioReserve = false;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     while (g_convInAudio)   /* ... once it leaves DrainAudio */
         svcSleepThread(1 * 1000 * 1000);
+    if (hadInputs || g_inRc)
+        Log("buttons: %s, %lu samples in %lu records (%lu KB), %lu lost", hadInputs ? "kept" : "no HID", g_inSamples,
+            g_inRecords, (g_inSamples * 8u + g_inRecords * 24u) / KB, g_inLost);
+    if (g_inRc)
+        Log("buttons: hid:USER refused (%08lX)", (unsigned long)g_inRc);
+    HidClose();   /* a session only while recording */
     bool ringDropped = false;
     u64 dropFrom = 0;
     if (releaseFirst && SlotsIdle() && StagesIdle())
@@ -6755,7 +7055,14 @@ int main(void)
         if (reloadPending && !g_recording)   /* never mid-recording: fps / screens / audio stay as they started */
         {
             reloadPending = false;
+            const u32 replaySecWas = g_cfg.replaySec;
             LoadConfig();
+            if (g_cfg.replaySec != replaySecWas)   /* another length: files of the new size (ReplayPrepare) */
+            {
+                g_rpReady[0] = g_rpReady[1] = false;
+                Log("replay length %lu s -> %lu s: files of %llu MB", replaySecWas, g_cfg.replaySec,
+                    ReplayBytesFor(g_cfg.replaySec) / MB);
+            }
             ArmSelect();
             AutoApply();
             g_replayFailed = false;
@@ -6776,6 +7083,8 @@ int main(void)
             continue;
         }
         LedTick();
+        if (g_inOn)
+            InputPoll();
         bool toggle = false;
         const u32 pad = ~REG32(PAD_VA) & 0xFFFu;
         if ((pad & g_cfg.hotkey) == g_cfg.hotkey)

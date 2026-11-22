@@ -41,4 +41,7 @@ ServerState server_start(const char *name, const char *lang, const char *version
 void server_stop(void);
 void server_stats(ServerStats *out);
 
+/* Buttons In Video: the phone page draws the buttons pressed when it makes the video itself. */
+void server_set_inputs(bool on);
+
 #endif

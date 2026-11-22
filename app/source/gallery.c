@@ -111,6 +111,7 @@ static void read_info(GalItem *it)
         it->bottomOnly = fh.mode == R3D_MODE_FULL_BOTTOM;
         it->audio = fh.audioRate != 0;
         it->clip = (fh.flags & R3D_FILE_CLIP) != 0;
+        it->inputs = (fh.flags & R3D_FILE_INPUT) != 0;
     }
     struct {
         R3dRecHeader h;
@@ -158,11 +159,12 @@ static int scan_keys(const char *name, int want, u16 *frame, void (*got)(int scr
             break;
         off += sizeof(h);
         const u32 m = h.magic;
-        if (m == R3D_MAGIC_PAD || m == R3D_MAGIC_AUDIO || m == R3D_MAGIC_DSPMEM) {
+        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME || m == R3D_MAGIC_XFRAME;
+        if (m == R3D_MAGIC_PAD || m == R3D_MAGIC_AUDIO || m == R3D_MAGIC_DSPMEM || m == R3D_MAGIC_INPUT ||
+            (m != R3D_MAGIC_FRAME && !delta && m != R3D_MAGIC_END && r3d_skippable(m, h.len))) {   /* the buttons, a newer type */
             off += h.len;
             continue;
         }
-        const bool delta = m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME || m == R3D_MAGIC_XFRAME;
         const u32 sc = h.screen & 0x3F;
         if ((m != R3D_MAGIC_FRAME && !delta) || sc > 1 || h.len > MAX_RECORD)
             break;
@@ -425,6 +427,7 @@ static bool do_next_item(void)
             it->both = copy.both;
             it->bottomOnly = copy.bottomOnly;
             it->clip = copy.clip;
+            it->inputs = copy.inputs;
             it->fps = copy.fps;
             it->durationMs = copy.durationMs;
             it->dropped = copy.dropped;

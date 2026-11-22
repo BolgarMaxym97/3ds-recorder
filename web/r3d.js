@@ -28,8 +28,11 @@
 
   const M = {
     FILE: 0x42443352, FRAME: 0x46443352, XFRAME: 0x58443352, YFRAME: 0x59443352, HFRAME: 0x48443352, QFRAME: 0x51443352, CFRAME: 0x43443352,
-    PAD: 0x50443352, AUDIO: 0x41443352, DSPMEM: 0x4d443352, END: 0x45443352,
+    PAD: 0x50443352, AUDIO: 0x41443352, DSPMEM: 0x4d443352, END: 0x45443352, INPUT: 0x49443352,
   };
+  const FILE_INPUT = 2;
+  // a record of a type this reader does not know that it may step over (r3d_format.h r3d_skippable)
+  const skippable = (magic, len) => (magic & 0xffffff) === 0x443352 && (len & 15) === 0 && len <= (1 << 20);
   const SCREEN_KEY = 0x40;
   const MODE_FULL_TOP = 3, MODE_FULL_BOTTOM = 5;
   const AUDIO_RATE_MHZ = 32728498;
@@ -394,6 +397,10 @@
       this.endUs = 0;        // the end record's time (the recording's length)
       this.lastFrameUs = 0;  // vfr: the last frame's time
       this.lastWritten = null;
+      // button presses (R3DI): InputTrack of web/inputs.js when it is loaded; inputsOn: the overlay is drawn
+      const I = typeof R3DInputs !== 'undefined' ? R3DInputs : (typeof require === 'function' ? require('./inputs.js') : null);
+      this.inputs = I ? new I.InputTrack() : null;
+      this.inputsOn = !!(opt && opt.inputs);
     }
 
     push(chunk) {
@@ -435,12 +442,16 @@
         if (h.magic === M.END) { if (h.timeUs > this.endUs) this.endUs = h.timeUs; this.done = true; break; }
         const delta = h.magic === M.XFRAME || h.magic === M.YFRAME || h.magic === M.HFRAME || h.magic === M.QFRAME ||
           h.magic === M.CFRAME;
-        const known = delta || h.magic === M.FRAME || h.magic === M.PAD || h.magic === M.AUDIO || h.magic === M.DSPMEM;
-        if (!known) { this.done = true; break; } // the end of a cut-off file
+        const known = delta || h.magic === M.FRAME || h.magic === M.PAD || h.magic === M.AUDIO || h.magic === M.DSPMEM ||
+          h.magic === M.INPUT;
+        // the end of a cut-off file; a newer record type is stepped over
+        if (!known && !skippable(h.magic, h.len)) { this.done = true; break; }
         const stored = delta ? (h.len + 15) & ~15 : h.len;
         if (h.magic === M.AUDIO && (h.len < h.cols * 4 || h.len > 4096)) { this.done = true; break; }
+        if (h.magic === M.INPUT && (h.len < h.cols * 8 || h.cols > 64 || (h.len & 15))) { this.done = true; break; }
         if (this.len - p - 16 < stored) return; // wait for the rest
-        if (h.magic !== M.PAD && h.magic !== M.DSPMEM) this.record(h, this.buf.subarray(p + 16, p + 16 + h.len));
+        if (h.magic === M.INPUT) this.input(h, this.buf.subarray(p + 16, p + 16 + h.len));
+        else if (known && h.magic !== M.PAD && h.magic !== M.DSPMEM) this.record(h, this.buf.subarray(p + 16, p + 16 + h.len));
         this.pos = p + 16 + stored;
       }
     }
@@ -452,7 +463,8 @@
       if (fps === 0 || fps > 60) fps = 30;
       const bottomOnly = mode === MODE_FULL_BOTTOM; // 400 x 240, the bottom screen centred
       const both = mode !== MODE_FULL_TOP && !bottomOnly;
-      this.hdr = { fps, both, bottomOnly, audio: audioRate !== 0, audioRate: audioRate || AUDIO_RATE_MHZ, width: 400, height: both ? 480 : 240 };
+      const inputs = (d.getUint8(19) & FILE_INPUT) !== 0;
+      this.hdr = { fps, both, bottomOnly, inputs, audio: audioRate !== 0, audioRate: audioRate || AUDIO_RATE_MHZ, width: 400, height: both ? 480 : 240 };
       this.scr = [
         { cols: 400, px: new Uint16Array(400 * 240), needKey: true, seen: false, ox: 0, oy: 0, shown: !bottomOnly },
         { cols: 320, px: new Uint16Array(320 * 240), needKey: true, seen: false, ox: 40, oy: both ? 240 : 0, shown: both || bottomOnly },
@@ -521,6 +533,19 @@
       s.seen = true;
       this.putScreen(s);
       if (!this.dirty) { this.dirty = true; this.dirtySince = h.timeUs; }
+    }
+
+    // button presses: kept for the overlay (web/inputs.js); with it on, a change is a new frame too
+    input(h, payload) {
+      if (!this.inputs) return;
+      const first = this.inputs.list.length;
+      this.inputs.add(h.timeUs, h.cols, payload);
+      if (!this.inputsOn || !this.vfr) return;
+      for (let i = first; i < this.inputs.list.length; i++) {
+        const t = this.inputs.list[i].us;
+        if (this.dirty && t >= this.dirtySince + 600000 / this.hdr.fps) this.emitVfr();
+        if (!this.dirty) { this.dirty = true; this.dirtySince = t; }
+      }
     }
 
     emitVfr() {
@@ -595,6 +620,34 @@
     }
   }
 
-  root.R3D = { Converter, xr32Decode };
+  // The recording's length (us) without decoding it: the end record in the file's last 32 bytes, or
+  // else (a cut-off file) the last record's time, walking the headers. read(off, len) -> Uint8Array.
+  async function probeLength(size, read) {
+    if (size >= 64) {
+      const t = await read(size - 32, 32), d = new DataView(t.buffer, t.byteOffset, t.length);
+      if (d.getUint32(0, true) === M.END) return d.getUint32(8, true);
+    }
+    const CH = 8 << 20;
+    let off = 32, last = 0, buf = new Uint8Array(0), bufOff = 32;
+    while (off + 16 <= size) {
+      if (off + 16 > bufOff + buf.length) { // the next header is past what was read
+        bufOff = off;
+        buf = await read(off, Math.min(CH, size - off));
+        if (buf.length < 16) break;
+      }
+      const d = new DataView(buf.buffer, buf.byteOffset + (off - bufOff), 16);
+      const magic = d.getUint32(0, true), len = d.getUint32(4, true), timeUs = d.getUint32(8, true);
+      if (magic === M.END) return timeUs;
+      const delta = magic === M.XFRAME || magic === M.YFRAME || magic === M.HFRAME || magic === M.QFRAME || magic === M.CFRAME;
+      const known = delta || magic === M.FRAME || magic === M.PAD || magic === M.AUDIO || magic === M.DSPMEM || magic === M.INPUT;
+      if (!known && !skippable(magic, len)) break;
+      if (len > (16 << 20)) break;
+      if (magic !== M.PAD && timeUs > last) last = timeUs;
+      off += 16 + (delta ? (len + 15) & ~15 : len);
+    }
+    return last;
+  }
+
+  root.R3D = { Converter, xr32Decode, probeLength };
   if (typeof module !== 'undefined') module.exports = root.R3D;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

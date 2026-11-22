@@ -66,6 +66,8 @@ static Rec make(uint8_t mode, uint32_t seconds, uint64_t startMs, int closed)
             put(&r, R3D_MAGIC_PAD, 4096, 0, 0);
         if (t == 600000u)
             put(&r, R3D_MAGIC_DSPMEM, 0x10000, t, R3D_STREAM_DSPMEM);
+        if (t % 500000u < 33333u)   /* the buttons (R3DI): copied, their times shifted like the rest */
+            put(&r, R3D_MAGIC_INPUT, 16, t + 2000u, R3D_STREAM_INPUT);
     }
     if (closed) {
         const struct { R3dRecHeader h; R3dEndInfo e; } end = {

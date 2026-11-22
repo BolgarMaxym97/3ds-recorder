@@ -1,5 +1,6 @@
 /*
  ** Copyright 2003-2010, VisualOn, Inc.
+ ** Modified for 3DS Recorder: AAC samples in MP4 without empty fill elements (from Yu08083/3ds-recorder y02).
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
  ** you may not use this file except in compliance with the License.
@@ -586,7 +587,9 @@ Word16 WriteBitstream (HANDLE_BIT_BUF hBitStream,
   Word16 elementUsedBits;
   Word16 frameBits=0;
 
-  UNUSED(ancBytes);
+  Word16 fillBits = qcOut->totFillBits;
+  if (qcOut->omitRawFill && !qcOut->qcElement.adtsUsed && !ancBytes && !qcOut->totAncBitsUsed)
+    fillBits = 0;
 
   /*   struct bitbuffer bsWriteCopy; */
   bitMarkUp = GetBitsAvail(hBitStream);
@@ -670,9 +673,7 @@ Word16 WriteBitstream (HANDLE_BIT_BUF hBitStream,
 
   }
 
-  writeFillElement(NULL,
-                   qcOut->totFillBits,
-                   hBitStream);
+  writeFillElement(NULL, fillBits, hBitStream);
 
   WriteBits(hBitStream,ID_END,3);
 
@@ -685,8 +686,8 @@ Word16 WriteBitstream (HANDLE_BIT_BUF hBitStream,
   frameBits = frameBits + *globUsedBits;
 
 
-  if (frameBits !=  (qcOut->totStaticBitsUsed+qcOut->totDynBitsUsed + qcOut->totAncBitsUsed +
-                     qcOut->totFillBits + qcOut->alignBits)) {
+  if (frameBits != ((qcOut->totStaticBitsUsed + qcOut->totDynBitsUsed + qcOut->totAncBitsUsed +
+                     fillBits + 7) & ~7)) {
     return(-1);
   }
   return(0);

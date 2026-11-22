@@ -65,17 +65,19 @@ static void *writer(void *job)
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <file.r3d> <out base> [--interrupt N] [--threads N]\n", argv[0]);
+        fprintf(stderr, "usage: %s <file.r3d> <out base> [--interrupt N] [--threads N] [--inputs 1]\n", argv[0]);
         return 2;
     }
-    int every = 0, threads = 1;
+    int every = 0, threads = 1, inputs = 0;
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--interrupt"))
             every = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--threads"))
             threads = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--inputs"))
+            inputs = atoi(argv[i + 1]);
     }
-    PrepOptions o = {0, 0, now_us, sleep_us, threads, run_jobs, NULL};
+    PrepOptions o = {0, 0, now_us, sleep_us, threads, run_jobs, NULL, inputs};
     char err[128];
     int opens = 0, r = PREP_MORE;
     const uint64_t t0 = now_us();
@@ -96,7 +98,9 @@ int main(int argc, char **argv)
             r = prep_consume(j);
             if (r == PREP_WAIT)
                 usleep(500);
-            if (r == PREP_DONE || r == PREP_ERROR || (every && ++calls >= every))
+            /* --interrupt counts the items handled, not the waits: a slow producer (the buttons drawn)
+               otherwise had every open stopped before its first resume point, for ever */
+            if (r == PREP_DONE || r == PREP_ERROR || (every && r != PREP_WAIT && ++calls >= every))
                 break;
         }
         prep_abort(j);
@@ -107,6 +111,8 @@ int main(int argc, char **argv)
                         "pwait %.0f disk %.0f | video %.0f write %.0f cwait %.0f ms\n",
                 s->frames, s->audioFrames, s->readMs, s->decodeMs, s->yuvMs, s->pcmMs, s->audioMs, s->checkpointMs,
                 s->produceWaitMs, s->diskMs, s->videoMs, s->writeMs, s->consumeWaitMs);
+        if (s->paramChanges)
+            fprintf(stderr, "SPS/PPS changed %u times (kept in their samples)\n", s->paramChanges);
         if (r == PREP_ERROR) {
             fprintf(stderr, "error: %s\n", prep_error(j));
             prep_close(j);

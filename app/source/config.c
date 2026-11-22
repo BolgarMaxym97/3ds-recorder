@@ -52,6 +52,10 @@ void config_load(Config *c)
     c->lidWork = true;
     c->mp4Slices = true;
     c->stats = true;
+    c->replaySec = 30;
+    c->mainBottom = false;
+    c->inputs = true;
+    c->mp4Inputs = false;
     snprintf(c->replayHotkey, sizeof(c->replayHotkey), "X+SELECT");   /* the module's default too */
     static char buf[MAX_FILE];
     if (!ReadAll(buf, sizeof(buf)))
@@ -104,6 +108,15 @@ void config_load(Config *c)
             c->mp4Slices = strcmp(v, "1") != 0;
         else if (strcasecmp(line, "replay_hotkey") == 0 && *v)
             snprintf(c->replayHotkey, sizeof(c->replayHotkey), "%s", v);
+        else if (strcasecmp(line, "replay_sec") == 0) {
+            const int r = atoi(v);
+            c->replaySec = r == 15 || r == 30 || r == 60 || r == 120 || r == 300 ? r : 30;
+        } else if (strcasecmp(line, "main_screen") == 0)
+            c->mainBottom = strcasecmp(v, "bottom") == 0;
+        else if (strcasecmp(line, "inputs") == 0)
+            c->inputs = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(line, "mp4_inputs") == 0)
+            c->mp4Inputs = strcasecmp(v, "on") == 0;
         else if (strcasecmp(line, "guide") == 0)
             c->guideSeen = strcasecmp(v, "done") == 0;
     }

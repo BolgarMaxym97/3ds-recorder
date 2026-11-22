@@ -51,6 +51,7 @@
       optLayout: 'Screens', layAuto: 'As recorded', layTop: 'Top', layBottom: 'Bottom', laySide: 'Side by side', optQuality: 'For', qNormal: 'Sharing', qHigh: 'YouTube', qEdit: 'Editing', qualityHint: 'YouTube: a higher bitrate (3× makes 1440p, which YouTube streams in better quality). Editing: every frame a keyframe at a high bitrate, for DaVinci Resolve and other editors; the file is much bigger.', pcTool: 'Need DNxHR for DaVinci Resolve, a lossless file or one file per screen?', pcToolLink: 'r3d2video for Windows',
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
       webm: 'This browser can only make WebM videos. For an MP4, open this page in Chrome, Edge or Safari.',
+      optInputs: "Buttons", inOff: "Hide", inOn: "Show", inputsHint: "The buttons pressed, beside the bottom screen or in a corner (recordings from 1.6.0 on).", qDiscord: "Discord", discordHint: "Discord: under 10 MB, the size Discord takes without Nitro.", discordLong: "Too long for 10 MB: the picture will be blurry. Below the video you can cut a shorter part.", noInputs: "This recording has no button presses: it was made before 1.6.0 or with Record Buttons off.", trimTitle: "Cut a part", trimStart: "Start here", trimEnd: "End here", trimGo: "Make this part", trimHint: "Play the video and pause where the part should start: “Start here”. Then where it should end: “End here”.", trimLabel: "part %1–%2",
     },
     uk: {
       mb: 'МБ', gb: 'ГБ', length: 'Тривалість', size: 'Розмір', eta: 'Час передачі', s1: 'Завантаження з консолі', s2: 'Робимо відео',
@@ -82,6 +83,7 @@
       optLayout: 'Екрани', layAuto: 'Як записано', layTop: 'Верхній', layBottom: 'Нижній', laySide: 'Поруч', optQuality: 'Для чого', qNormal: 'Поділитися', qHigh: 'YouTube', qEdit: 'Монтаж', qualityHint: 'YouTube: вищий бітрейт (3× дає 1440p, яке YouTube показує в кращій якості). Монтаж: кожен кадр ключовий і високий бітрейт, для DaVinci Resolve та інших редакторів; файл значно більший.', pcTool: 'Потрібен DNxHR для DaVinci Resolve, файл без втрат чи окремий файл для кожного екрана?', pcToolLink: 'r3d2video для Windows',
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
       webm: 'Цей браузер уміє робити лише відео WebM. Для MP4 відкрийте цю сторінку в Chrome, Edge чи Safari.',
+      optInputs: "Кнопки", inOff: "Сховати", inOn: "Показати", inputsHint: "Натиснуті кнопки збоку від нижнього екрана або в куті (записи з 1.6.0).", qDiscord: "Discord", discordHint: "Discord: до 10 МБ, скільки Discord приймає без Nitro.", discordLong: "Задовге для 10 МБ: картинка буде розмита. Під відео можна вирізати коротший фрагмент.", noInputs: "У цьому записі немає натискань: його зроблено до 1.6.0 або з вимкненим «Записувати кнопки».", trimTitle: "Вирізати фрагмент", trimStart: "Початок тут", trimEnd: "Кінець тут", trimGo: "Зробити фрагмент", trimHint: "Увімкніть відео й поставте на паузу там, де має початися фрагмент: «Початок тут». Потім там, де має закінчитися: «Кінець тут».", trimLabel: "фрагмент %1–%2",
     },
     es: {
       mb: 'MB', gb: 'GB', length: 'Duración', size: 'Tamaño', eta: 'Tiempo de transferencia', s1: 'Descarga desde la consola', s2: 'Creación del video',
@@ -113,6 +115,7 @@
       optLayout: 'Pantallas', layAuto: 'Como se grabó', layTop: 'Superior', layBottom: 'Inferior', laySide: 'Lado a lado', optQuality: 'Para', qNormal: 'Compartir', qHigh: 'YouTube', qEdit: 'Edición', qualityHint: 'YouTube: más bitrate (3× da 1440p, que YouTube reproduce con mejor calidad). Edición: cada fotograma es clave y con bitrate alto, para DaVinci Resolve y otros editores; el archivo ocupa mucho más.', pcTool: '¿Necesitas DNxHR para DaVinci Resolve, un archivo sin pérdida o un archivo por pantalla?', pcToolLink: 'r3d2video para Windows',
       fastPc: 'rápido: codificador de video de tu PC', readErr: 'No se pudo leer el archivo (%1).', failedLocal: 'No se pudo crear el video (%1).', again: 'Convertir otro archivo',
       webm: 'Este navegador solo puede crear videos WebM. Para obtener un MP4, abre esta página en Chrome, Edge o Safari.',
+      optInputs: "Botones", inOff: "Ocultar", inOn: "Mostrar", inputsHint: "Los botones pulsados, junto a la pantalla inferior o en una esquina (grabaciones desde la 1.6.0).", qDiscord: "Discord", discordHint: "Discord: menos de 10 MB, lo que Discord acepta sin Nitro.", discordLong: "Demasiado largo para 10 MB: la imagen se verá borrosa. Debajo del video puedes recortar una parte más corta.", noInputs: "Esta grabación no tiene pulsaciones: se hizo antes de la 1.6.0 o con Grabar botones desactivado.", trimTitle: "Recortar una parte", trimStart: "Empieza aquí", trimEnd: "Termina aquí", trimGo: "Crear esta parte", trimHint: "Reproduce el video y pausa donde debe empezar la parte: «Empieza aquí». Luego donde debe terminar: «Termina aquí».", trimLabel: "parte %1–%2",
     },
     pt: {
       mb: 'MB', gb: 'GB', length: 'Duração', size: 'Tamanho', eta: 'Tempo de transferência', s1: 'Download do console', s2: 'Criação do vídeo',
@@ -144,6 +147,7 @@
       optLayout: 'Telas', layAuto: 'Como gravado', layTop: 'Superior', layBottom: 'Inferior', laySide: 'Lado a lado', optQuality: 'Para', qNormal: 'Compartilhar', qHigh: 'YouTube', qEdit: 'Edição', qualityHint: 'YouTube: bitrate maior (3× gera 1440p, que o YouTube exibe com mais qualidade). Edição: todo quadro é chave e com bitrate alto, para o DaVinci Resolve e outros editores; o arquivo fica bem maior.', pcTool: 'Precisa de DNxHR para o DaVinci Resolve, de um arquivo sem perdas ou de um arquivo por tela?', pcToolLink: 'r3d2video para Windows',
       fastPc: 'rápido: codificador de vídeo do computador', readErr: 'Não foi possível ler o arquivo (%1).', failedLocal: 'Não foi possível criar o vídeo (%1).', again: 'Converter outro arquivo',
       webm: 'Este navegador só consegue criar vídeos WebM. Para um MP4, abra esta página no Chrome, Edge ou Safari.',
+      optInputs: "Botões", inOff: "Ocultar", inOn: "Mostrar", inputsHint: "Os botões apertados, ao lado da tela de baixo ou num canto (gravações a partir da 1.6.0).", qDiscord: "Discord", discordHint: "Discord: menos de 10 MB, o que o Discord aceita sem Nitro.", discordLong: "Longo demais para 10 MB: a imagem vai ficar borrada. Abaixo do vídeo você pode cortar um trecho menor.", noInputs: "Esta gravação não tem botões: foi feita antes da 1.6.0 ou com Gravar botões desligado.", trimTitle: "Cortar um trecho", trimStart: "Começa aqui", trimEnd: "Termina aqui", trimGo: "Fazer este trecho", trimHint: "Reproduza o vídeo e pause onde o trecho deve começar: “Começa aqui”. Depois onde deve terminar: “Termina aqui”.", trimLabel: "trecho %1–%2",
     },
     it: {
       mb: 'MB', gb: 'GB', length: 'Durata', size: 'Dimensione', eta: 'Tempo di trasferimento', s1: 'Download dalla console', s2: 'Creazione del video',
@@ -175,6 +179,7 @@
       optLayout: 'Schermi', layAuto: 'Come registrato', layTop: 'Superiore', layBottom: 'Inferiore', laySide: 'Affiancati', optQuality: 'Per', qNormal: 'Condividere', qHigh: 'YouTube', qEdit: 'Montaggio', qualityHint: 'YouTube: bitrate più alto (3× dà 1440p, che YouTube riproduce in qualità migliore). Montaggio: ogni fotogramma è chiave, con bitrate alto, per DaVinci Resolve e altri editor; il file è molto più pesante.', pcTool: 'Ti serve DNxHR per DaVinci Resolve, un file senza perdita o un file per schermo?', pcToolLink: 'r3d2video per Windows',
       fastPc: 'veloce: codificatore video del computer', readErr: 'Impossibile leggere il file (%1).', failedLocal: 'Impossibile creare il video (%1).', again: 'Converti un altro file',
       webm: 'Questo browser può creare solo video WebM. Per un MP4, apri questa pagina in Chrome, Edge o Safari.',
+      optInputs: "Pulsanti", inOff: "Nascondi", inOn: "Mostra", inputsHint: "I pulsanti premuti, accanto allo schermo inferiore o in un angolo (registrazioni dalla 1.6.0).", qDiscord: "Discord", discordHint: "Discord: sotto i 10 MB, quanto Discord accetta senza Nitro.", discordLong: "Troppo lungo per 10 MB: l’immagine sarà sfocata. Sotto il video puoi tagliare una parte più breve.", noInputs: "Questa registrazione non ha pulsanti: è stata fatta prima della 1.6.0 o con Registra pulsanti disattivato.", trimTitle: "Taglia una parte", trimStart: "Inizia qui", trimEnd: "Finisci qui", trimGo: "Crea questa parte", trimHint: "Riproduci il video e metti in pausa dove deve iniziare la parte: «Inizia qui». Poi dove deve finire: «Finisci qui».", trimLabel: "parte %1–%2",
     },
     fr: {
       mb: 'Mo', gb: 'Go', length: 'Durée', size: 'Taille', eta: 'Durée du transfert', s1: 'Téléchargement depuis la console',
@@ -213,6 +218,7 @@
       fastPc: 'rapide : encodeur vidéo de l’ordinateur', readErr: 'Impossible de lire le fichier (%1).',
       failedLocal: 'Impossible de créer la vidéo (%1).', again: 'Convertir un autre fichier',
       webm: 'Ce navigateur ne peut créer que des vidéos WebM. Pour un MP4, ouvrez cette page dans Chrome, Edge ou Safari.',
+      optInputs: "Boutons", inOff: "Masquer", inOn: "Afficher", inputsHint: "Les boutons appuyés, à côté de l’écran du bas ou dans un coin (enregistrements depuis la 1.6.0).", qDiscord: "Discord", discordHint: "Discord : moins de 10 Mo, ce que Discord accepte sans Nitro.", discordLong: "Trop long pour 10 Mo : l’image sera floue. Sous la vidéo, vous pouvez découper un passage plus court.", noInputs: "Cet enregistrement n’a pas de boutons : il a été fait avant la 1.6.0 ou avec Enregistrer les boutons désactivé.", trimTitle: "Découper un passage", trimStart: "Début ici", trimEnd: "Fin ici", trimGo: "Créer ce passage", trimHint: "Lancez la vidéo et mettez-la en pause là où le passage doit commencer : « Début ici ». Puis là où il doit finir : « Fin ici ».", trimLabel: "passage %1–%2",
     },
     de: {
       mb: 'MB', gb: 'GB', length: 'Dauer', size: 'Größe', eta: 'Übertragungsdauer', s1: 'Download von der Konsole', s2: 'Video erstellen',
@@ -244,6 +250,7 @@
       optLayout: 'Bildschirme', layAuto: 'Wie aufgenommen', layTop: 'Oben', layBottom: 'Unten', laySide: 'Nebeneinander', optQuality: 'Für', qNormal: 'Teilen', qHigh: 'YouTube', qEdit: 'Schnitt', qualityHint: 'YouTube: höhere Bitrate (3× ergibt 1440p, das YouTube in besserer Qualität abspielt). Schnitt: jedes Bild ein Keyframe mit hoher Bitrate, für DaVinci Resolve und andere Schnittprogramme; die Datei wird deutlich größer.', pcTool: 'DNxHR für DaVinci Resolve, eine verlustfreie Datei oder eine Datei pro Bildschirm?', pcToolLink: 'r3d2video für Windows',
       fastPc: 'schnell: Video-Encoder des Computers', readErr: 'Die Datei konnte nicht gelesen werden (%1).', failedLocal: 'Das Video konnte nicht erstellt werden (%1).', again: 'Weitere Datei umwandeln',
       webm: 'Dieser Browser kann nur WebM-Videos erstellen. Für eine MP4-Datei öffne diese Seite in Chrome, Edge oder Safari.',
+      optInputs: "Tasten", inOff: "Ausblenden", inOn: "Zeigen", inputsHint: "Die gedrückten Tasten, neben dem unteren Bildschirm oder in einer Ecke (Aufnahmen ab 1.6.0).", qDiscord: "Discord", discordHint: "Discord: unter 10 MB, so viel nimmt Discord ohne Nitro.", discordLong: "Zu lang für 10 MB: Das Bild wird unscharf. Unter dem Video kannst du einen kürzeren Teil ausschneiden.", noInputs: "Diese Aufnahme hat keine Tastendrücke: Sie wurde vor 1.6.0 oder mit ausgeschaltetem „Tasten aufzeichnen“ gemacht.", trimTitle: "Teil ausschneiden", trimStart: "Hier anfangen", trimEnd: "Hier enden", trimGo: "Diesen Teil erstellen", trimHint: "Spiel das Video ab und halte dort an, wo der Teil anfangen soll: „Hier anfangen“. Dann dort, wo er enden soll: „Hier enden“.", trimLabel: "Teil %1–%2",
     },
     'zh-Hans': {
       mb: 'MB', gb: 'GB', length: '时长', size: '大小', eta: '传输时间', s1: '从主机下载', s2: '生成视频',
@@ -275,6 +282,7 @@
       optLayout: '画面', layAuto: '按录制', layTop: '上屏', layBottom: '下屏', laySide: '并排', optQuality: '用途', qNormal: '分享', qHigh: 'YouTube', qEdit: '剪辑', qualityHint: 'YouTube：更高码率（3×为1440p，YouTube会以更好的画质播放）。剪辑：每帧都是关键帧且码率高，适合DaVinci Resolve等剪辑软件；文件会大很多。', pcTool: '需要用于DaVinci Resolve的DNxHR、无损文件或每个屏幕单独的文件？', pcToolLink: 'Windows版r3d2video',
       fastPc: '快速：使用电脑的视频编码器', readErr: '无法读取文件（%1）。', failedLocal: '无法生成视频（%1）。', again: '转换其他文件',
       webm: '此浏览器只能生成WebM视频。如需MP4，请在Chrome、Edge或Safari中打开此页面。',
+      optInputs: "按键", inOff: "隐藏", inOn: "显示", inputsHint: "按下的按键，显示在下屏旁边或角落（1.6.0起的录像）。", qDiscord: "Discord", discordHint: "Discord：小于10 MB，即没有Nitro时Discord接受的大小。", discordLong: "对10 MB来说太长：画面会模糊。可在视频下方剪出较短的片段。", noInputs: "这段录像没有按键记录：录于1.6.0之前，或“记录按键”已关闭。", trimTitle: "剪出片段", trimStart: "从这里开始", trimEnd: "到这里结束", trimGo: "生成此片段", trimHint: "播放视频，在片段开始处暂停，点“从这里开始”；再在结束处暂停，点“到这里结束”。", trimLabel: "片段 %1–%2",
     },
     'zh-Hant': {
       mb: 'MB', gb: 'GB', length: '長度', size: '大小', eta: '傳輸時間', s1: '從主機下載', s2: '製作影片',
@@ -306,6 +314,7 @@
       optLayout: '畫面', layAuto: '依錄製', layTop: '上螢幕', layBottom: '下螢幕', laySide: '並排', optQuality: '用途', qNormal: '分享', qHigh: 'YouTube', qEdit: '剪輯', qualityHint: 'YouTube：較高位元率（3× 為 1440p，YouTube 會以較佳畫質播放）。剪輯：每格都是關鍵影格且位元率高，適合 DaVinci Resolve 等剪輯軟體；檔案會大很多。', pcTool: '需要給 DaVinci Resolve 用的 DNxHR、無損檔案，或每個螢幕各一個檔案？', pcToolLink: 'Windows 版 r3d2video',
       fastPc: '快速：使用電腦的影片編碼器', readErr: '無法讀取檔案（%1）。', failedLocal: '無法製作影片（%1）。', again: '轉換其他檔案',
       webm: '此瀏覽器只能製作 WebM 影片。若要 MP4，請在 Chrome、Edge 或 Safari 中開啟此頁面。',
+      optInputs: "按鍵", inOff: "隱藏", inOn: "顯示", inputsHint: "按下的按鍵，顯示在下螢幕旁邊或角落（1.6.0 起的錄影）。", qDiscord: "Discord", discordHint: "Discord：小於 10 MB，即沒有 Nitro 時 Discord 接受的大小。", discordLong: "對 10 MB 來說太長：畫面會模糊。可在影片下方剪出較短的片段。", noInputs: "這段錄影沒有按鍵記錄：錄於 1.6.0 之前，或「記錄按鍵」已關閉。", trimTitle: "剪出片段", trimStart: "從這裡開始", trimEnd: "到這裡結束", trimGo: "產生此片段", trimHint: "播放影片，在片段開始處暫停，點「從這裡開始」；再在結束處暫停，點「到這裡結束」。", trimLabel: "片段 %1–%2",
     },
     ja: {
       mb: 'MB', gb: 'GB', length: '長さ', size: 'サイズ', eta: '転送時間', s1: '本体からダウンロード', s2: '動画を作成',
@@ -337,6 +346,7 @@
       optLayout: '画面', layAuto: '録画のまま', layTop: '上画面', layBottom: '下画面', laySide: '横に並べる', optQuality: '用途', qNormal: '共有', qHigh: 'YouTube', qEdit: '編集', qualityHint: 'YouTube：ビットレートを上げます（3×で1440p、YouTubeでより高画質に再生されます）。編集：全フレームをキーフレームにし高ビットレートで、DaVinci Resolveなどの編集ソフト向け。ファイルはかなり大きくなります。', pcTool: 'DaVinci Resolve用のDNxHR、ロスレス、画面ごとの別ファイルが必要ですか？', pcToolLink: 'Windows版 r3d2video',
       fastPc: '高速：パソコンの動画エンコーダー', readErr: 'ファイルを読み込めませんでした（%1）。', failedLocal: '動画を作成できませんでした（%1）。', again: 'ほかのファイルを変換',
       webm: 'このブラウザーではWebM動画しか作成できません。MP4にするには、このページをChrome、Edge、Safariで開いてください。',
+      optInputs: "ボタン", inOff: "表示しない", inOn: "表示する", inputsHint: "押したボタンを下画面の横か隅に表示します（1.6.0以降の録画）。", qDiscord: "Discord", discordHint: "Discord：Nitroなしで送れる10 MB以下にします。", discordLong: "10 MBには長すぎます：画質がぼやけます。動画の下で短い部分を切り出せます。", noInputs: "この録画にはボタンの記録がありません（1.6.0より前、または「ボタンを記録」がオフ）。", trimTitle: "部分を切り出す", trimStart: "ここから", trimEnd: "ここまで", trimGo: "この部分を作る", trimHint: "動画を再生し、部分の始まりで一時停止して「ここから」、終わりで一時停止して「ここまで」を押します。", trimLabel: "部分 %1–%2",
     },
   };
   let L = TEXT.en;
@@ -380,7 +390,9 @@
   let name = new URLSearchParams(location.search).get('f');
   let info = null;
   let localFile = null; // local mode: the File being converted
-  const opts = { scale: 1, eq: true, layout: 'auto', quality: 'normal' }; // local mode: size, sound, screens, purpose (remembered in the browser)
+  const opts = { scale: 1, eq: true, layout: 'auto', quality: 'normal', inputs: false }; // local mode: size, sound, screens, purpose, buttons (remembered in the browser)
+  let trim = null; // local mode: { from, to } in seconds of the recording, the part being made (not remembered)
+  let lastFast = false; // the video on the page was made the fast way (a part of it can be cut)
 
   // Local mode: which screens go into the video and where (the composite picture is 400 wide: the top
   // screen above, the bottom one centred under it). blits: [sx, sy, sw, sh, dx, dy] from it; null: as it is.
@@ -394,10 +406,16 @@
   }
   // the bitrate for a size and purpose: the upscaled pixels are flat blocks, they need far less than
   // scale^2 times the bits; YouTube re-encodes what it gets (more in, better out); editing: all keyframes
-  const QUALITY = { normal: 1, high: 1.75, edit: 4 };
-  function bitrateFor(view, scale, quality) {
+  const QUALITY = { normal: 1, high: 1.75, edit: 4, discord: 1 };
+  // Discord: the whole file under 10 MB (its limit without Nitro), the sound at 96 kbit/s, a margin for
+  // the encoder's swings; at least 250 kbit/s (a long video gets blurry: the page says so)
+  const DISCORD_BYTES = 10 * 1000 * 1000, DISCORD_AUDIO = 96000, DISCORD_MIN = 250000;
+  const discordRate = (seconds) => Math.floor((DISCORD_BYTES * 8 * 0.85) / Math.max(1, seconds) - DISCORD_AUDIO);
+  function bitrateFor(view, scale, quality, seconds = 0) {
     const base = [0, 3500000, 8000000, 12000000][scale] * (view.w * view.h) / (400 * 480);
-    return Math.round(Math.max(1500000, base) * (QUALITY[quality] || 1));
+    const rate = Math.round(Math.max(1500000, base) * (QUALITY[quality] || 1));
+    if (quality === 'discord') return Math.max(DISCORD_MIN, Math.min(rate, discordRate(seconds)));
+    return rate;
   }
 
   // One line into the console's app.log: what the phone did, so a test far away needs no
@@ -557,14 +575,14 @@
 
   // Local mode: the same interface as Download, the bytes read from a File in order.
   class FileSource {
-    constructor(file, feed, progress) {
-      this.file = file; this.feed = feed; this.progress = progress;
+    constructor(file, feed, progress, stop) {
+      this.file = file; this.feed = feed; this.progress = progress; this.stop = stop || (() => false);
       this.got = 0;
       this.t0 = performance.now();
     }
     async run() {
       const size = this.file.size;
-      for (let off = 0; off < size; off += CHUNK) {
+      for (let off = 0; off < size && !this.stop(); off += CHUNK) {
         const d = new Uint8Array(await this.file.slice(off, Math.min(off + CHUNK, size)).arrayBuffer());
         for (let p = 0; p < d.length; p += FEED) await this.feed(d.subarray(p, p + FEED));
         this.got += d.length;
@@ -664,8 +682,13 @@
     }
   }
 
-  function fastConvert(hdr, codecs, scale, layout = 'auto', quality = 'normal') {
+  // more: { conv (R3D.Converter: its button presses), inputs (draw them), bitrate }
+  function fastConvert(hdr, codecs, scale, layout = 'auto', quality = 'normal', more = {}) {
     const view = viewFor(hdr, layout);
+    const I = typeof R3DInputs !== 'undefined' ? R3DInputs : null;
+    const inputsOn = !!(more.inputs && I && more.conv && more.conv.inputs);
+    const inLayout = inputsOn ? I.layout(I.screensFor(hdr, layout)) : null;
+    let inState = null, inPatches = [];
     const W = view.w * scale, H = view.h * scale;
     const codec = codecs.video, opus = codecs.audio === 'opus';
     const withAudio = !!(hdr.audio && codecs.audio); // the codec was chosen from the file's details: they agree, but in case
@@ -680,9 +703,11 @@
     let error = null;
     // a muxer error inside the callback (a timestamp going back) is kept, not lost: the file would be broken
     const venc = new VideoEncoder({ output: (c, m) => { try { muxer.addVideoChunk(c, m); } catch (e) { error = error || e; } }, error: (e) => { error = e; } });
-    venc.configure({ codec, width: W, height: H, bitrate: bitrateFor(view, scale, quality), framerate: hdr.fps, latencyMode: 'quality', avc: { format: 'avc' } });
-    // 2x / 3x or another layout: each picture drawn (bigger) with no smoothing (nearest neighbour), on the GPU
-    const drawn = scale > 1 || view.blits;
+    // Discord: a size to keep, a constant bit rate (Chrome went 34% over a variable one there, 2026-11-22)
+    venc.configure({ codec, width: W, height: H, bitrate: more.bitrate || bitrateFor(view, scale, quality), framerate: hdr.fps, latencyMode: 'quality',
+      ...(quality === 'discord' ? { bitrateMode: 'constant' } : {}), avc: { format: 'avc' } });
+    // 2x / 3x, another layout or the buttons: each picture drawn (bigger) with no smoothing (nearest neighbour), on the GPU
+    const drawn = scale > 1 || view.blits || inputsOn;
     const small = drawn ? new OffscreenCanvas(400, hdr.height) : null;
     const big = drawn ? new OffscreenCanvas(W, H) : null;
     const blits = view.blits || [[0, 0, 400, hdr.height, 0, 0]];
@@ -702,8 +727,9 @@
         },
         error: (e) => { error = e; },
       });
-      aenc.configure(opus ? { codec: 'opus', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 128000 }
-        : { codec: 'mp4a.40.2', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: 160000 });
+      const aRate = quality === 'discord' ? DISCORD_AUDIO : opus ? 128000 : 160000;
+      aenc.configure(opus ? { codec: 'opus', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: aRate }
+        : { codec: 'mp4a.40.2', sampleRate: AAC_RATE, numberOfChannels: 2, bitrate: aRate });
       rs = new Resampler(hdr.audioRate / 1000, AAC_RATE);
     }
     let picture = -1, base = null;
@@ -718,13 +744,28 @@
       ad.close();
     };
     return {
-      frame(rgba, index, pic, timeUs) {
+      // atUs: the recording's time of this frame (the buttons then); timeUs: its time in the video
+      frame(rgba, index, pic, timeUs, atUs) {
         if (error) throw error;
-        if (pic !== picture || !base) { // a new picture; repeats share its memory
+        let inNew = false;
+        if (inputsOn) {
+          const st = more.conv.inputs.at(atUs === undefined ? index * usPerFrame : atUs);
+          if (!I.same(st, inState)) {
+            inState = { ...st };
+            inNew = true;
+            inPatches = I.patches(inLayout, inState, view.w, view.h, scale).map((p) => {
+              const c = new OffscreenCanvas(p.w, p.h);
+              c.getContext('2d').putImageData(new ImageData(p.data, p.w, p.h), 0, 0);
+              return { c, x: p.x, y: p.y };
+            });
+          }
+        }
+        if (pic !== picture || !base || inNew) { // a new picture; repeats share its memory
           if (base) base.close();
           if (big) {
             small.getContext('2d').putImageData(new ImageData(rgba, 400, hdr.height), 0, 0);
             for (const [sx, sy, sw, sh, dx, dy] of blits) bigCtx.drawImage(small, sx, sy, sw, sh, dx * scale, dy * scale, sw * scale, sh * scale);
+            for (const p of inPatches) bigCtx.drawImage(p.c, p.x, p.y);
             base = new VideoFrame(big, { timestamp: 0 });
           } else {
             base = new VideoFrame(rgba, { format: 'RGBA', codedWidth: 400, codedHeight: hdr.height, timestamp: 0 });
@@ -784,7 +825,11 @@
   // download is behind (or the page is hidden) the recording pauses and so does the media clock.
   // The AudioContext itself keeps running (no suspend()), sound goes out in short pieces a little
   // ahead; a pause stops them and the rest is played again after it.
-  function liveConvert(hdr, mime, onTime, ctx) {
+  function liveConvert(hdr, mime, onTime, ctx, conv, inputs) {
+    const I = typeof R3DInputs !== 'undefined' ? R3DInputs : null;
+    const inputsOn = !!(inputs && I && conv && conv.inputs);
+    const inLayout = inputsOn ? I.layout(I.screensFor(hdr, 'auto')) : null;
+    let inState = null;
     const canvas = $('canvas');
     canvas.height = hdr.height;
     const g = canvas.getContext('2d');
@@ -912,8 +957,15 @@
     };
     return {
       frame(rgba, index, pic) {
-        if (pic !== picture) {
-          pics.push({ index, img: new ImageData(new Uint8ClampedArray(rgba), 400, hdr.height) });
+        let inNew = false;
+        if (inputsOn) {
+          const st = conv.inputs.at((index * 1e6) / hdr.fps);
+          if (!I.same(st, inState)) { inState = { ...st }; inNew = true; }
+        }
+        if (pic !== picture || inNew) {
+          const copy = new Uint8ClampedArray(rgba);
+          if (inputsOn) I.drawRgba(copy, 400, hdr.height, inLayout, inState);
+          pics.push({ index, img: new ImageData(copy, 400, hdr.height) });
           picture = pic;
         }
         lastIndex = index;
@@ -937,30 +989,55 @@
 
   /* ------------------------------------------------------------ flow */
 
+  // mode: { fast, label, make(hdr, onTime, conv), inputs (draw the buttons), trim ({ from, to } s, fast only) }
   async function run(mode) {
     const url = '/rec/' + encodeURIComponent(name);
     let enc = null, hdr = null, firstErr = null;
+    // a part (trim): the frames before it are decoded but not made, the video starts at its start; the
+    // reading stops after its end. The sound by its samples (the decoder places them from time 0).
+    const cut = mode.fast && mode.trim ? { from: mode.trim.from * 1e6, to: mode.trim.to * 1e6 } : null;
+    let firstIndex = -1, aPos = 0;
     const conv = new R3D.Converter({
       // the encoder at once: the first piece's frames and sound (~1 s) were decoded before it existed and lost
       onHeader: (h) => { hdr = h; ensureEnc(); },
       onFrame: (rgba, i, pic, timeUs) => {
         if (!enc) return;
-        enc.frame(rgba, i, pic, timeUs);
+        const at = timeUs === undefined ? (i * 1e6) / hdr.fps : timeUs;
+        if (cut) {
+          if (at < cut.from) return;
+          if (at >= cut.to) { conv.done = true; return; }
+          if (firstIndex < 0) firstIndex = i;
+        }
+        enc.frame(rgba, cut ? i - firstIndex : i, pic, cut && timeUs !== undefined ? timeUs - cut.from : timeUs, at);
         if (mode.fast && i % 15 === 0) { // live mode reports its own clock
-          const sec = timeUs === undefined ? i / hdr.fps : timeUs / 1e6;
+          const sec = (at - (cut ? cut.from : 0)) / 1e6;
           step(2, 'on', totalSec ? (sec / totalSec) * 100 : 0, clock(sec));
         }
       },
-      onAudio: (s) => { if (enc) enc.audio(s); },
-    }, { vfr: !!mode.fast, eq: !LOCAL || opts.eq }); // the fast way stamps frames itself; the live one draws on its own clock
-    const totalSec = info.ms / 1000;
+      onAudio: (s) => {
+        if (!enc) return;
+        if (cut) {
+          const hz = hdr.audioRate / 1000, n = s.length / 2;
+          const a = Math.max(0, Math.round((cut.from / 1e6) * hz) - aPos), b = Math.min(n, Math.round((cut.to / 1e6) * hz) - aPos);
+          aPos += n;
+          if (b <= a) return;
+          s = s.subarray(a * 2, b * 2);
+        }
+        enc.audio(s);
+      },
+    }, { vfr: !!mode.fast, eq: !LOCAL || opts.eq, inputs: !!mode.inputs }); // the fast way stamps frames itself; the live one draws on its own clock
+    const totalSec = cut ? (cut.to - cut.from) / 1e6 : info.ms / 1000;
     step(1, 'on', 0, '0%');
     step(2, 'on', 0, '', mode.label);
     const onTime = (sec, paused) => {
       step(2, 'on', totalSec ? (sec / totalSec) * 100 : 0, clock(sec), paused ? (document.hidden ? t('hidden') : t('paused')) : mode.label);
     };
     let dlDone = false;
-    const ensureEnc = () => { if (!enc && hdr) enc = mode.make(hdr, onTime); };
+    const ensureEnc = () => {
+      if (enc || !hdr) return;
+      if (mode.inputs && !hdr.inputs) show('long', t('noInputs'));
+      enc = mode.make(hdr, onTime, conv);
+    };
     const stash = []; // live: downloaded, not decoded yet
     const feed = mode.fast
       ? async (piece) => {
@@ -993,7 +1070,7 @@
       step(1, g >= size ? 'done' : 'on', (g / size) * 100, Math.floor((g / size) * 100) + '%',
         `${mb(g)} / ${mb(size)} · ${(rate / 1048576).toFixed(2)} ${t('mbs')}` + (g < size ? ' · ' + t('left', duration(left)) : ''));
     };
-    const dl = LOCAL ? new FileSource(localFile, feed, progress) : new Download(url, info.size, feed, progress);
+    const dl = LOCAL ? new FileSource(localFile, feed, progress, () => conv.done) : new Download(url, info.size, feed, progress);
     const go = async () => {
       try {
         await dl.run();
@@ -1012,7 +1089,16 @@
         conv.finish();
         if (!enc) throw new Error('no video');
         const blob = await enc.finish();
+        // Discord: still too big (the encoder kept over its rate): once more, the rate cut by as much
+        if (mode.fit && blob.size > mode.fit.bytes && !mode.fit.again) {
+          report(`discord: ${blob.size} B over ${mode.fit.bytes}, again at a lower rate`);
+          mode.fit.again = true;
+          mode.fit.bitrate = Math.max(DISCORD_MIN, Math.floor(mode.fit.bitrate * (mode.fit.bytes / blob.size) * 0.9));
+          run(mode);
+          return;
+        }
         step(2, 'done', 100, t('ready'), mode.label);
+        lastFast = !!mode.fast;
         offer(blob);
       } catch (e) {
         report('browser video failed: ' + why(e));
@@ -1036,12 +1122,15 @@
     $('howto').textContent = (isIOS ? t('howIos') : isAndroid ? t('howAndroid') : t('howOther')) + (ext === 'webm' ? ' ' + t('webm') : '');
     $('keep').hidden = true;
     $('result').hidden = false;
+    document.querySelectorAll('#result .share').forEach((b) => b.remove()); // from the video made before (a part)
+    $('trim').hidden = !(LOCAL && lastFast);
+    if (LOCAL && lastFast) trimSetup();
     report(`offer ${fname}: ${blob.type} ${blob.size} B, share ${!!navigator.canShare}`);
     // Web Share with files exists only on https pages; offer it where it does
     const file = typeof File !== 'undefined' ? new File([blob], fname, { type: blob.type }) : null;
     if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
       const b = document.createElement('button');
-      b.className = 'secondary';
+      b.className = 'secondary share';
       b.textContent = t('share');
       b.onclick = () => navigator.share({ files: [file] }).then(() => report('shared'), (e) => report('share: ' + why(e)));
       save.after(b);
@@ -1121,6 +1210,33 @@
     if (!(opts.quality in QUALITY)) opts.quality = 'normal';
     seg('layout', () => opts.layout, (v) => { opts.layout = v; });
     seg('quality', () => opts.quality, (v) => { opts.quality = v; });
+    opts.inputs = opts.inputs === true;
+    seg('inputs', () => (opts.inputs ? 1 : 0), (v) => { opts.inputs = v === '1'; });
+  }
+
+  // Cutting a part of the video made from a file: play it, mark the start and the end, make it again
+  // from the recording (the times are the recording's: the video on the page may be a part already)
+  function trimSetup() {
+    const v = $('preview'), base = trim ? trim.from : 0;
+    let a = trim ? trim.from : 0, b = trim ? trim.to : 0;
+    const show = () => {
+      const end = b || base + (v.duration || 0);
+      $('trimRange').textContent = clock(a) + ' – ' + clock(end);
+      $('trimGo').disabled = !(end > a + 0.2) || (trim && a === trim.from && end === trim.to);
+    };
+    v.onloadedmetadata = show;
+    $('trimStart').onclick = () => { a = base + v.currentTime; if (b && b <= a) b = 0; show(); };
+    $('trimEnd').onclick = () => { const e = base + v.currentTime; if (e > a + 0.2) b = e; show(); };
+    $('trimGo').onclick = () => {
+      trim = { from: a, to: b || base + v.duration };
+      report(`trim ${trim.from.toFixed(2)}-${trim.to.toFixed(2)} s`);
+      $('result').hidden = true;
+      $('again').hidden = true;
+      $('long').hidden = true;
+      URL.revokeObjectURL(v.src);
+      browserVideo();
+    };
+    show();
   }
 
   async function openLocal(file) {
@@ -1134,14 +1250,20 @@
     if (!hdr) { fail(t('notR3d')); return; }
     localFile = file;
     name = file.name;
-    info = { name, size: file.size, ms: 0, both: hdr.both, bottomOnly: hdr.bottomOnly, fps: hdr.fps, audio: hdr.audio };
+    info = { name, size: file.size, ms: 0, both: hdr.both, bottomOnly: hdr.bottomOnly, fps: hdr.fps, audio: hdr.audio, inputs: hdr.inputs };
+    trim = null;
     $('pick').hidden = true;
     $('card').hidden = false;
     $('steps').hidden = false;
     $('when').textContent = when(name);
     $('fname').textContent = name + ' · ' + mb(file.size);
-    $('stats').hidden = true; // the length is known only at the end:
-    $('b2').parentNode.hidden = true; // step 2 shows the video's time without a bar
+    // the length from the end record (or the last record's time): a progress bar, and the Discord size
+    try {
+      info.ms = Math.round((await R3D.probeLength(file.size, async (o, n) => new Uint8Array(await file.slice(o, o + n).arrayBuffer()))) / 1000);
+    } catch (e) { info.ms = 0; }
+    $('stats').hidden = true;
+    if (info.ms) $('fname').textContent += ' · ' + clock(info.ms / 1000);
+    $('b2').parentNode.hidden = !info.ms; // without the length, step 2 shows the video's time without a bar
     browserVideo();
   }
 
@@ -1234,16 +1356,27 @@
     let scale = LOCAL && canDraw ? opts.scale : 1;
     const layout = LOCAL && canDraw ? opts.layout : 'auto';
     let quality = LOCAL ? opts.quality : 'normal';
+    // the buttons: the page's choice on a computer; on the phone, the console's Buttons In Video setting
+    const inputs = LOCAL ? opts.inputs : info.keys === true; // the console's Buttons In Video, for a recording that kept them
     const view = viewFor({ both: info.both, bottomOnly: info.bottomOnly, height }, layout);
     const fps = info.fps || 30;
-    let codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality));
-    if (!codec && quality !== 'normal') { quality = 'normal'; codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality)); }
-    if (!codec && scale > 1) { scale = 1; codec = await fastSupport(view.w, view.h, fps, info.audio, bitrateFor(view, 1, quality)); } // too big for this encoder
+    const seconds = trim ? trim.to - trim.from : info.ms / 1000;
+    // Discord: under ~3 Mbit/s a bigger picture does not fit (the encoder stays over its rate): 1x then
+    if (quality === 'discord' && seconds && discordRate(seconds) < 3000000) scale = 1;
+    if (quality === 'discord' && seconds && discordRate(seconds) < DISCORD_MIN) show('long', t('discordLong'));
+    let codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality, seconds));
+    if (!codec && quality !== 'normal' && quality !== 'discord') { quality = 'normal'; codec = await fastSupport(view.w * scale, view.h * scale, fps, info.audio, bitrateFor(view, scale, quality)); }
+    if (!codec && scale > 1) { scale = 1; codec = await fastSupport(view.w, view.h, fps, info.audio, bitrateFor(view, 1, quality, seconds)); } // too big for this encoder
     if (codec) {
-      report('browser video: fast, ' + JSON.stringify(codec).slice(0, 120));
+      const bitrate = bitrateFor(view, scale, quality, seconds);
+      report(`browser video: fast, ${JSON.stringify(codec).slice(0, 120)}, ${Math.round(bitrate / 1000)} kbit/s` +
+        (inputs ? ', buttons' : '') + (trim ? `, part ${trim.from.toFixed(1)}-${trim.to.toFixed(1)} s` : ''));
       const size = view.w * scale !== 400 || view.h * scale !== height ? ` · ${view.w * scale}×${view.h * scale}` : '';
-      run({ fast: true, label: t(LOCAL ? 'fastPc' : 'fast') + size + (quality !== 'normal' ? ' · ' + t(quality === 'high' ? 'qHigh' : 'qEdit') : ''),
-        make: (hdr) => fastConvert(hdr, codec, scale, layout, quality) });
+      const purpose = { high: 'qHigh', edit: 'qEdit', discord: 'qDiscord' }[quality];
+      const fit = quality === 'discord' ? { bytes: DISCORD_BYTES, bitrate, again: false } : null;
+      run({ fast: true, inputs, trim, fit,
+        label: t(LOCAL ? 'fastPc' : 'fast') + size + (purpose ? ' · ' + t(purpose) : '') + (trim ? ' · ' + t('trimLabel', clock(trim.from), clock(trim.to)) : ''),
+        make: (hdr, onTime, conv) => fastConvert(hdr, codec, scale, layout, quality, { conv, inputs, bitrate: fit ? fit.bitrate : bitrate }) });
       return;
     }
     const mime = liveType();
@@ -1262,7 +1395,7 @@
       // created and woken inside the tap: browsers let audio start only from a user gesture
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       ctx.resume();
-      run({ label: t('live'), make: (hdr, onTime) => liveConvert(hdr, mime, onTime, ctx) });
+      run({ label: t('live'), inputs, make: (hdr, onTime, conv) => liveConvert(hdr, mime, onTime, ctx, conv, inputs) });
     };
   }
 

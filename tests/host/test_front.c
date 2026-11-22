@@ -164,6 +164,16 @@ int main(void)
         CHECK(!pa_backoff_active(&b, 0x20205490u, 800));
     }
 
+    /* the second screen gives way to a busy main one, down to a frame a gap (10 fps) */
+    {
+        CHECK(second_gap_us(false) == 100000u && second_gap_us(true) == 100000u);
+        CHECK(second_yields(true, true, 2, 50000, second_gap_us(false)));     /* busy, a frame 50 ms ago: waits */
+        CHECK(!second_yields(true, true, 2, 100000, second_gap_us(false)));   /* its gap is over: taken (10 fps kept) */
+        CHECK(!second_yields(true, true, 1, 0, second_gap_us(false)));        /* main screen not behind */
+        CHECK(!second_yields(false, true, 5, 0, second_gap_us(false)));       /* the main screen never waits */
+        CHECK(!second_yields(true, false, 5, 0, second_gap_us(false)));       /* one screen recorded */
+    }
+
     if (!g_fail)
         printf("test_front: ok\n");
     return g_fail;

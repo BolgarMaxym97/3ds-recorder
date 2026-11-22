@@ -31,7 +31,9 @@ as it is (400 × 480), only cut shorter.* More, as they came out:
 - Records the **whole console**: any game, the HOME Menu, system apps — both screens (or one) with the game sound,
   up to 30 fps on an Old 3DS.
 - One button combination starts and stops it, anywhere. The app can be closed: the recorder runs in the background.
-- **Replay** keeps the last 30 seconds all the time, so a moment that already happened can still be saved as a clip.
+- **Replay** keeps the last moments all the time (15 s to 5 min), so something that already happened can still be
+  saved as a clip.
+- Keeps **the buttons you press** with each recording: the video can show them beside the bottom screen.
 - The console turns each recording into a small **MP4**, and you get it on your phone by scanning a QR code. No PC,
   no capture card.
 
@@ -40,7 +42,7 @@ as it is (400 × 480), only cut shorter.* More, as they came out:
 - A Nintendo 3DS, 3DS XL, 2DS, New 3DS, New 3DS XL or New 2DS XL with **Luma3DS** custom firmware.
 - **FBI** to install the `.cia` (or the Homebrew Launcher for the `.3dsx`).
 - Free SD space: up to **~320 MB a minute** in 3D games (both screens, 30 fps; menus and 2D games take much less).
-  The MP4 is about 25 MB a minute. Replay needs 700 MB free.
+  The MP4 is about 25 MB a minute. Replay needs 700 MB free for 30 s (up to 5.2 GB for 5 min).
 - For the phone: the phone and the console on the same Wi-Fi (the console uses 2.4 GHz).
 
 ## Install
@@ -65,7 +67,7 @@ recordings stay.
 | | |
 |---|---|
 | **Record** | **R + SELECT** anywhere starts a recording, the same again saves it. |
-| **Replay** | Switch **Replay 30 s** on in the Recorder tile; in a game, **X + SELECT** saves the last 30 seconds as a clip. |
+| **Replay** | Switch **Replay** on in the Recorder tile; in a game, **X + SELECT** saves the last 30 seconds as a clip (or what you set in Settings → Recorder → Replay Length: 15 s to 5 min). |
 | **Watch** | Gallery → **A**. |
 | **To the phone** | Gallery → **Y** on a recording, scan the QR code with the phone's camera, tap **Save the video**. iPhone and Android, nothing to install. |
 | **From the SD card** | `/3ds/recorder/recordings/`: an `.mp4` next to each converted `.r3d`. Only an `.r3d`? Drop it on the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) — the browser makes the MP4, nothing is uploaded. |
@@ -89,11 +91,12 @@ red three times — something went wrong (usually a full SD card), open the app 
   <img src="docs/screenshots/en/language.png" width="260" alt="Language">
 </p>
 
-- **Recording:** frame rate (15 / 20 / 30 fps), screens (both, top, bottom), Bottom Screen FPS (record a still bottom
-  screen less often, so the top one gets more of the console), quality, sound.
-- **Recorder:** the two hotkeys (recording, Replay clip), the LED, Launch On Startup.
-- **App:** Convert To MP4 (automatically, or only the recording you download), Work With Lid Closed, Share Statistics,
-  Uninstall recorder.
+- **Recording:** frame rate (15 / 20 / 30 fps), screens (both, top, bottom), Main Screen (the one the game is played
+  on keeps its frames first), Bottom Screen FPS (record a still bottom screen less often, so the top one gets more of
+  the console), quality, sound.
+- **Recorder:** the two hotkeys (recording, Replay clip), Replay Length, Record Buttons, the LED, Launch On Startup.
+- **App:** Convert To MP4 (automatically, or only the recording you download), Buttons In Video, Work With Lid Closed,
+  Share Statistics, Test SD Card (is the card fast enough?), Uninstall recorder.
 - **Language:** English, Українська, Deutsch, Español, Français, Italiano, Português (Brazil), 日本語, 简体中文,
   繁體中文. The first run offers the console's own language; the phone page follows the app's language.
 
@@ -152,7 +155,15 @@ tick the box. Luma settings are not changed.
 [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT), [Inter](https://rsms.me/inter/) and
 [Noto Sans JP / SC / TC](https://fonts.google.com/noto) fonts (SIL OFL).
 Their licenses are next to their code in `third_party/`, `web/vendor/` and `app/assets/fonts/`.
-From the community: [r3d2video](docs/pc-converter.md) by [noctis1008-wq](https://github.com/noctis1008-wq).
+From the community: [r3d2video](docs/pc-converter.md) by [noctis1008-wq](https://github.com/noctis1008-wq); ideas from
+the forks of [Yu08083](https://github.com/Yu08083/3ds-recorder) (plugin menus, sharper still pictures in the MP4).
+Developed with the help of [Claude Code](https://claude.com/claude-code) (Anthropic).
+
+## Support the project
+
+3DS Recorder is free and stays free. If it is useful to you, you can support its development:
+[Ko-fi](https://ko-fi.com/maksymbolhar) · [Monobank jar](https://send.monobank.ua/jar/9jJDGho7H8).
+A star on GitHub and a word about bugs in the [issues](../../issues) help too.
 
 ## License
 

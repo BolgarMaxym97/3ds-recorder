@@ -44,7 +44,8 @@ static void add(Stream *s, uint32_t magic, uint32_t len, uint32_t timeUs, uint8_
     s->recs = realloc(s->recs, (s->n + 1) * sizeof(Rec));
     Rec *r = &s->recs[s->n++];
     r->at = s->size;
-    r->h = (R3dRecHeader){magic, len, timeUs, screen, 2, (uint16_t)(magic == R3D_MAGIC_AUDIO ? 160 : (screen & 1) ? 320 : 400)};
+    r->h = (R3dRecHeader){magic, len, timeUs, screen, 2,
+                          (uint16_t)(magic == R3D_MAGIC_AUDIO ? 160 : magic == R3D_MAGIC_INPUT ? len / 8 : (screen & 1) ? 320 : 400)};
     r->stored = stored;
     memcpy(s->bytes + s->size, &r->h, 16);
     for (uint32_t i = 0; i < stored; i++)
@@ -207,6 +208,10 @@ static void synth(Stream *s, uint8_t mode, uint32_t t0, uint32_t seconds, uint32
         }
         if (ms % 1000 == 995)
             add(s, R3D_MAGIC_PAD, 16 * (1 + rnd() % 40), 0, 0xFF);
+        if (ms % 250 == 40)   /* the buttons (R3DI): copied into the clip like the sound */
+            add(s, R3D_MAGIC_INPUT, 16 * (1 + rnd() % 3), t - 20000u, R3D_STREAM_INPUT);
+        if (ms % 2000 == 1210)   /* a record type of a later version: copied as it is */
+            add(s, 0x5A443352u, 32, t, 9);
     }
 }
 

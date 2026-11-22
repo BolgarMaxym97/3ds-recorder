@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p dist
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Icodec/include -static -o dist/r3dconv.exe \
-            tools/r3dconv/r3dconv.c codec/source/codec.c codec/source/huff.c -lm
+            tools/r3dconv/r3dconv.c codec/source/codec.c codec/source/huff.c codec/source/inputs.c -lm
           cc -std=gnu11 -O2 -Icodec/include -o make_r3d tests/pcconv/make_r3d.c codec/source/codec.c -lm
           ./make_r3d dist/sample.r3d
       - uses: actions/upload-artifact@v4

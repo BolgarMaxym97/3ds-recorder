@@ -96,7 +96,8 @@ static int copy_records(FILE *in, FILE *out, uint64_t endAt, uint32_t shift, uin
         if (fread(&h, 1, sizeof(h), in) != sizeof(h))
             return JOIN_IO;
         const uint32_t m = h.magic;
-        if (m != R3D_MAGIC_PAD && m != R3D_MAGIC_DSPMEM && m != R3D_MAGIC_AUDIO && !is_video(m))
+        if (m != R3D_MAGIC_PAD && m != R3D_MAGIC_DSPMEM && m != R3D_MAGIC_AUDIO && !is_video(m) &&
+            (m == R3D_MAGIC_END || !r3d_skippable(m, h.len)))   /* the buttons (R3DI), a newer record type: copied */
             return JOIN_DIFFERENT;
         if (is_video(m) && (h.screen & 0x3Fu) > 1u)
             return JOIN_DIFFERENT;

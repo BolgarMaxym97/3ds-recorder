@@ -8,7 +8,9 @@
  * One pass over the recording, the way tools/r3dconv reads it (no --repair): frames are
  * composed into the 400 x 480 (or 400 x 240, top only) picture r3dconv makes; a video frame
  * goes out when a screen changed, at the time the recorder captured it (a clock in ms, variable
- * frame rate: a still picture costs nothing; see GRID_HZ in prep.c). Audio goes the
+ * frame rate: a still picture costs nothing; see GRID_HZ in prep.c; a picture that stays 400 ms is
+ * encoded once more as a sharp key frame, STILL_TICKS). With PrepOptions.inputs the buttons pressed are
+ * drawn over it (codec/source/inputs.c). Audio goes the
  * player's way (audio_place + audio_conceal + EQ), is resampled to 32 kHz and encoded to
  * AAC-LC.
  *
@@ -48,12 +50,14 @@ typedef struct {
     int threads;
     void (*runJobs)(void *token, void (*job)(void *), void *data[], int n);
     void *runToken;
+    int inputs;              /* draw the buttons pressed (R3DI records) over the video */
 } PrepOptions;
 
 typedef struct {
     uint32_t frames;       /* video frames encoded by this job (not counting a resumed part) */
     uint32_t audioFrames;  /* AAC frames made by this job */
     uint32_t resumedFrom;  /* video frames that were already done when the job opened */
+    uint32_t paramChanges; /* SPS / PPS different from the first ones, kept in their samples (expected 0) */
     /* producer (ms) */
     double readMs, decodeMs, yuvMs, pcmMs, audioMs, checkpointMs, produceWaitMs, diskMs; /* diskMs: MP4 writes */
     /* consumer (ms) */

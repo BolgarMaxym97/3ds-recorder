@@ -178,4 +178,17 @@ static inline void pa_backoff_set(PaBackoff *b, uint32_t pa, uint64_t until)
     b->until[at] = until;
 }
 
+/* With both screens, the second one (not the main_screen) waits while the main one has two frames
+   for the converter still waiting, as long as it got one in the last gap: 10 fps (Flashback v4's
+   notes go down to a picture a second; 5 fps was tried on an Old 3DS and only lost the second screen
+   its frames). */
+#define SECOND_GAP_N3DS_US 100000u
+#define SECOND_GAP_O3DS_US 100000u   /* 5 fps (200 ms) left the bottom screen of Mario Kart 7 at 9 fps and won the top
+                                         one nothing (25.7 vs 25.2 fps), O3DS 2026-11-22: 10 fps as before */
+static inline uint32_t second_gap_us(bool isNew3ds) { return isNew3ds ? SECOND_GAP_N3DS_US : SECOND_GAP_O3DS_US; }
+static inline bool second_yields(bool isSecond, bool both, uint32_t mainBusy, uint64_t sinceLastUs, uint32_t gapUs)
+{
+    return isSecond && both && mainBusy >= 2u && sinceLastUs < gapUs;
+}
+
 #endif

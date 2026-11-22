@@ -3,7 +3,8 @@
 // Usage: node tests/web/run.mjs <page url> [--live]   (--live: presses Start, the MediaRecorder path)
 //        node tests/web/run.mjs <local page url> --file <x.r3d>   (the --local build: picks the file,
 //        saves the video into build/web-result.<ext> itself; --scale 2|3, --layout auto|top|bottom|side,
-//        --quality normal|high|edit and --as-recorded pick the options)
+//        --quality normal|high|edit|discord, --inputs and --as-recorded pick the options; --trim A,B then cuts
+//        the part from A to B seconds with the page's trim buttons and saves that video)
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,8 @@ import { join } from 'node:path';
 const url = process.argv[2];
 const live = process.argv.includes('--live');
 const fileArg = process.argv.includes('--file') ? process.argv[process.argv.indexOf('--file') + 1] : null;
+const trimArg = process.argv.includes('--trim') ? process.argv[process.argv.indexOf('--trim') + 1].split(',').map(Number) : null;
+let trimmed = false;
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const port = 9333;
 const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'cdp'))}`,
@@ -57,8 +60,10 @@ if (fileArg) {
     document.querySelector('#eq [data-v="${process.argv.includes('--as-recorded') ? 0 : 1}"]').click();
     document.querySelector('#layout [data-v="${arg('--layout', 'auto')}"]').click();
     document.querySelector('#quality [data-v="${arg('--quality', 'normal')}"]').click();
+    document.querySelector('#inputs [data-v="${process.argv.includes('--inputs') ? 1 : 0}"]').click();
     document.querySelector('#scale .on').dataset.v + 'x, eq ' + document.querySelector('#eq .on').dataset.v +
-      ', ' + document.querySelector('#layout .on').dataset.v + ', ' + document.querySelector('#quality .on').dataset.v`);
+      ', ' + document.querySelector('#layout .on').dataset.v + ', ' + document.querySelector('#quality .on').dataset.v +
+      ', buttons ' + document.querySelector('#inputs .on').dataset.v`);
   console.log('options:', picked);
   const doc = await send('DOM.getDocument');
   const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#file' });
@@ -80,6 +85,16 @@ for (;;) {
   if (Date.now() - t0 > 4000 && Date.now() - t0 < 6100) await shot('progress');
   last = line;
   if (s.err) { console.log('ERROR:', s.err); break; }
+  if (s.done && trimArg && !trimmed) { // the part, with the page's own buttons under the video
+    await shot('trim');
+    console.log('trim:', await ev(`(() => { const v = document.getElementById('preview');
+      if (document.getElementById('trim').hidden) return 'no trim card';
+      v.currentTime = ${trimArg[0]}; document.getElementById('trimStart').click();
+      v.currentTime = ${trimArg[1]}; document.getElementById('trimEnd').click();
+      const r = document.getElementById('trimRange').textContent; document.getElementById('trimGo').click(); return r; })()`));
+    trimmed = true;
+    continue;
+  }
   if (s.done && fileArg) { // no server to take it: the bytes come back through the protocol
     const got = JSON.parse(await ev(`(async () => { const a = document.getElementById('save'); const b = await (await fetch(a.href)).blob();
       const u = new Uint8Array(await b.arrayBuffer()); let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode(...u.subarray(i, i + 32768));

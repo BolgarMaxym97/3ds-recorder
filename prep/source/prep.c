@@ -20,6 +20,7 @@
 #include "audio_place.h"
 #include "codec.h"
 #include "huff.h"
+#include "inputs.h"
 #include "r3d_format.h"
 
 #include "cmnMemory.h"
@@ -52,6 +53,11 @@
  */
 #define GRID_HZ 1000u
 #define COALESCE_MS(fps) (600u / (uint32_t)(fps))   /* 20 ms at 30 frames a second */
+/* A picture that stays at least this long (a menu, a pause) is encoded once more, as a key frame at
+   the best quality: still pictures look sharp. A picture the same as the one before is not encoded
+   again: the last frame lasts longer. (From Yu08083/3ds-recorder y02, 2026-11-22.) */
+#define STILL_TICKS (GRID_HZ * 2 / 5)
+#define STILL_BYTES 8   /* its bytes, against an ordinary frame's */
 #define TOP_N (400 * 240)
 #define BOT_N (320 * 240)
 #define AAC_FRAME 1024              /* samples per channel in one AAC frame */
@@ -60,7 +66,8 @@
 #define OUT_RATE 32000              /* AAC sample rate (index 5) */
 #define AAC_DELAY 1600              /* vo-aacenc: 1024 + 576 block-switch look-ahead (measured on host) */
 #define SLOT_MAGIC 0x50455250u      /* "PREP" */
-#define SLOT_VERSION 4u              /* 4: the video's clock in ms (GRID_HZ), State.dirtySince */
+#define SLOT_VERSION 5u              /* 4: the video's clock in ms (GRID_HZ), State.dirtySince; 5: buttons, held pictures */
+#define IN_SAVED 48u                 /* button samples read ahead of the picture kept in a resume point */
 #define FTYP_SIZE 32u
 #define MDAT_START (FTYP_SIZE + 8u) /* first sample byte */
 #define TBL_AUDIO 0x80000000u
@@ -95,13 +102,16 @@ typedef struct {
     uint32_t spsLen, ppsLen;            /* [C] */
     uint8_t sps[64], pps[64];
     uint8_t seen[2], needKey[2], pad[4]; /* [P] */
+    /* [P] the buttons (PrepOptions.inputs): drawn on the last picture, the state now, the samples ahead */
+    uint32_t inputs, inQueued;
+    InputState inDrawn, inNow, inQ[IN_SAVED];
 } State;
 
 /* a slot: State, the two screens' byte counts, then both screens as XR32 keyframes (the
    recorder's own codec: 345 KB of pixels are ~100-200 KB, and the SD card writes slowly) */
 #define SLOT_BYTES ((sizeof(State) + 8 + codec_xr32_max_size(TOP_N) + codec_xr32_max_size(BOT_N) + 4095) & ~(size_t)4095)
 
-enum { IT_PIC, IT_AAC, IT_END };
+enum { IT_PIC, IT_STILL, IT_AAC, IT_END };   /* IT_STILL: a picture that stays, at the best quality */
 typedef struct {
     uint8_t type;
     uint8_t slot;       /* IT_PIC: picture buffer */
@@ -117,6 +127,16 @@ struct PrepJob {
     char *srcBuf, *tblBuf;
     R3dFileHeader fh;
     int both, bottomOnly, H, fps, audio, skipCk, finished;
+    /* [P] held pictures: the last one queued (pic[lastPic], waiting in it), when it began, the last
+       resume point's tick; lastYuv: that picture without the buttons (to tell a repeat) */
+    int lastPic, pendingPic;
+    uint64_t pictureTick, checkpointTick;
+    uint8_t *lastYuv;
+    /* [P] the buttons */
+    InputTrack *in;
+    InputLayout inLayout;
+    InputCache inCache;
+    void *inCacheMem;
     double inRate, rsStep;
     uint32_t endUs, haveEnd;
     State s;
@@ -400,7 +420,9 @@ static int aac_open(PrepJob *j)
     p.bitRate = (j->opt.audioKbps ? j->opt.audioKbps : 96) * 1000;
     p.nChannels = 2;
     p.adtsUsed = 0;
-    if (j->aapi.SetParam(j->ah, VO_PID_AAC_ENCPARAM, &p) != VO_ERR_NONE)
+    /* MP4 samples: no empty fill elements (vo-aacenc pads every frame to the bit rate otherwise;
+       silence was ~1/8 of its padded size without them; the decoded sound is the same) */
+    if (j->aapi.SetParam(j->ah, VO_PID_AAC_MP4_ENCPARAM, &p) != VO_ERR_NONE)
         return fail(j, "AAC encoder settings refused");
     return 0;
 }
@@ -571,6 +593,12 @@ static int checkpoint(PrepJob *j, uint64_t recStart)
         free(data);
         return fail(j, "out of memory (resume point)");
     }
+    if (j->in) {   /* the samples read but not reached yet (a resume reads on after them) */
+        s->inNow = j->in->now;
+        s->inQueued = 0;
+        for (uint32_t t = j->in->tail; t != j->in->head && s->inQueued < IN_SAVED; t++)
+            s->inQ[s->inQueued++] = j->in->q[t % INPUT_QUEUE];
+    }
     uint32_t lens[2];
     lens[0] = (uint32_t)codec_xr32_encode_strided(scratch, (const uint8_t *)j->px[0], 400, 240, 480, 1, 1, data);
     lens[1] = (uint32_t)codec_xr32_encode_strided(scratch, (const uint8_t *)j->px[1], 320, 240, 480, 1, 1, data + lens[0]);
@@ -637,38 +665,85 @@ int prep_saved_permille(const char *base)
 
 /* ------------------------------------------------------------------ [P] video */
 
-/* The picture as it is now becomes the video frame of grid tick `tick`. */
+static int same_input(const InputState *a, const InputState *b)
+{
+    return a->keys == b->keys && a->cx == b->cx && a->cy == b->cy && a->tx == b->tx && a->ty == b->ty;
+}
+
+/* The picture waiting in pic[lastPic] goes to the encoder, as a held one if it stayed until `until`. */
+static int submit_picture(PrepJob *j, uint64_t until)
+{
+    if (!j->pendingPic)
+        return 0;
+    const int held = until >= j->pictureTick + STILL_TICKS;
+    const Item it = {held ? IT_STILL : IT_PIC, (uint8_t)j->lastPic, 0, j->pictureTick, NULL};
+    if (push(j, &it))
+        return PREP_ERROR;
+    j->pendingPic = 0;
+    j->s.videoFrames++;
+    return 0;
+}
+
+/* The picture as it is now becomes the video frame of grid tick `tick`: it waits in its buffer until
+   the next one differs (then it goes as it is) or it has stayed STILL_TICKS (then at the best quality). */
 static int produce_picture(PrepJob *j, uint64_t tick, uint64_t recStart)
 {
     State *s = &j->s;
-    if (s->videoFrames % PREP_GOP == 0 && s->videoFrames && !j->skipCk)
-        if (wait_drained(j) || checkpoint(j, recStart))
-            return PREP_ERROR;
-    j->skipCk = 0;
     const uint64_t t0 = now_us(j);
     for (int sc = 0; sc < 2; sc++)
         if (s->dirty & (1u << sc) && SCREEN_SHOWN(j, sc))
             yuv_screen(j, sc);
-    s->dirty = 0;
+    const size_t bytes = 400 * (size_t)j->H * 3 / 2;
+    const InputState *in = j->in ? input_track_at(j->in, (uint32_t)(tick * (1000000ull / GRID_HZ))) : NULL;
+    const int repeated = j->lastPic >= 0 && memcmp(j->lastYuv, j->yuv, bytes) == 0 && (!in || same_input(in, &s->inDrawn));
     j->st.yuvMs += ms_since(j, t0);
+    if (!repeated && submit_picture(j, tick))
+        return PREP_ERROR;
+    if (repeated)
+        s->dirty = 0;
+    /* a resume point: every PREP_GOP pictures, and as often while a picture stays (not with one waiting) */
+    const int savePoint = repeated ? tick >= j->checkpointTick + (uint64_t)PREP_GOP * GRID_HZ / j->fps
+                                   : s->videoFrames && s->videoFrames % PREP_GOP == 0;
+    if (savePoint && !j->skipCk && !j->pendingPic) {
+        if (wait_drained(j) || checkpoint(j, recStart))
+            return PREP_ERROR;
+        j->checkpointTick = tick;
+    }
+    j->skipCk = 0;
+    if (repeated)
+        return 0;
+    s->dirty = 0;
     const int slot = free_slot(j);
     if (slot < 0)
         return PREP_ERROR;
-    memcpy(j->pic[slot], j->yuv, 400 * (size_t)j->H * 3 / 2);
+    memcpy(j->pic[slot], j->yuv, bytes);
+    memcpy(j->lastYuv, j->yuv, bytes);
+    if (in) {
+        uint8_t *Y = j->pic[slot], *U = Y + 400 * j->H, *V = U + 400 * j->H / 4;
+        input_draw_yuv420(Y, U, V, 400, j->H, &j->inLayout, in, &j->inCache);
+        s->inDrawn = *in;
+    }
     STORE(j->picBusy[slot], 1);
-    const Item it = {IT_PIC, (uint8_t)slot, 0, tick, NULL};
-    if (push(j, &it))
-        return PREP_ERROR;
-    s->videoFrames++;
+    j->lastPic = slot;
+    j->pictureTick = tick;
+    j->pendingPic = 1;
     return 0;
 }
 
-/* Grid ticks before `timeUs` show the picture as it is: a frame where it changed. */
+/* Grid ticks before `timeUs` show the picture as it is: a frame where it changed (the buttons too). */
 static int video_until(PrepJob *j, uint32_t timeUs, uint64_t recStart)
 {
     State *s = &j->s;
     while (s->emitted * (1000000ull / GRID_HZ) < timeUs) {
+        if (j->in && !(s->dirty & 4u) &&
+            !same_input(input_track_at(j->in, (uint32_t)(s->emitted * (1000000ull / GRID_HZ))), &s->inDrawn)) {
+            if (!s->dirty)
+                s->dirtySince = s->emitted;
+            s->dirty |= 4u;   /* the buttons changed */
+        }
         if (s->dirty && s->emitted >= s->dirtySince + COALESCE_MS(j->fps) && produce_picture(j, s->dirtySince, recStart))
+            return PREP_ERROR;
+        if (!s->dirty && j->pendingPic && s->emitted >= j->pictureTick + STILL_TICKS && submit_picture(j, s->emitted))
             return PREP_ERROR;
         s->emitted++;
     }
@@ -681,7 +756,9 @@ static int produce_end(PrepJob *j)
     State *s = &j->s;
     if (!j->haveEnd)
         j->endUs = s->lastUs;
-    if (video_until(j, j->endUs, s->srcOffset) || (s->dirty && produce_picture(j, s->dirtySince, s->srcOffset)))
+    const uint64_t endTick = ((uint64_t)j->endUs * GRID_HZ + 999999) / 1000000;
+    if (video_until(j, j->endUs, s->srcOffset) || (s->dirty && produce_picture(j, s->dirtySince, s->srcOffset)) ||
+        submit_picture(j, endTick))
         return PREP_ERROR;
     if (j->audio) {
         if (audio_push(j, NULL, (uint32_t)audio_pad_to(&s->ap, j->endUs)))
@@ -692,7 +769,7 @@ static int produce_end(PrepJob *j)
             if (aac_emit(j, 0.f, 0.f))
                 return PREP_ERROR;
     }
-    const Item it = {IT_END, 0, 0, ((uint64_t)j->endUs * GRID_HZ + 999999) / 1000000, NULL};
+    const Item it = {IT_END, 0, 0, endTick, NULL};
     if (push(j, &it))
         return PREP_ERROR;
     j->producerDone = 1;
@@ -780,6 +857,21 @@ static int produce(PrepJob *j)
         }
         const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
                           rh.magic == R3D_MAGIC_QFRAME || rh.magic == R3D_MAGIC_CFRAME;
+        /* the buttons (drawn when asked), or a newer record type: stepped over */
+        if (rh.magic == R3D_MAGIC_INPUT || (rh.magic != R3D_MAGIC_FRAME && !delta && r3d_skippable(rh.magic, rh.len))) {
+            if (rh.len > R3D_SKIP_MAX || (rh.len & 15))
+                return produce_end(j);
+            if (rh.magic == R3D_MAGIC_INPUT && j->in) {
+                if (rh.len > codec_xr32_max_size(TOP_N) || fread(j->payload, 1, rh.len, j->src) != rh.len)
+                    return produce_end(j);
+                input_track_add(j->in, &rh, j->payload, rh.len);
+            } else if (fseeko(j->src, (off_t)rh.len, SEEK_CUR)) {
+                return produce_end(j);
+            }
+            s->srcOffset += sizeof(rh) + rh.len;
+            j->st.readMs += ms_since(j, t0);
+            continue;
+        }
         const uint32_t sc = rh.screen & 0x3F;
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(TOP_N) + 16)
             return produce_end(j);   /* end of valid data */
@@ -896,13 +988,18 @@ static int video_sample(PrepJob *j, const uint8_t *in, size_t n, size_t *outLen,
             continue;
         const int type = in[start] & 0x1F;
         if (type == 7 || type == 8) {
+            /* the first ones go into the MP4's header (avcC); a repeat is left out, and a different one
+               stays in the sample (in-band) so the frames after it decode as encoded */
             uint8_t *dst = type == 7 ? s->sps : s->pps;
             uint32_t *dl = type == 7 ? &s->spsLen : &s->ppsLen;
-            if (len <= sizeof(s->sps)) {
+            if (!*dl && len <= sizeof(s->sps)) {
                 memcpy(dst, in + start, len);
                 *dl = (uint32_t)len;
+                continue;
             }
-            continue;
+            if (*dl == len && !memcmp(dst, in + start, len))
+                continue;
+            j->st.paramChanges++;
         }
         if (type == 5)
             *key = 1;
@@ -935,7 +1032,15 @@ static int consume_picture(PrepJob *j, const Item *it)
     unsigned char *coded = NULL;
     int size = 0;
     const uint64_t t0 = now_us(j);
-    const int bad = H264E_encode(j->enc, j->scratch, &j->run, &io, &coded, &size);
+    H264E_run_param_t run = j->run;
+    if (it->type == IT_STILL) {   /* a picture that stays: once, sharp */
+        /* a key frame with more bytes, the QP range as always: minih264 derives the PPS's
+           pic_init_qp from that range at a key frame, and the MP4 has one PPS for all frames (with
+           qp_max = qp_min, Yu's way, the frames before such a key frame decoded washed out) */
+        run.frame_type = H264E_FRAME_TYPE_KEY;
+        run.desired_frame_bytes = j->run.desired_frame_bytes * STILL_BYTES;
+    }
+    const int bad = H264E_encode(j->enc, j->scratch, &run, &io, &coded, &size);
     STORE(j->picBusy[it->slot], 0);
     j->st.videoMs += ms_since(j, t0);
     if (bad || size <= 0)
@@ -1216,10 +1321,23 @@ static int write_moov(PrepJob *j)
         const size_t mp4a = box(&b, "mp4a");
         b_zero(&b, 6), b_u16(&b, 1), b_zero(&b, 8), b_u16(&b, 2), b_u16(&b, 16), b_u32(&b, 0), b_u32(&b, OUT_RATE << 16);
         const size_t esds = fullbox(&b, "esds", 0);
-        const uint32_t br = (j->opt.audioKbps ? j->opt.audioKbps : 96) * 1000;
+        /* the real bit rates: the AAC frames carry no fill (aac_open), their sizes vary (silence is tiny) */
+        uint64_t audioBytes = 0;
+        uint32_t window = 0, peak = 0;
+        const uint32_t perSecond = (OUT_RATE + AAC_FRAME - 1) / AAC_FRAME;
+        for (uint32_t i = 0; i < na; i++) {
+            audioBytes += a[i][1];
+            window += a[i][1];
+            if (i >= perSecond)
+                window -= a[i - perSecond][1];
+            if (window > peak)
+                peak = window;
+        }
+        const uint32_t avgBps = na ? (uint32_t)(audioBytes * 8 * OUT_RATE / ((uint64_t)na * AAC_FRAME)) : 0;
+        const uint32_t maxBps = peak * 8 > avgBps ? peak * 8 : avgBps;
         b_u8(&b, 3), b_u8(&b, 25), b_u16(&b, 2), b_u8(&b, 0);              /* ES_Descriptor */
         b_u8(&b, 4), b_u8(&b, 17), b_u8(&b, 0x40), b_u8(&b, 0x15);         /* DecoderConfig: AAC, audio */
-        b_u8(&b, 0), b_u16(&b, AAC_OUT_MAX), b_u32(&b, br), b_u32(&b, br);
+        b_u8(&b, 0), b_u16(&b, AAC_OUT_MAX), b_u32(&b, maxBps), b_u32(&b, avgBps);
         b_u8(&b, 5), b_u8(&b, 2), b_u8(&b, 0x12), b_u8(&b, 0x90);          /* AAC-LC, 32 kHz, stereo */
         b_u8(&b, 6), b_u8(&b, 1), b_u8(&b, 2);                             /* SLConfig */
         box_end(&b, esds);
@@ -1306,7 +1424,7 @@ int prep_consume(PrepJob *j)
         Item it = j->ring[t % RING];
         STORE(j->tail, t + 1);
         int r = 0;
-        if (it.type == IT_PIC)
+        if (it.type == IT_PIC || it.type == IT_STILL)
             r = consume_picture(j, &it);
         else if (it.type == IT_AAC)
             r = consume_audio(j, &it);
@@ -1414,6 +1532,7 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
         return NULL;
     }
     j->opt = *opt;
+    j->lastPic = -1;
     snprintf(j->base, sizeof(j->base), "%s", base);
     yuv_tables();
     j->srcBuf = malloc(SRC_BUF);
@@ -1446,25 +1565,58 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
     j->payload = malloc(codec_xr32_max_size(TOP_N) + 64);
     const size_t picBytes = 400 * (size_t)j->H * 3 / 2;
     j->yuv = malloc(picBytes);
+    j->lastYuv = malloc(picBytes);
     for (int i = 0; i < PIC_SLOTS; i++)
         j->pic[i] = malloc(picBytes);
-    if (!j->obuf[0] || !j->obuf[1] || !j->px[0] || !j->px[1] || !j->payload || !j->yuv || !j->pic[PIC_SLOTS - 1] || !j->pic[0] || !j->pic[1]) {
+    /* the buttons: only from a recording that kept them, when asked */
+    if (opt->inputs && (j->fh.flags & R3D_FILE_INPUT)) {
+        j->in = malloc(sizeof(InputTrack));
+        j->inCacheMem = malloc(INPUT_CACHE_BYTES);
+        if (j->in && j->inCacheMem) {
+            input_track_init(j->in);
+            input_cache_init(&j->inCache, j->inCacheMem);
+            const InputScreens sc = {400, j->H, j->bottomOnly ? -1 : 0, 0, j->both || j->bottomOnly ? 40 : -1, j->both ? 240 : 0};
+            input_layout(&j->inLayout, &sc);
+        } else {
+            fail(j, "out of memory");
+            goto error;
+        }
+    }
+    if (!j->obuf[0] || !j->obuf[1] || !j->px[0] || !j->px[1] || !j->payload || !j->yuv || !j->lastYuv || !j->pic[PIC_SLOTS - 1] || !j->pic[0] || !j->pic[1]) {
         fail(j, "out of memory");
         goto error;
     }
     memset(j->yuv, 16, 400 * (size_t)j->H);
     memset(j->yuv + 400 * j->H, 128, 400 * (size_t)j->H / 2);
-    const int resumed = try_resume(j, srcSize);
+    int resumed = try_resume(j, srcSize);
+    if (resumed && j->s.inputs != (j->in != NULL)) {   /* made with the buttons on, now off (or back): over */
+        fclose(j->prep), fclose(j->part), fclose(j->tbl);
+        j->prep = j->part = j->tbl = NULL;
+        resumed = 0;
+    }
     if (!resumed && start_fresh(j, srcSize))
         goto error;
     if (video_open(j) || (j->audio && aac_open(j)))
         goto error;
+    j->s.inputs = j->in != NULL;
+    if (j->in && !resumed) {
+        j->s.inDrawn.tx = j->s.inDrawn.ty = R3D_TOUCH_NONE;
+        j->s.inNow = j->s.inDrawn;
+    }
     if (resumed) {
         j->st.resumedFrom = j->s.videoFrames;
-        j->skipCk = 1;   /* the resume point is this very state */
+        j->skipCk = j->s.dirty != 0;   /* the resume point is this very state (a change still to queue) */
+        j->checkpointTick = j->s.emitted;
         for (int sc = 0; sc < 2; sc++)
             if (j->s.seen[sc] && SCREEN_SHOWN(j, sc))
                 yuv_screen(j, sc);
+        if (!j->s.dirty && j->s.videoFrames)   /* the picture already in the video: a repeat is not encoded again */
+            memcpy(j->lastYuv, j->yuv, picBytes), j->lastPic = 0;
+        if (j->in) {
+            j->in->now = j->s.inNow;
+            for (uint32_t i = 0; i < j->s.inQueued && i < IN_SAVED; i++)
+                j->in->q[j->in->head++ % INPUT_QUEUE] = j->s.inQ[i];
+        }
         if (j->audio && j->s.aacHistFill) {   /* warm the new encoder up; its output is in the file */
             j->aacDiscard = j->s.aacHistFill;
             for (uint32_t i = AAC_WARM - j->s.aacHistFill; i < AAC_WARM; i++) {
@@ -1510,6 +1662,9 @@ void prep_close(PrepJob *j)
     free(j->px[1]);
     free(j->payload);
     free(j->yuv);
+    free(j->lastYuv);
+    free(j->in);
+    free(j->inCacheMem);
     for (int i = 0; i < PIC_SLOTS; i++)
         free(j->pic[i]);
     free(j->nal);

@@ -19,13 +19,16 @@ typedef enum {
     PS_FAILED,      /* could not be prepared (this session) */
 } PrepareState;
 
-enum { PREP_HOLD_PLAYER = 1, PREP_HOLD_SEND = 2 };
+enum { PREP_HOLD_PLAYER = 1, PREP_HOLD_SEND = 2, PREP_HOLD_SDTEST = 4 };
 
 /* slices: the H.264 encoder's second half of each picture on core 2 (New 3DS; config mp4_threads).
    autoAll (config convert=auto): every recording, newest first; else only those asked for with
    prepare_first (the Download screen). Replay clips and joins are made either way. */
 void prepare_start(bool new3ds, bool slices, bool autoAll);
 void prepare_set_auto(bool autoAll);
+/* Buttons In Video (config mp4_inputs): MP4s made from now on show the buttons pressed. A job that
+   was started the other way starts over. */
+void prepare_set_inputs(bool on);
 void prepare_stop(void);
 /* PREP_HOLD_* bits: work pauses while any is set. */
 void prepare_hold(u32 bit, bool on);

@@ -64,7 +64,9 @@ static int record_at(Src *s, uint64_t at, R3dRecHeader *h, uint32_t *stored)
     if (src_read(s, at, h, sizeof(*h)))
         return -1;
     const uint32_t m = h->magic;
-    if (m != R3D_MAGIC_PAD && m != R3D_MAGIC_DSPMEM && m != R3D_MAGIC_AUDIO && !is_video(m))
+    /* the buttons (R3DI) and a newer record type are copied as they are (len a multiple of 16) */
+    if (m != R3D_MAGIC_PAD && m != R3D_MAGIC_DSPMEM && m != R3D_MAGIC_AUDIO && !is_video(m) &&
+        (m == R3D_MAGIC_END || !r3d_skippable(m, h->len)))
         return 1;
     if (h->len > MAX_RECORD || (is_video(m) && (h->screen & 0x3Fu) > 1u))
         return 1;
@@ -198,7 +200,7 @@ int r3d_unwrap(const char *src, const char *dst, UnwrapProgress progress, void *
                 continue;
             frames[sc]++;
         } else if (t < 0)
-            continue;   /* sound from before the clip's start */
+            continue;   /* sound (and buttons) from before the clip's start */
         h.timeUs = t < 0 ? 0u : (uint32_t)t;
         if (h.timeUs > lastUs)
             lastUs = h.timeUs;

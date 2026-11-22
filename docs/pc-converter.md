@@ -8,7 +8,9 @@ make a better video from a recording (`.r3d`, in `/3ds/recorder/recordings/` on 
 | Install | nothing: Chrome, Edge or Safari on a computer | Windows zip, or Python + ffmpeg |
 | Size | 1×, 2×, 3× (sharp pixels) | any whole number (default per preset) |
 | Screens | as recorded, top, bottom, side by side | the same, plus one file per screen |
-| For | sharing, YouTube (higher bitrate), editing (every frame a keyframe) | YouTube (H.264 CRF 16), DaVinci Resolve (DNxHR HQ), lossless (FFV1 + FLAC) |
+| For | sharing, YouTube (higher bitrate), editing (every frame a keyframe), Discord (under 10 MB) | YouTube (H.264 CRF 16), DaVinci Resolve (DNxHR HQ), lossless (FFV1 + FLAC) |
+| Buttons pressed | **Buttons: Show** | `--inputs` |
+| A part only | under the video: Start here / End here | `--trim START END` |
 
 **Start with the page**: drop the `.r3d` on it, choose the size, screens and what the video is for.
 The file never leaves the computer. Use r3d2video when you need DNxHR, a lossless file or one file
@@ -54,6 +56,9 @@ by side · `split` one file per screen · `auto` what the recording holds (defau
     --scale N        whole-number upscale instead of the preset's
     --fps N          output frame rate (default: the recording's)
     --no-eq          the sound as the DSP mixed it (no treble cut like the console's speaker)
+    --inputs         draw the buttons pressed (recordings from 1.6.0 on): beside the bottom
+                     screen with both screens, else in a corner
+    --trim START END keep only the part from START to END seconds
     --out DIR        write the videos there
     --ffmpeg PATH    a specific ffmpeg
 

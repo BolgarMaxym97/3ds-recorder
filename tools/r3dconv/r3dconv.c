@@ -2,8 +2,12 @@
  * r3dconv — decodes a 3DS Recorder .r3d file into raw RGB24 video on stdout,
  * for ffmpeg (see tools/r3d2mp4.sh).
  *
- * Usage: r3dconv [--layout L] [--wav out.wav] <file.r3d> [fps]   (fps defaults to the file header, else 30)
+ * Usage: r3dconv [--layout L] [--inputs] [--trim START END] [--wav out.wav] <file.r3d> [fps]
+ *          (fps defaults to the file header, else 30)
  *        r3dconv --info [--layout L] [--wav out.wav] <file.r3d>  (summary only; with --wav: audio only)
+ * --inputs draws the buttons pressed during the recording over the video (R3DI records, version 7;
+ * codec/source/inputs.c: beside the bottom screen, or in a corner of the top one).
+ * --trim keeps the part from START to END seconds (video and WAV); the output starts at 0.
  * --wav writes the recording's audio (R3DA, version 4) as a 16-bit stereo WAV
  * at the DSP rate, placed by timestamps (audio_place.h), padded with silence to
  * the length of the video. --repair first drops unfinished frames and
@@ -22,14 +26,15 @@
  *   bottom  320 x 240, the bottom screen at its own size
  *   side    720 x 240, top on the left, bottom on the right
  * The size line "WxH fps" is printed to stderr before the frames.
- * Reading stops at the first unknown record (an unclosed file ends in stale
- * SD data, see codec/include/r3d_format.h).
+ * Reading stops at the first record that is not plausible (an unclosed file ends in stale SD data,
+ * see codec/include/r3d_format.h); a newer record type is stepped over.
  */
 #include "audio_eq.h"
 #include "audio_order.h"
 #include "audio_place.h"
 #include "codec.h"
 #include "huff.h"
+#include "inputs.h"
 #include "r3d_format.h"
 
 #include <stdio.h>
@@ -70,12 +75,19 @@ static void wav_header(FILE *w, uint32_t rate, uint32_t dataBytes)
     fwrite(h, 1, sizeof(h), w);
 }
 
+/* --trim: the samples kept, [g_keepFrom, g_keepTo) of the whole sound */
+static uint64_t g_wavPos, g_keepFrom, g_keepTo = UINT64_MAX;
+
 /* Writes `n` stereo samples, through the treble cut when `eq` is set (filters `pcm` in place). */
 static void wav_write(FILE *w, AudioEq *eq, int16_t *pcm, uint32_t n)
 {
     if (eq)
         audio_eq_run(eq, pcm, n);
-    fwrite(pcm, 4, n, w);
+    const uint64_t a = g_wavPos > g_keepFrom ? g_wavPos : g_keepFrom;
+    const uint64_t b = g_wavPos + n < g_keepTo ? g_wavPos + n : g_keepTo;
+    if (b > a)
+        fwrite(pcm + (a - g_wavPos) * 2, 4, (size_t)(b - a), w);
+    g_wavPos += n;
 }
 
 static void wav_silence(FILE *w, AudioEq *eq, uint64_t samples)
@@ -124,6 +136,8 @@ int main(int argc, char **argv)
     int repair = 0;   /* --repair: drop partial frames and re-sequence (recordings before the cache fix) */
     int useEq = 1;    /* --no-eq: no treble cut */
     const char *layoutName = NULL;   /* --layout: both, top, bottom, side (default: what the file holds) */
+    int drawInputs = 0;               /* --inputs */
+    double trimFrom = 0, trimTo = -1; /* --trim, seconds */
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);   /* raw frames: no \n -> \r\n */
 #endif
@@ -140,6 +154,17 @@ int main(int argc, char **argv)
         } else if (argc > argi + 1 && strcmp(argv[argi], "--layout") == 0) {
             layoutName = argv[argi + 1];
             argi += 2;
+        } else if (argc > argi && strcmp(argv[argi], "--inputs") == 0) {
+            drawInputs = 1;
+            argi++;
+        } else if (argc > argi + 2 && strcmp(argv[argi], "--trim") == 0) {
+            trimFrom = atof(argv[argi + 1]);
+            trimTo = atof(argv[argi + 2]);
+            if (trimFrom < 0 || trimTo <= trimFrom) {
+                fprintf(stderr, "--trim: START must be under END (seconds)\n");
+                return 2;
+            }
+            argi += 3;
         } else if (argc > argi + 1 && strcmp(argv[argi], "--wav") == 0) {
             wavPath = argv[argi + 1];
             argi += 2;
@@ -148,7 +173,8 @@ int main(int argc, char **argv)
         }
     }
     if (argc <= argi) {
-        fprintf(stderr, "usage: %s [--info] [--repair] [--no-eq] [--layout both|top|bottom|side] [--wav out.wav] <file.r3d> [fps]\n",
+        fprintf(stderr, "usage: %s [--info] [--repair] [--no-eq] [--layout both|top|bottom|side] [--inputs] [--trim START END] "
+                        "[--wav out.wav] <file.r3d> [fps]\n",
                 argv[0]);
         return 2;
     }
@@ -191,6 +217,17 @@ int main(int argc, char **argv)
         }
     }
     fprintf(stderr, "%ux%u %u\n", outW, outH, fps);
+    /* the buttons: where the overlay goes for these screens */
+    InputTrack *track = malloc(sizeof(InputTrack));
+    input_track_init(track);
+    InputLayout inLayout;
+    const InputScreens inScreens = {(int)outW, (int)outH, showTop ? (int)topX : -1, showTop ? (int)topY : -1,
+                                    showBot ? (int)botX : -1, showBot ? (int)botY : -1};
+    input_layout(&inLayout, &inScreens);
+    if (drawInputs && !(fh.flags & R3D_FILE_INPUT))
+        fprintf(stderr, "this recording has no button presses (recorded before 1.6.0, or with Record Buttons off)\n");
+    const uint64_t keepFromUs = (uint64_t)(trimFrom * 1e6), keepToUs = trimTo > 0 ? (uint64_t)(trimTo * 1e6) : UINT64_MAX;
+    int pastEnd = 0;   /* --trim: every frame up to END is out */
 
     Screen scr[2] = { { 400, 240, 400 * 240, NULL, 0, 1, 0, 0 }, { 320, 240, 320 * 240, NULL, 0, 1, 0, 0 } };
     for (int i = 0; i < 2; i++) {
@@ -205,6 +242,8 @@ int main(int argc, char **argv)
     const uint32_t audioRate = fh.version >= 4 ? fh.audioRate : 0;
     AudioPlacer ap;
     audio_placer_init(&ap, audioRate ? audioRate : R3D_AUDIO_RATE_MHZ);
+    g_keepFrom = (uint64_t)(trimFrom * ap.rateMilliHz / 1000.0);
+    g_keepTo = trimTo > 0 ? (uint64_t)(trimTo * ap.rateMilliHz / 1000.0) : UINT64_MAX;
     uint32_t audioFrames = 0, audioDropped = 0, audioGaps = 0, audioConcealed = 0, dspSnaps = 0, regionSwitches = 0, lastRegion = 0xFF;
     uint64_t audioSilence = 0;
     FILE *wav = NULL;
@@ -240,6 +279,12 @@ int main(int argc, char **argv)
             fseek(f, rh.len, SEEK_CUR);
             continue;
         }
+        if (rh.magic == R3D_MAGIC_INPUT) {
+            if (rh.len > R3D_SKIP_MAX || (rh.len & 15) || fread(payload, 1, rh.len, f) != rh.len)
+                break;
+            input_track_add(track, &rh, payload, rh.len);
+            continue;
+        }
         if (rh.magic == R3D_MAGIC_AUDIO) {
             const uint32_t bytes = (uint32_t)rh.cols * 4u;
             if (rh.len < bytes || rh.len > 4096 || fread(payload, 1, rh.len, f) != rh.len)
@@ -273,6 +318,10 @@ int main(int argc, char **argv)
         const int delta = rh.magic == R3D_MAGIC_XFRAME || rh.magic == R3D_MAGIC_YFRAME || rh.magic == R3D_MAGIC_HFRAME ||
                           rh.magic == R3D_MAGIC_QFRAME || rh.magic == R3D_MAGIC_CFRAME;
         const uint32_t sc = rh.screen & 0x3F;
+        if (rh.magic != R3D_MAGIC_FRAME && !delta && r3d_skippable(rh.magic, rh.len)) {
+            fseek(f, rh.len, SEEK_CUR);   /* a newer record type */
+            continue;
+        }
         if ((rh.magic != R3D_MAGIC_FRAME && !delta) || sc > 1 || rh.len > codec_xr32_max_size(400 * 240) + 16) {
             break;   /* end of valid data */
         }
@@ -288,6 +337,15 @@ int main(int argc, char **argv)
         /* emit output frames up to this record's time with the pictures so far */
         if (!info) {
             while ((uint64_t)emitted * 1000000u / fps < rh.timeUs) {
+                const uint64_t t = (uint64_t)emitted * 1000000u / fps;
+                const InputState *in = input_track_at(track, (uint32_t)t);
+                emitted++;
+                if (t < keepFromUs)
+                    continue;
+                if (t >= keepToUs) {
+                    pastEnd = 1;
+                    break;
+                }
                 memset(rgb, 0, (size_t)outW * outH * 3);
                 if (showTop) {
                     put_screen(rgb, outW, &scr[0], topX, topY);
@@ -295,9 +353,12 @@ int main(int argc, char **argv)
                 if (showBot) {
                     put_screen(rgb, outW, &scr[1], botX, botY);
                 }
+                if (drawInputs)
+                    input_draw_rgb24(rgb, (int)outW, (int)outH, &inLayout, in);
                 fwrite(rgb, 1, (size_t)outW * outH * 3, stdout);
-                emitted++;
             }
+            if (pastEnd)
+                break;
         }
         lastUs = rh.timeUs;
 
@@ -435,11 +496,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "audio joins: harsh %.1f%% as recorded (inside frames ~5%%)\n", 100.0 * harshIn / joins);
     }
     if (wav) {
-        wav_silence(wav, eq, audio_pad_to(&ap, lastUs));
+        wav_silence(wav, eq, audio_pad_to(&ap, pastEnd ? (uint32_t)(keepToUs + 1000000u) : lastUs));
         const long end = ftell(wav);
         wav_header(wav, (ap.rateMilliHz + 500u) / 1000u, (uint32_t)(end - 44));
         fclose(wav);
     }
+    free(track);
     free(order);
     free(aPcm);
     free(aTime);

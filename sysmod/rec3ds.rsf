@@ -113,6 +113,7 @@ AccessControlInfo:
     - ptm:u   # the lid (shell) state: no screen reads while the console sleeps
     - ptm:sysm # the notification LED (SetInfoLEDPattern, both consoles); New 3DS: 804 MHz + L2 while recording (CpuBoost)
     - APT:U    # the applet in front: the game back after HOME (no plugin of ours there)
+    - hid:USER # the buttons pressed, kept with a recording (InputPoll): a session only while recording
   FileSystemAccess:
     - DirectSdmc
     - DirectSdmcWrite

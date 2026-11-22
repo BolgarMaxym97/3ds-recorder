@@ -229,6 +229,7 @@ int main(int argc, char **argv)
 #ifdef UI_TOUR
         in = (Input){0};
         if (tourWait < 0) {
+            tourName[0] = 0;
             tourWait = app_tour(&app, tourLang[tourL], tourStep, tourName, sizeof(tourName));
             if (!tourWait && ++tourL < tourLangs) {
                 tourStep = 0;
@@ -276,7 +277,8 @@ int main(int argc, char **argv)
             char path[96];
             snprintf(path, sizeof(path), "sdmc:/3ds/recorder/tour/%s-%02d-%s.bmp", LANGS[tourLang[tourL]].code,
                      tourStep, tourName);
-            tour_save(path);
+            if (tourName[0])   /* an empty name: a step with nothing to show (a group's missing row) */
+                tour_save(path);
             tourStep++;
             tourWait = -1;
         }

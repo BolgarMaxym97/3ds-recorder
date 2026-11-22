@@ -71,12 +71,21 @@ ol { margin: 6px 0 0; padding-left: 20px; }
 .seg { display: flex; background: var(--surface2); border-radius: 10px; padding: 3px; max-width: 100%; }
 .seg button { white-space: nowrap; }
 /* narrow: a row of four choices goes under its label and shares the width */
-@media (max-width: 480px) { .seg { flex: 1 1 100%; } .seg button { flex: 1 1 0; min-width: 0; padding: 7px 4px; white-space: normal; font-size: 14px; line-height: 1.2; } .opt.wide { flex-direction: column; align-items: stretch; } }
+@media (max-width: 480px) { .seg { flex: 1 1 100%; } .seg button { flex: 1 1 0; min-width: 0; padding: 7px 4px; white-space: normal; font-size: 14px; line-height: 1.2; } .opt.wide { flex-direction: column; align-items: stretch; }
+  #quality { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; } }
 .seg button { display: inline-block; width: auto; margin: 0; padding: 7px 14px; border-radius: 8px; font-weight: 600;
   background: none; color: var(--muted); }
 .seg button.on { background: var(--text); color: var(--bg); }
 .opts small { color: var(--muted); font-size: 13px; display: block; margin-top: 4px; }
 .drop small { color: var(--muted); font-size: 14px; }
+.trim b { display: block; margin-bottom: 10px; }
+.trimrow { display: flex; align-items: center; gap: 10px; }
+.trimrow button { flex: 1 1 0; margin: 0; padding: 10px 6px; }
+.trimrow span { font-variant-numeric: tabular-nums; color: var(--soft); white-space: nowrap; font-size: 14px; }
+.trim #trimGo { margin: 10px 0 6px; }
+.trim #trimGo:disabled { opacity: .45; cursor: default; }
+.trim .secondary { background: var(--surface2); }
+.trim small { color: var(--muted); font-size: 13px; display: block; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -95,8 +104,11 @@ ol { margin: 6px 0 0; padding-left: 20px; }
     <div class="opt wide"><b data-t="optLayout"></b>
       <div class="seg" id="layout"><button data-v="auto" data-t="layAuto"></button><button data-v="top" data-t="layTop"></button><button data-v="bottom" data-t="layBottom"></button><button data-v="side" data-t="laySide"></button></div></div>
     <div class="opt wide"><b data-t="optQuality"></b>
-      <div class="seg" id="quality"><button data-v="normal" data-t="qNormal"></button><button data-v="high" data-t="qHigh"></button><button data-v="edit" data-t="qEdit"></button></div></div>
-    <small data-t="qualityHint"></small>
+      <div class="seg" id="quality"><button data-v="normal" data-t="qNormal"></button><button data-v="high" data-t="qHigh"></button><button data-v="edit" data-t="qEdit"></button><button data-v="discord" data-t="qDiscord"></button></div></div>
+    <small><span data-t="qualityHint"></span> <span data-t="discordHint"></span></small>
+    <div class="opt"><b data-t="optInputs"></b>
+      <div class="seg" id="inputs"><button data-v="0" data-t="inOff"></button><button data-v="1" data-t="inOn"></button></div></div>
+    <small data-t="inputsHint"></small>
     <div class="opt"><b data-t="optAudio"></b>
       <div class="seg" id="eq"><button data-v="1" data-t="eqOn"></button><button data-v="0" data-t="eqOff"></button></div></div>
     <small><span data-t="pcTool"></span> <a href="https://github.com/BolgarMaxym97/3ds-recorder/blob/main/docs/pc-converter.md" target="_blank" rel="noopener" data-t="pcToolLink"></a></small>
@@ -128,6 +140,12 @@ ol { margin: 6px 0 0; padding-left: 20px; }
 
 <div id="result" hidden>
   <video id="preview" controls playsinline></video>
+  <div class="card trim" id="trim" hidden>
+    <b data-t="trimTitle"></b>
+    <div class="trimrow"><button class="secondary" id="trimStart" data-t="trimStart"></button><span id="trimRange"></span><button class="secondary" id="trimEnd" data-t="trimEnd"></button></div>
+    <button class="secondary" id="trimGo" data-t="trimGo"></button>
+    <small data-t="trimHint"></small>
+  </div>
   <a class="btn primary" id="save" download></a>
   <div class="note info" id="howto"></div>
   <a class="btn link" id="again" href="" hidden data-t="again"></a>
@@ -142,6 +160,7 @@ ol { margin: 6px 0 0; padding-left: 20px; }
 <canvas id="canvas" class="hidden" width="400" height="480"></canvas>
 
 <script src="vendor/mp4-muxer.min.js"></script>
+<script src="inputs.js"></script>
 <script src="r3d.js"></script>
 <script src="app.js"></script>
 </body>

@@ -8,7 +8,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$ROOT/build"
 cc -std=c11 -O2 -Wall -Wextra -I"$ROOT/codec/include" -o "$ROOT/build/r3dconv" \
-    "$ROOT/tools/r3dconv/r3dconv.c" "$ROOT/codec/source/codec.c" "$ROOT/codec/source/huff.c" -lm
+    "$ROOT/tools/r3dconv/r3dconv.c" "$ROOT/codec/source/codec.c" "$ROOT/codec/source/huff.c" "$ROOT/codec/source/inputs.c" -lm
 cc -std=gnu11 -O2 -Wall -Wextra -I"$ROOT/codec/include" -o "$WORK/make_r3d" \
     "$ROOT/tests/pcconv/make_r3d.c" "$ROOT/codec/source/codec.c" -lm
 "$WORK/make_r3d" "$WORK/rec.r3d"
@@ -68,4 +68,17 @@ conv --preset lossless --scale 3 --layout top
 check_px "$WORK/out/rec_lossless.mkv" 1200 23 23 "255 0 0"     # 8 px -> 24 px, nearest neighbour
 [ "$(pix "$WORK/out/rec_lossless.mkv" 1200 24 24)" != "255 0 0" ] || fail "upscale: red marker larger than 24 px"
 echo "ok  rec_lossless.mkv  (24,24) is past the marker"
+
+# The buttons (--inputs): the last input sample is D-pad down (bit 7) and no touch; the D-pad's down arm
+# in the left strip beside the bottom screen, under the stick (x 20, y 240 + 118 + 9), is filled red, black without it
+conv --preset lossless --inputs
+check_px "$WORK/out/rec_lossless.mkv" 400 20 367 "255 77 79"
+check_px "$WORK/out/rec_lossless.mkv" 400 40 240 "0 255 0"     # the game's picture is untouched
+conv --preset lossless
+check_px "$WORK/out/rec_lossless.mkv" 400 20 367 "0 0 0"
+# --trim: 1 s to 3 s of the 4 s recording, sound and picture
+conv --preset youtube --trim 1 3
+dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$WORK/out/rec_youtube.mp4")"
+python3 -c "import sys; d = float('$dur'); sys.exit(0 if 1.9 <= d <= 2.15 else 1)" || fail "--trim 1 3: $dur s"
+echo "ok  rec_youtube.mp4  --trim 1 3 -> $dur s"
 echo "ALL PCCONV TESTS PASSED"

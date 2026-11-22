@@ -25,6 +25,8 @@ Options:
   --scale N        integer upscale (default: per preset)
   --fps N          output frame rate (default: the recording's, usually 30)
   --no-eq          the sound as the DSP mixed it, without the console speaker's treble cut
+  --inputs         draw the buttons pressed during the recording (recorded since 1.6.0)
+  --trim START END keep only the part from START to END (seconds)
   --out DIR        where to write (default: next to each recording)
   --ffmpeg PATH    ffmpeg to use (default: next to this program, else on PATH)
 
@@ -79,6 +81,9 @@ T = {
     "layout_bottom": ("Bottom screen only", "下画面だけ"),
     "layout_side": ("Side by side", "横に並べる"),
     "layout_split": ("One file per screen", "上下を別ファイルに"),
+    "inputs_q": ("Show the buttons pressed?", "押したボタンを表示しますか？"),
+    "inputs_no": ("No", "いいえ"),
+    "inputs_yes": ("Yes (beside the bottom screen, or in a corner)", "はい（下画面の横、または隅に表示）"),
     "choose": ("Number [1]: ", "番号 [1]: "),
     "no_ffmpeg": ("ffmpeg was not found. Install it once:\n"
                   "  Windows: winget install --id Gyan.FFmpeg -e   (or put ffmpeg.exe next to r3d2video.exe)\n"
@@ -172,10 +177,13 @@ class Info:
     has_audio: bool
 
 
-def probe(r3dconv: str, path: Path, layout: str | None, wav: Path, no_eq: bool) -> tuple[int, Info | None, str]:
+def probe(r3dconv: str, path: Path, layout: str | None, wav: Path, no_eq: bool,
+          trim: tuple[float, float] | None = None) -> tuple[int, Info | None, str]:
     cmd = [r3dconv, "--info"]
     if no_eq:
         cmd.append("--no-eq")
+    if trim:
+        cmd += ["--trim", str(trim[0]), str(trim[1])]
     if layout:
         cmd += ["--layout", layout]
     cmd += ["--wav", str(wav), str(path)]
@@ -194,14 +202,15 @@ def probe(r3dconv: str, path: Path, layout: str | None, wav: Path, no_eq: bool) 
 
 
 def convert_one(r3dconv: str, ffmpeg: str, src: Path, out_dir: Path, preset: Preset, layout: str,
-                scale: int | None, fps: int | None, no_eq: bool) -> list[Path]:
+                scale: int | None, fps: int | None, no_eq: bool, inputs: bool = False,
+                trim: tuple[float, float] | None = None) -> list[Path]:
     """Converts one recording; returns the files written (empty on failure)."""
     layouts = ["top", "bottom"] if layout == "split" else [None if layout == "auto" else layout]
     written: list[Path] = []
     for lay in layouts:
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "audio.wav"
-            rc, info, err = probe(r3dconv, src, lay, wav, no_eq)
+            rc, info, err = probe(r3dconv, src, lay, wav, no_eq, trim)
             if rc == 3:   # the recording lacks this screen
                 print("  " + t("no_screen", t(lay or "top")))
                 continue
@@ -218,6 +227,10 @@ def convert_one(r3dconv: str, ffmpeg: str, src: Path, out_dir: Path, preset: Pre
                 conv.append("--no-eq")
             if lay:
                 conv += ["--layout", lay]
+            if inputs:
+                conv.append("--inputs")
+            if trim:
+                conv += ["--trim", str(trim[0]), str(trim[1])]
             conv += [str(src), str(rate)]
 
             ff = [ffmpeg, "-hide_banner", "-loglevel", "error", "-stats", "-y",
@@ -290,6 +303,8 @@ def main() -> int:
     ap.add_argument("--scale", type=int)
     ap.add_argument("--fps", type=int)
     ap.add_argument("--no-eq", action="store_true")
+    ap.add_argument("--inputs", dest="draw_inputs", action="store_true")
+    ap.add_argument("--trim", nargs=2, type=float, metavar=("START", "END"))
     ap.add_argument("--out")
     ap.add_argument("--ffmpeg")
     args = ap.parse_args()
@@ -322,10 +337,14 @@ def main() -> int:
             preset = ask(t("preset_q"), [(p, t("preset_" + p)) for p in PRESETS])
             if layout is None:
                 layout = ask(t("layout_q"), [(l, t("layout_" + l)) for l in LAYOUTS])
+            if not args.draw_inputs:
+                args.draw_inputs = ask(t("inputs_q"), [("no", t("inputs_no")), ("yes", t("inputs_yes"))]) == "yes"
         preset = preset or "youtube"
         layout = layout or "auto"
         if args.scale is not None and args.scale < 1:
             ap.error("--scale must be 1 or more")
+        if args.trim and not 0 <= args.trim[0] < args.trim[1]:
+            ap.error("--trim: START must be under END (seconds)")
 
         ok = bad = 0
         for f in files:
@@ -333,7 +352,8 @@ def main() -> int:
             out_dir = Path(args.out) if args.out else f.parent
             out_dir.mkdir(parents=True, exist_ok=True)
             done = convert_one(r3dconv, ffmpeg, f, out_dir, PRESET_TABLE[preset], layout,
-                               args.scale, args.fps, args.no_eq)
+                               args.scale, args.fps, args.no_eq, args.draw_inputs,
+                               tuple(args.trim) if args.trim else None)
             if done:
                 ok += len(done)
                 for d in done:

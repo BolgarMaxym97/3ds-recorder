@@ -9,6 +9,7 @@
 #include "gallery.h"
 #include "i18n.h"
 #include "player.h"
+#include "sdtest.h"
 #include "prepare.h"
 #include "qrcodegen.h"
 #include "server.h"
@@ -35,7 +36,16 @@ static void focus_ring(Rect r, float radius) { ui_frame(r.x - 1, r.y - 1, r.w + 
 static const Rect TILE[4] = {{12, 12, 144, 94}, {164, 12, 144, 94}, {12, 114, 144, 94}, {164, 114, 144, 94}};
 /* The first tile holds two switches, one under the other: the recorder, and its replay buffer */
 static const Rect TILE_REC = {12, 12, 144, 46}, TILE_REPLAY = {12, 60, 144, 46};
-#define REPLAY_NEED_MB 700u   /* the replay's two files (2 x 256.5 MB) and the recorder's reserve */
+/* Replay: the two files the module keeps for replay_sec (sysmod ReplayBytesFor: replay_sec x 8.5 MB/s in 16 MB
+   steps, at least 128 MB, plus a 512 KB header each) and the recorder's reserve: 30 s, 700 MB, as before */
+static const char *replay_len_label(int sec, char *buf, size_t cap);
+static u32 replay_need_mb(int sec)
+{
+    u32 mb = ((u32)sec * 17u / 2u + 15u) / 16u * 16u;
+    if (mb < 128u)
+        mb = 128u;
+    return 2u * mb + 190u;
+}
 /* Common */
 static const Rect BACK_BTN = {12, 10, 22, 22};
 /* First run */
@@ -43,17 +53,17 @@ static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: the groups (SCR_SETTINGS), each one's rows (SCR_SETGROUP), the language list (SCR_LANG) */
 enum { ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND, ROW_HOTKEY, ROW_LED, ROW_AUTOSTART, ROW_CONVERT,
-       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_COUNT };
+       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_MAIN_SCREEN, ROW_REPLAY_LEN, ROW_INPUTS, ROW_MP4_INPUTS, ROW_SDTEST, ROW_COUNT };
 enum { GRP_RECORDING, GRP_RECORDER, GRP_APP, GRP_LANG, GRP_COUNT };
-#define GROUP_MAX 5
+#define GROUP_MAX 6
 static const int GROUP_ROWS[GRP_LANG][GROUP_MAX] = {
-    [GRP_RECORDING] = {ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND},
-    [GRP_RECORDER] = {ROW_HOTKEY, ROW_LED, ROW_AUTOSTART},
-    [GRP_APP] = {ROW_CONVERT, ROW_LID, ROW_STATS, ROW_UNINSTALL},
+    [GRP_RECORDING] = {ROW_FPS, ROW_SCREENS, ROW_MAIN_SCREEN, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND},
+    [GRP_RECORDER] = {ROW_HOTKEY, ROW_REPLAY_LEN, ROW_INPUTS, ROW_LED, ROW_AUTOSTART},
+    [GRP_APP] = {ROW_CONVERT, ROW_MP4_INPUTS, ROW_LID, ROW_STATS, ROW_SDTEST, ROW_UNINSTALL},
 };
-static const int GROUP_N[GRP_LANG] = {5, 3, 4};
+static const int GROUP_N[GRP_LANG] = {6, 5, 6};
 static Rect grp_card(int i) { return (Rect){10, 34 + i * 50.0f, 300, 44}; }   /* down to y 228 */
-static Rect set_row(int i) { return (Rect){10, 34 + i * 30.0f, 300, 26}; }      /* 5 rows: down to y 180 */
+static Rect set_row(int i) { return (Rect){10, 34 + i * 30.0f, 300, 26}; }      /* 6 rows: down to y 210 */
 static const Rect SET_BACK = {10, 6, 21, 21};
 /* the language list: first run (a Continue button under it) or from Settings. Two columns, so
    every language is on screen at once (10 today); more rows than fit scroll, with a bar. */
@@ -241,7 +251,13 @@ static void refresh(App *a, bool files)
     if (a->st.replayOn && (a->st.replayError == REC_REPLAY_NO_SPACE || a->st.replayError == REC_REPLAY_WRITE_ERROR) &&
         !a->replayWarned) {
         a->replayWarned = true;
-        say(a, T(a->st.replayError == REC_REPLAY_NO_SPACE ? S_MSG_REPLAY_SPACE : S_MSG_REPLAY_WRITE));
+        if (a->st.replayError == REC_REPLAY_NO_SPACE) {
+            char len[16], msg[192];
+            replay_len_label(a->cfg.replaySec, len, sizeof(len));
+            snprintf(msg, sizeof(msg), T(S_MSG_REPLAY_SPACE), len, (unsigned)replay_need_mb(a->cfg.replaySec));
+            say(a, msg);
+        } else
+            say(a, T(S_MSG_REPLAY_WRITE));
     }
     char rec[32];
     if (a->st.running && recorder_take_recovered(rec, sizeof(rec))) {
@@ -346,6 +362,8 @@ void app_init(App *a, const char *selfPath)
     if (g_lastTexOk)
         C3D_TexSetFilter(&g_lastTex, GPU_LINEAR, GPU_LINEAR);
     g_info = threadCreate(info_main, NULL, 16 * 1024, prio + 2, -2, false);
+    prepare_set_inputs(a->cfg.mp4Inputs);   /* Buttons In Video (the console's MP4s, and the phone page's) */
+    server_set_inputs(a->cfg.mp4Inputs);
     prepare_start(n3ds, n3ds && a->cfg.mp4Slices, a->cfg.convertAuto); /* recordings become MP4s for the phone in the background */
 #ifndef UI_TOUR /* the screen tour runs in Azahar: its logs are no console's */
     stats_start(a->cfg.stats); /* new log lines to the developer, quietly (stats.h) */
@@ -694,13 +712,36 @@ static int bottom_fps_index(const App *a)
 static const char *bottom_fps_label(const App *a, char *buf, size_t cap)
 {
     const int v = a->cfg.bottomFps;
-    if (!v || v >= a->cfg.fps)
-        return T(S_BOTTOM_SAME);
+    if (!v || v >= a->cfg.fps)   /* (with Main Screen → Bottom the row is the top screen's) */
+        return T(a->cfg.mainBottom ? S_TOP_SAME : S_BOTTOM_SAME);
     snprintf(buf, cap, "%d fps", v);
     return buf;
 }
 
 static bool bottom_fps_on(const App *a) { return a->cfg.screens == SCREENS_BOTH; }
+
+/* Replay Length (replay_sec): more values than a segmented control holds, a stepper like Bottom Screen FPS */
+static const int REPLAY_SEC[5] = {15, 30, 60, 120, 300};
+
+static int replay_len_index(const App *a)
+{
+    for (int i = 0; i < 5; i++)
+        if (REPLAY_SEC[i] == a->cfg.replaySec)
+            return i;
+    return 1;
+}
+
+/* "30 s", "2 min" */
+static const char *replay_len_label(int sec, char *buf, size_t cap)
+{
+    if (sec >= 60)
+        snprintf(buf, cap, T(S_UNIT_MIN), sec / 60);
+    else
+        snprintf(buf, cap, T(S_UNIT_SEC), sec);
+    return buf;
+}
+
+static void step_replay_len(App *a, int dir, bool wrap);
 
 static bool row_seg(const App *a, int row, Seg *g)
 {
@@ -719,6 +760,9 @@ static bool row_seg(const App *a, int row, Seg *g)
         return true;
     case ROW_CONVERT:
         *g = (Seg){{T(S_CONVERT_AUTO), T(S_CONVERT_MANUAL), NULL}, 2, a->cfg.convertAuto ? 0 : 1, -1};
+        return true;
+    case ROW_MAIN_SCREEN:
+        *g = (Seg){{T(S_TOP), T(S_BOTTOM), NULL}, 2, a->cfg.mainBottom ? 1 : 0, -1};
         return true;
     }
     return false;
@@ -757,8 +801,37 @@ static void choose(App *a, int row, int opt)
             prepare_set_auto(a->cfg.convertAuto);
         }
         break;
+    case ROW_MAIN_SCREEN:
+        if (!bottom_fps_on(a))
+            say(a, T(S_MSG_MAIN_BOTH));
+        else if ((opt == 1) != a->cfg.mainBottom)
+            apply_setting(a, "main_screen", opt == 1 ? "bottom" : "top");
+        break;
     }
 }
+
+static void step_replay_len(App *a, int dir, bool wrap)
+{
+    int i = replay_len_index(a) + dir;
+    if (wrap)
+        i = (i + 5) % 5;
+    if (i < 0 || i > 4)
+        return;
+    char v[8];
+    snprintf(v, sizeof(v), "%d", REPLAY_SEC[i]);
+    apply_setting(a, "replay_sec", v);
+}
+
+static void set_mp4_inputs(App *a, bool on)
+{
+    if (on == a->cfg.mp4Inputs)
+        return;
+    apply_setting(a, "mp4_inputs", on ? "on" : "off");
+    prepare_set_inputs(on);
+    server_set_inputs(on);
+}
+
+static void open_sdtest(App *a);
 
 /* ◀ ▶ on Bottom Screen FPS (dir -1 / +1; A goes round) */
 static void step_bottom_fps(App *a, int dir, bool wrap)
@@ -821,6 +894,14 @@ static void settings_activate(App *a, int row)
         choose(a, row, (g.sel + 1) % g.n);
     } else if (row == ROW_BOTTOM_FPS)
         step_bottom_fps(a, 1, true);
+    else if (row == ROW_REPLAY_LEN)
+        step_replay_len(a, 1, true);
+    else if (row == ROW_INPUTS)
+        apply_setting(a, "inputs", a->cfg.inputs ? "off" : "on");
+    else if (row == ROW_MP4_INPUTS)
+        set_mp4_inputs(a, !a->cfg.mp4Inputs);
+    else if (row == ROW_SDTEST)
+        open_sdtest(a);
     else if (row == ROW_SOUND)
         apply_setting(a, "audio", a->cfg.audio ? "off" : "on");
     else if (row == ROW_AUTOSTART)
@@ -897,8 +978,12 @@ enum { FOCUS_REPLAY = 5 };
 
 static void toggle_replay(App *a)
 {
-    if (!a->cfg.replay && a->sdFreeMb < REPLAY_NEED_MB) {
-        say(a, T(S_MSG_REPLAY_SPACE));
+    char len[16];
+    replay_len_label(a->cfg.replaySec, len, sizeof(len));
+    if (!a->cfg.replay && a->sdFreeMb < replay_need_mb(a->cfg.replaySec)) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), T(S_MSG_REPLAY_SPACE), len, (unsigned)replay_need_mb(a->cfg.replaySec));
+        say(a, msg);
         return;
     }
     apply_setting(a, "replay", a->cfg.replay ? "off" : "on");
@@ -906,7 +991,7 @@ static void toggle_replay(App *a)
     if (a->cfg.replay) {
         char hk[48], msg[256];
         hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
-        snprintf(msg, sizeof(msg), T(S_MSG_REPLAY_ON), hk);
+        snprintf(msg, sizeof(msg), T(S_MSG_REPLAY_ON), hk, len);
         say(a, msg);
     } else
         say(a, T(S_MSG_REPLAY_OFF));
@@ -1123,10 +1208,16 @@ static void update_setgroup(App *a, const Input *in)
             choose(a, row, o);
     } else if (dir && row == ROW_BOTTOM_FPS)
         step_bottom_fps(a, dir, false);
+    else if (dir && row == ROW_REPLAY_LEN)
+        step_replay_len(a, dir, false);
     else if (dir) {
         const bool on = dir > 0;
         if (row == ROW_SOUND && on != a->cfg.audio)
             apply_setting(a, "audio", on ? "on" : "off");
+        else if (row == ROW_INPUTS && on != a->cfg.inputs)
+            apply_setting(a, "inputs", on ? "on" : "off");
+        else if (row == ROW_MP4_INPUTS)
+            set_mp4_inputs(a, on);
         else if (row == ROW_AUTOSTART)
             set_autostart(a, on);
         else if (row == ROW_LID && on != a->cfg.lidWork)
@@ -1147,10 +1238,14 @@ static void update_setgroup(App *a, const Input *in)
                     a->focus = i;
                     choose(a, r, k);
                 }
-        } else if (r == ROW_BOTTOM_FPS && hit(rr, in)) { /* ◀ on the left of the value, ▶ on the right */
+        } else if ((r == ROW_BOTTOM_FPS || r == ROW_REPLAY_LEN) && hit(rr, in)) { /* ◀ on the left of the value, ▶ on the right */
             a->focus = i;
             const float vx = rr.x + rr.w - 40; /* the middle of the value */
-            step_bottom_fps(a, in->tap_x >= rr.x + rr.w - 90 && in->tap_x < vx ? -1 : 1, in->tap_x < rr.x + rr.w - 90);
+            const int dir = in->tap_x >= rr.x + rr.w - 90 && in->tap_x < vx ? -1 : 1;
+            if (r == ROW_BOTTOM_FPS)
+                step_bottom_fps(a, dir, in->tap_x < rr.x + rr.w - 90);
+            else
+                step_replay_len(a, dir, in->tap_x < rr.x + rr.w - 90);
         } else if (hit(rr, in)) {
             a->focus = i;
             settings_activate(a, r);
@@ -1245,6 +1340,62 @@ static void update_hotkey(App *a, const Input *in)
         a->hkCand = held;
         a->hkReview = true;
         a->hkWaitRelease = true;
+    }
+}
+
+/* ------------------------------------------------------------------ SD card test */
+
+static const Rect SDT_BTN[2] = {{12, 200, 144, 28}, {164, 200, 144, 28}};   /* Back, Start / Test again */
+static SdTestResult g_sdt;
+
+static void sdtest_hold(bool on)   /* the other readers of the card wait meanwhile */
+{
+    gal_hold(on);
+    g_infoHold = on;
+    prepare_hold(PREP_HOLD_SDTEST, on);
+}
+
+static void open_sdtest(App *a)
+{
+    memset(&g_sdt, 0, sizeof(g_sdt));
+    go(a, SCR_SDTEST, 1);
+}
+
+static void update_sdtest(App *a, const Input *in)
+{
+    const u32 d = in->down;
+    if (g_sdt.state == SDT_RUNNING) {
+#ifdef UI_TOUR
+        return;   /* the tour's pretend states stay as they are */
+#endif
+        g_sdt = sdtest_poll();
+        if (g_sdt.state != SDT_RUNNING)
+            sdtest_hold(false);
+        return;   /* nothing else until the test is done (it writes to the card) */
+    }
+    if (d & KEY_DLEFT)
+        a->focus = 0;
+    if (d & KEY_DRIGHT)
+        a->focus = 1;
+    int act = -1;
+    if (d & KEY_A)
+        act = a->focus;
+    if (hit(SDT_BTN[0], in) || (d & KEY_B))
+        act = 0;
+    if (hit(SDT_BTN[1], in))
+        act = 1;
+    if (act == 0)
+        open_group_at(a, GRP_APP, ROW_SDTEST);
+    else if (act == 1) {
+        if (a->st.running && a->st.state == REC_STATE_RECORDING) {
+            say(a, T(S_SDT_BUSY));
+            return;
+        }
+        sdtest_hold(true);
+        if (sdtest_start())
+            g_sdt.state = SDT_RUNNING, g_sdt.permille = 0;
+        else
+            sdtest_hold(false);
     }
 }
 
@@ -1455,6 +1606,60 @@ static const Rect PL_SOUND = {14, 182, 40, 28};
 static const Rect PL_RW = {94, 180, 32, 32}, PL_PLAY = {141, 177, 38, 38}, PL_FF = {194, 180, 32, 32};
 static C3D_Tex g_plTex[2];
 static bool g_plTexOk;
+static bool g_plInputs;   /* X in the player: the buttons pressed shown (kept for the session) */
+
+/* The buttons pressed in the player (codec/source/inputs.c's corner panel, drawn with the UI's shapes):
+   the panel in the top screen's bottom-left corner, a touch as a ring on the bottom screen. */
+static void pl_button(float x, float y, float w, float h, bool held)
+{
+    if (held)
+        ui_rrect(x, y, w, h, h / 2, COL_ACCENT);
+    else
+        ui_frame(x, y, w, h, h / 2, 1.2f, COL_SOFT);
+}
+
+static void draw_inputs_top(const InputState *st)
+{
+    const float x0 = 6, y0 = 240 - 6 - INPUT_PANEL_H;
+    const unsigned k = st->keys;
+    ui_rrect(x0, y0, INPUT_PANEL_W, INPUT_PANEL_H, 8, RGBA(0x0E, 0x10, 0x14, 0x9E));
+    pl_button(x0 + 6, y0 + 4, 26, 6, k & R3D_KEY_L);
+    pl_button(x0 + 84, y0 + 4, 26, 6, k & R3D_KEY_R);
+    ui_frame(x0 + 11, y0 + 17, 16, 16, 8, 1.2f, COL_SOFT);   /* the stick */
+    ui_circle(x0 + 19 + st->cx * 5.0f / 127, y0 + 25 - st->cy * 5.0f / 127, 3.2f, COL_SOFT);
+    const float dx = x0 + 19, dy = y0 + 47, u = 6;   /* the D-pad */
+    ui_rrect(dx - u * 1.5f, dy - u / 2, u * 3, u, 1.5f, COL_SURFACE2);
+    ui_rrect(dx - u / 2, dy - u * 1.5f, u, u * 3, 1.5f, COL_SURFACE2);
+    if (k & R3D_KEY_UP)
+        ui_rrect(dx - u / 2, dy - u * 1.5f, u, u, 1, COL_ACCENT);
+    if (k & R3D_KEY_DOWN)
+        ui_rrect(dx - u / 2, dy + u / 2, u, u, 1, COL_ACCENT);
+    if (k & R3D_KEY_LEFT)
+        ui_rrect(dx - u * 1.5f, dy - u / 2, u, u, 1, COL_ACCENT);
+    if (k & R3D_KEY_RIGHT)
+        ui_rrect(dx + u / 2, dy - u / 2, u, u, 1, COL_ACCENT);
+    pl_button(x0 + 45, y0 + 46, 12, 4.4f, k & R3D_KEY_SELECT);
+    pl_button(x0 + 59, y0 + 46, 12, 4.4f, k & R3D_KEY_START);
+    const float ax = x0 + 97, ay = y0 + 31, d = 9, r = 4;   /* X top, Y left, A right, B bottom */
+    const struct { float x, y; unsigned key; } abxy[4] = {
+        {ax, ay - d, R3D_KEY_X}, {ax - d, ay, R3D_KEY_Y}, {ax + d, ay, R3D_KEY_A}, {ax, ay + d, R3D_KEY_B}};
+    for (int i = 0; i < 4; i++) {
+        if (k & abxy[i].key)
+            ui_circle(abxy[i].x, abxy[i].y, r, COL_ACCENT);
+        else
+            ui_frame(abxy[i].x - r, abxy[i].y - r, 2 * r, 2 * r, r, 1.2f, COL_SOFT);
+    }
+}
+
+static void draw_inputs_bottom(const InputState *st)
+{
+    if (st->tx == R3D_TOUCH_NONE)
+        return;
+    const float x = st->tx * 2 + 1.0f, y = st->ty + 0.5f;
+    ui_frame(x - 8.5f, y - 8.5f, 17, 17, 8.5f, 3, RGBA(0x0E, 0x10, 0x14, 0x8C));
+    ui_frame(x - 7, y - 7, 14, 14, 7, 2, COL_ACCENT);
+    ui_circle(x, y, 2, COL_ACCENT);
+}
 
 static void open_player(App *a, const GalItem *it)
 {
@@ -1516,6 +1721,8 @@ static void update_player(App *a, const Input *in)
         player_seek(t + 10000);
     if ((d & KEY_Y) || hit(PL_SOUND, in))
         player_set_mute(!player_muted());
+    if (d & KEY_X && player_has_inputs())   /* the buttons pressed, over the video */
+        g_plInputs = !g_plInputs;
     if (hit(PL_BAR, in) && player_duration_ms())
         player_seek((s64)(in->tap_x - PL_BAR.x) * player_duration_ms() / PL_BAR.w);
     if (d & KEY_B)
@@ -1602,6 +1809,7 @@ void app_update(App *a, const Input *in)
     case SCR_PLAYER: update_player(a, in); break;
     case SCR_PHONE: update_phone(a, in); break;
     case SCR_UNINSTALL: update_uninstall(a, in); break;
+    case SCR_SDTEST: update_sdtest(a, in); break;
     case SCR_UNINSTALLED:
         if ((in->down & (KEY_A | KEY_B | KEY_START)) || in->tapped)
             a->quit = true;
@@ -2012,6 +2220,16 @@ static void draw_settings_top(App *a)
         snprintf(note, sizeof(note), "%s", T(S_CONVERT_NOTE));
     else if (row == ROW_BOTTOM_FPS)
         snprintf(note, sizeof(note), "%s", T(S_BOTTOM_FPS_NOTE));
+    else if (row == ROW_MAIN_SCREEN)
+        snprintf(note, sizeof(note), "%s", T(S_MAIN_SCREEN_NOTE));
+    else if (row == ROW_REPLAY_LEN)
+        snprintf(note, sizeof(note), "%s", T(S_REPLAY_LEN_NOTE));
+    else if (row == ROW_INPUTS)
+        snprintf(note, sizeof(note), "%s", T(S_INPUTS_NOTE));
+    else if (row == ROW_MP4_INPUTS)
+        snprintf(note, sizeof(note), "%s", T(S_MP4_INPUTS_NOTE));
+    else if (row == ROW_SDTEST)
+        snprintf(note, sizeof(note), "%s", T(S_SDTEST_NOTE));
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     /* right under the stat cards (the toast takes the bottom of the screen); a note too long for that
@@ -2087,6 +2305,46 @@ static void draw_uninstall_top(App *a)
     snprintf(cnt, sizeof(cnt), "%s · %s", i18n_recordings(a->files.count, n, sizeof(n)), gb);
     check_row(153, !a->deleteRecordings, a->deleteRecordings, T(S_UN_RECORDINGS),
               a->deleteRecordings ? cnt : T(S_UN_RECORDINGS_KEEP));
+}
+
+static void draw_sdtest_top(App *a)
+{
+    (void)a;
+    char buf[96], num[16];
+    ui_text(14, 13, 9, FONT_REG, COL_MUTED, T(S_GRP_APP));
+    ui_text(14, 25, 17, FONT_BOLD, COL_TEXT, T(S_SDTEST));
+    const SdTestResult *r = &g_sdt;
+    if (r->state == SDT_IDLE) {
+        ui_text_wrap(14, 58, 372, 10, FONT_REG, COL_SOFT, T(S_SDT_INTRO));
+        return;
+    }
+    if (r->state == SDT_RUNNING) {
+        snprintf(buf, sizeof(buf), T(S_SDT_RUNNING), r->permille / 10);
+        ui_text(14, 70, 11, FONT_BOLD, COL_TEXT, buf);
+        ui_rrect(14, 92, 372, 8, 4, COL_SURFACE2);
+        ui_rrect(14, 92, 372 * r->permille / 1000.0f, 8, 4, COL_ACCENT);
+        ui_text_wrap(14, 112, 372, 9, FONT_REG, COL_MUTED, T(S_SDT_INTRO));
+        return;
+    }
+    if (r->state == SDT_FAILED) {
+        snprintf(buf, sizeof(buf), T(S_SDT_FAIL), (unsigned long)r->rc);
+        ui_text_wrap(14, 70, 372, 10, FONT_REG, COL_ERR, buf);
+        return;
+    }
+    snprintf(num, sizeof(num), "%lu%c%lu", (unsigned long)(r->kbPerSec / 1024), i18n_decimal(),
+             (unsigned long)(r->kbPerSec % 1024 * 10 / 1024));
+    snprintf(buf, sizeof(buf), T(S_SDT_SPEED), num);
+    ui_text(14, 62, 28, FONT_BOLD, COL_TEXT, buf);
+    const int grade = sdtest_grade(r->kbPerSec);
+    const u32 col = grade == 2 ? COL_OK : grade == 1 ? COL_WARN : COL_ERR;
+    const u32 bg = grade == 2 ? COL_OK_BG : grade == 1 ? COL_WARN_BG : COL_ERR_BG;
+    const char *verdict = T(grade == 2 ? S_SDT_GOOD : grade == 1 ? S_SDT_OK : S_SDT_SLOW);
+    const float th = ui_text_wrap_height(330, 10, FONT_REG, verdict), ch = th + 20;
+    ui_card(14, 104, 372, ch, 8, bg);
+    ui_icon(grade == 2 ? ICON_CHECK : ICON_WARN, 30, 104 + ch / 2, 14, col);
+    ui_text_wrap(46, 114, 330, 10, FONT_REG, col, verdict);
+    snprintf(buf, sizeof(buf), T(S_SDT_SLOWEST), (unsigned)r->slowestMs);
+    ui_text(14, 104 + ch + 12, 9, FONT_REG, COL_MUTED, buf);
 }
 
 static void draw_uninstalled_top(App *a)
@@ -2196,8 +2454,9 @@ static void draw_gallery_top(App *a)
         stat_card(x + w + 6, 62, w, T(S_SIZE), v, NULL);
         stat_card(x, 118, w, T(S_PROFILE), prof, NULL);
         stat_card(x + w + 6, 118, w, T(S_DROPPED), drop, NULL);
-        snprintf(buf, sizeof(buf), "%s · %s", T(it->audio ? S_WITH_SOUND : S_NO_SOUND),
-                 T(it->both ? S_BOTH_SCREENS : it->bottomOnly ? S_BOTTOM_SCREEN : S_TOP_SCREEN));
+        snprintf(buf, sizeof(buf), "%s · %s%s%s", T(it->audio ? S_WITH_SOUND : S_NO_SOUND),
+                 T(it->both ? S_BOTH_SCREENS : it->bottomOnly ? S_BOTTOM_SCREEN : S_TOP_SCREEN), it->inputs ? " · " : "",
+                 it->inputs ? T(S_WITH_BUTTONS) : "");
         ui_text(x, 176, 9, FONT_REG, COL_SOFT, buf);
         if (!it->ended) { /* cut off (power, a crash): hard to miss */
             ui_card(x, 188, 212, 25, 6, COL_WARN_BG);
@@ -2242,6 +2501,9 @@ static void draw_player_top(App *a)
         ui_text_center(200, 110, 10, FONT_REG, COL_FAINT, T(S_PL_BOTTOM_ONLY));
     else
         ui_spinner(200, 120, 14, COL_FAINT);
+    InputState in;
+    if (g_plInputs && (shown & 1) && player_input(&in))
+        draw_inputs_top(&in);
     if (player_controls(a) && player_file_audio() && !player_has_audio())
         ui_text(12, 14, 9, FONT_BOLD, COL_WARN, T(S_PL_NO_DSP));
     if (player_controls(a)) {
@@ -2313,6 +2575,7 @@ void app_draw_top(App *a)
     case SCR_PLAYER: draw_player_top(a); break;
     case SCR_PHONE: draw_phone_top(a); break;
     case SCR_UNINSTALL: draw_uninstall_top(a); break;
+    case SCR_SDTEST: draw_sdtest_top(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_top(a); break;
     }
     draw_toast(a);
@@ -2342,10 +2605,14 @@ static void draw_panel_bottom(App *a)
         const Rect r = TILE_REPLAY;
         char hk[48];
         hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
+        char len[16], title[48], off[64];
+        replay_len_label(a->cfg.replaySec, len, sizeof(len));
+        snprintf(title, sizeof(title), T(S_REPLAY), len);
+        snprintf(off, sizeof(off), T(S_TILE_REPLAY_OFF), len);
         snprintf(buf, sizeof(buf), T(S_TILE_REPLAY_ON), hk);
-        ui_text(r.x + 10, r.y + 9, 11, FONT_BOLD, COL_TEXT, T(S_REPLAY));
+        ui_text(r.x + 10, r.y + 9, 11, FONT_BOLD, COL_TEXT, title);
         ui_toggle(r.x + r.w - 42, r.y + 8, a->cfg.replay);
-        ui_text(r.x + 10, r.y + 27, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : T(S_TILE_REPLAY_OFF));
+        ui_text(r.x + 10, r.y + 27, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : off);
     }
     static const Icon icon[4] = {ICON_CHECK, ICON_GRID, ICON_INFO, ICON_SLIDERS};
     const Str title[4] = {S_TILE_RECORDER, S_TILE_GALLERY, S_TILE_HELP, S_TILE_SETTINGS};
@@ -2431,11 +2698,14 @@ static void group_summary(const App *a, int grp, char *buf, size_t cap)
         snprintf(buf, cap, "%d fps · %s · %s · %s", a->cfg.fps, T(SCREENS[a->cfg.screens]),
                  T(a->cfg.lossless ? S_Q_LOSSLESS : S_Q_AUTO), T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
         break;
-    case GRP_RECORDER:
+    case GRP_RECORDER: {
+        char len[16], rp[48];
         hk_label(hk_mask(a->cfg.hotkey), hk, sizeof(hk));
-        snprintf(buf, cap, "%s · %s %s%s%s", hk, T(S_LED), T(LED[a->cfg.led]), a->cfg.autostart ? " · " : "",
+        snprintf(rp, sizeof(rp), T(S_REPLAY), replay_len_label(a->cfg.replaySec, len, sizeof(len)));
+        snprintf(buf, cap, "%s · %s · %s %s%s%s", hk, rp, T(S_LED), T(LED[a->cfg.led]), a->cfg.autostart ? " · " : "",
                  a->cfg.autostart ? T(S_AUTOSTART) : "");
         break;
+    }
     case GRP_APP:
         snprintf(buf, cap, "%s: %s", T(S_CONVERT), T(a->cfg.convertAuto ? S_CONVERT_AUTO : S_CONVERT_MANUAL));
         break;
@@ -2471,15 +2741,18 @@ static void draw_setgroup_bottom(App *a)
         [ROW_FPS] = S_FPS,           [ROW_SCREENS] = S_SCREENS, [ROW_BOTTOM_FPS] = S_BOTTOM_FPS, [ROW_QUALITY] = S_QUALITY,
         [ROW_SOUND] = S_SOUND,       [ROW_HOTKEY] = S_HOTKEY,   [ROW_LED] = S_LED,               [ROW_AUTOSTART] = S_AUTOSTART,
         [ROW_CONVERT] = S_CONVERT,   [ROW_LID] = S_LID_WORK,    [ROW_STATS] = S_STATS,           [ROW_UNINSTALL] = S_UNINSTALL_ROW,
+        [ROW_MAIN_SCREEN] = S_MAIN_SCREEN, [ROW_REPLAY_LEN] = S_REPLAY_LEN, [ROW_INPUTS] = S_INPUTS,
+        [ROW_MP4_INPUTS] = S_MP4_INPUTS,   [ROW_SDTEST] = S_SDTEST,
     };
     settings_header(group_name(a->setGroup));
     for (int i = 0; i < GROUP_N[a->setGroup]; i++) {
         const int r = GROUP_ROWS[a->setGroup][i];
         const Rect row = set_row(i);
-        const bool off = r == ROW_BOTTOM_FPS && !bottom_fps_on(a);
+        const bool off = (r == ROW_BOTTOM_FPS || r == ROW_MAIN_SCREEN) && !bottom_fps_on(a);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
-        ui_text(row.x + 9, row.y + 7, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : off ? COL_FAINT : COL_TEXT, T(NAME[r]));
+        const Str name = r == ROW_BOTTOM_FPS && a->cfg.mainBottom ? S_TOP_FPS : NAME[r];   /* the second screen's rate */
+        ui_text(row.x + 9, row.y + 7, 9.5f, FONT_BOLD, r == ROW_UNINSTALL ? COL_ERR : off ? COL_FAINT : COL_TEXT, T(name));
         Seg g;
         if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
@@ -2488,21 +2761,25 @@ static void draw_setgroup_bottom(App *a)
             for (int k = 0; k < g.n; k++) {
                 const bool sel = k == g.sel;
                 if (sel)
-                    ui_rrect(opt[k].x, opt[k].y, opt[k].w, opt[k].h, 3, COL_ACCENT);
-                ui_text_center(opt[k].x + opt[k].w / 2, opt[k].y + 4, 9, FONT_BOLD, sel ? COL_WHITE : COL_SOFT, g.labels[k]);
+                    ui_rrect(opt[k].x, opt[k].y, opt[k].w, opt[k].h, 3, off ? COL_SURFACE2 : COL_ACCENT);
+                ui_text_center(opt[k].x + opt[k].w / 2, opt[k].y + 4, 9, FONT_BOLD,
+                               off ? COL_FAINT : sel ? COL_WHITE : COL_SOFT, g.labels[k]);
             }
-        } else if (r == ROW_BOTTOM_FPS) {
+        } else if (r == ROW_BOTTOM_FPS || r == ROW_REPLAY_LEN) {
             char v[16];
-            const char *label = bottom_fps_label(a, v, sizeof(v));
+            const char *label = r == ROW_BOTTOM_FPS ? bottom_fps_label(a, v, sizeof(v)) : replay_len_label(a->cfg.replaySec, v, sizeof(v));
             const u32 col = off ? COL_FAINT : COL_TEXT;
             const float rx = row.x + row.w - 22;
             ui_text_right(rx, row.y + 7, 9.5f, FONT_BOLD, col, label);
             ui_icon(ICON_BACK, rx - ui_text_width(9.5f, FONT_BOLD, label) - 10, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 11, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
-        } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID || r == ROW_STATS)
+        } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID || r == ROW_STATS || r == ROW_INPUTS ||
+                   r == ROW_MP4_INPUTS)
             ui_toggle(row.x + row.w - 38, row.y + 4,
                       r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart
                                                      : r == ROW_LID      ? a->cfg.lidWork
+                                                     : r == ROW_INPUTS   ? a->cfg.inputs
+                                                     : r == ROW_MP4_INPUTS ? a->cfg.mp4Inputs
                                                                          : a->cfg.stats);
         else if (r == ROW_HOTKEY) {
             /* the recording hotkey, then the replay one */
@@ -2566,6 +2843,27 @@ static void draw_uninstall_bottom(App *a)
         focus_ring(c, 5);
     button(UN_BTN[0], T(S_CANCEL), 0, a->focus == 1);
     button(UN_BTN[1], T(S_UNINSTALL), 2, a->focus == 2);
+}
+
+/* an SD card: its body, the cut corner, the contacts */
+static void draw_sd_card(float cx, float cy, u32 col)
+{
+    const float w = 44, h = 58, x = cx - w / 2, y = cy - h / 2;
+    ui_rrect(x, y, w, h, 5, col);
+    ui_rect(x + w - 12, y - 1, 13, 11, COL_BG);                      /* the corner cut off */
+    for (int i = 0; i < 4; i++)
+        ui_rrect(x + 6 + i * 7, y + 6, 4, 10, 1, COL_BG);           /* the contacts */
+}
+
+static void draw_sdtest_bottom(App *a)
+{
+    draw_sd_card(160, 90, g_sdt.state == SDT_RUNNING ? COL_ACCENT : COL_SURFACE2);
+    if (g_sdt.state == SDT_RUNNING) {
+        ui_spinner(160, 160, 10, COL_MUTED);
+        return;
+    }
+    button(SDT_BTN[0], T(g_sdt.state == SDT_IDLE ? S_CANCEL : S_BACK), 0, a->focus == 0);
+    button(SDT_BTN[1], T(g_sdt.state == SDT_IDLE ? S_START : S_SDT_AGAIN), 1, a->focus == 1);
 }
 
 static void draw_uninstalled_bottom(App *a)
@@ -2666,6 +2964,9 @@ static void draw_player_bottom(App *a)
     if (player_both() || player_bottom_only()) {
         /* the texture was filled on the top screen's pass (player_present) */
         ui_tex_screen(&g_plTex[1], 320, 160, 120);
+        InputState in;
+        if (g_plInputs && player_input(&in))
+            draw_inputs_bottom(&in);
     } else
         ui_text_center(160, 60, 10, FONT_REG, COL_FAINT, T(S_PL_TOP_ONLY));
     if (!player_controls(a))
@@ -2690,9 +2991,17 @@ static void draw_player_bottom(App *a)
     ui_icon(player_paused() || player_ended() ? ICON_PLAY : ICON_PAUSE, PL_PLAY.x + 19 + (player_paused() ? 1 : 0),
             PL_PLAY.y + 19, 20, COL_BG);
     ui_icon(ICON_FF, PL_FF.x + 16, PL_FF.y + 16, 18, COL_TEXT);
-    float hx = 64;
+    /* the hints, centred (X: the buttons, when the recording kept them) */
+    const bool keys = player_has_inputs();
+    float hw = ui_key_hint_width("←→", T(S_PL_SEEK)) + ui_key_hint_width("A", T(S_PL_PAUSE)) +
+               ui_key_hint_width("B", T(S_PL_BACK)) + 20;
+    if (keys)
+        hw += ui_key_hint_width("X", T(S_PL_INPUTS)) + 10;
+    float hx = (BOTTOM_W - hw) / 2;
     hx += ui_key_hint(hx, 222, "←→", T(S_PL_SEEK)) + 10;
     hx += ui_key_hint(hx, 222, "A", T(S_PL_PAUSE)) + 10;
+    if (keys)
+        hx += ui_key_hint(hx, 222, "X", T(S_PL_INPUTS)) + 10;
     ui_key_hint(hx, 222, "B", T(S_PL_BACK));
 }
 
@@ -2781,6 +3090,7 @@ void app_draw_bottom(App *a)
     case SCR_PLAYER: draw_player_bottom(a); break;
     case SCR_PHONE: draw_phone_bottom(a); break;
     case SCR_UNINSTALL: draw_uninstall_bottom(a); break;
+    case SCR_SDTEST: draw_sdtest_bottom(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_bottom(a); break;
     }
     if (a->busy) {
@@ -2798,13 +3108,16 @@ static const Str TOUR_MSG[] = {
     S_MSG_STARTED, S_MSG_STOPPED, S_MSG_STOP_FAILED, S_MSG_START_FAILED, S_MSG_SYSTEM_STOP, S_MSG_GAME_STOP,
     S_MSG_RECOVERED, S_MSG_SOON, S_MSG_AUTO_ON, S_MSG_AUTO_OFF, S_MSG_AUTO_PATCHING, S_MSG_AUTO_SD_ERROR,
     S_MSG_AUTO_UNSUPPORTED, S_MSG_AUTO_FAILED, S_MSG_AUTO_LATER, S_MSG_REPLAY_ON, S_MSG_REPLAY_OFF,
-    S_MSG_REPLAY_WRITE, S_MSG_REPLAY_SPACE, S_MSG_CLIPS, S_MSG_BOTTOM_BOTH, S_DELETED, S_DEL_FAILED,
+    S_MSG_REPLAY_WRITE, S_MSG_REPLAY_SPACE, S_MSG_CLIPS, S_MSG_BOTTOM_BOTH, S_MSG_MAIN_BOTH, S_SDT_BUSY, S_DELETED, S_DEL_FAILED,
 };
 #define TOUR_N_MSG ((int)(sizeof(TOUR_MSG) / sizeof(*TOUR_MSG)))
+#define TOUR_ROWS (GROUP_MAX * GRP_LANG)   /* every row of every group in focus (its note on the top screen) */
+enum { TS_SDT_IDLE, TS_SDT_RUN, TS_SDT_GOOD, TS_SDT_OK, TS_SDT_SLOW, TS_SDT_FAILED, TS_SDT_N };
 enum {
-    TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
-    TS_LANG = TS_GROUP + 2 * GRP_LANG, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS, TS_GALLERY, TS_GAL_DELETE,
-    TS_UNINSTALL, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG, TS_PER_LANG = TS_MSG + TOUR_N_MSG
+    TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_PANEL_REPLAY, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
+    TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS, TS_HOTKEY2, TS_GALLERY, TS_GAL_DELETE,
+    TS_PLAYER, TS_SDTEST, TS_UNINSTALL = TS_SDTEST + TS_SDT_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
+    TS_PER_LANG = TS_MSG + TOUR_N_MSG
 };
 
 /* Puts the app in tour step `step` (of the language `lang`) and names it; returns the frames to
@@ -2830,9 +3143,13 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         a->guidePage = step - TS_GUIDE;
         go(a, SCR_GUIDE, 0);
         snprintf(name, cap, "guide-%d", a->guidePage + 1);
-    } else if (step == TS_PANEL) {
-        go(a, SCR_PANEL, 0);
-        snprintf(name, cap, "panel");
+    } else if (step == TS_PANEL || step == TS_PANEL_REPLAY) {
+        if (step == TS_PANEL_REPLAY) {   /* Replay on, 2 min */
+            a->cfg.replay = true;
+            a->cfg.replaySec = 120;
+        }
+        go(a, SCR_PANEL, step == TS_PANEL_REPLAY ? FOCUS_REPLAY : 0);
+        snprintf(name, cap, step == TS_PANEL ? "panel" : "panel-replay");
     } else if (step == TS_FIRSTRUN) {
         go(a, SCR_FIRSTRUN, 0);
         snprintf(name, cap, "firstrun");
@@ -2840,10 +3157,14 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         go(a, SCR_SETTINGS, 0);
         snprintf(name, cap, "settings");
     } else if (step < TS_LANG) {
-        const int g = (step - TS_GROUP) / 2, last = (step - TS_GROUP) % 2;
+        a->cfg.replay = false;
+        a->cfg.replaySec = 30;
+        const int g = (step - TS_GROUP) / GROUP_MAX, row = (step - TS_GROUP) % GROUP_MAX;
+        if (row >= GROUP_N[g])
+            return 1;   /* no such row: a frame, no picture worth keeping (named as a repeat) */
         a->setGroup = g;
-        go(a, SCR_SETGROUP, last ? GROUP_N[g] - 1 : 0);
-        snprintf(name, cap, "group-%d%s", g + 1, last ? "-end" : "");
+        go(a, SCR_SETGROUP, row);
+        snprintf(name, cap, "group-%d-%d", g + 1, row + 1);
     } else if (step == TS_LANG) {
         open_languages(a, SCR_SETTINGS, GRP_LANG);
         snprintf(name, cap, "lang");
@@ -2852,9 +3173,10 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         a->back = SCR_PANEL;
         go(a, SCR_HELP, 0);
         snprintf(name, cap, "help-%02d", a->helpTopic + 1);
-    } else if (step == TS_HOTKEY) {
+    } else if (step == TS_HOTKEY || step == TS_HOTKEY2) {
         open_hotkey(a);
-        snprintf(name, cap, "hotkey");
+        a->hkStep = step == TS_HOTKEY2;
+        snprintf(name, cap, step == TS_HOTKEY ? "hotkey" : "hotkey-2");
     } else if (step == TS_GALLERY) {
         open_gallery(a, NULL);
         wait = 90; /* the list is read in the background */
@@ -2864,6 +3186,37 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
             open_gallery(a, NULL);
         a->galConfirm = true;
         snprintf(name, cap, "gallery-delete");
+    } else if (step == TS_PLAYER) {   /* the newest recording, the buttons shown (tools/azahar: a synthetic one) */
+        if (a->screen != SCR_GALLERY)
+            open_gallery(a, NULL);
+        gal_lock();
+        const GalList *l = gal_list();
+        GalItem it;
+        const bool have = l->loaded && l->count > 0;
+        if (have)
+            it = l->items[0];
+        gal_unlock();
+        if (have) {
+            g_plInputs = true;
+            open_player(a, &it);
+            player_seek(1500);
+            a->playerShowUntil = a->frame + 600;
+        }
+        wait = 150;
+        snprintf(name, cap, "player-buttons");
+    } else if (step < TS_UNINSTALL) {
+        if (a->screen == SCR_PLAYER)
+            close_player(a);
+        const int k = step - TS_SDTEST;
+        memset(&g_sdt, 0, sizeof(g_sdt));
+        g_sdt.state = k == TS_SDT_IDLE ? SDT_IDLE : k == TS_SDT_RUN ? SDT_RUNNING : k == TS_SDT_FAILED ? SDT_FAILED : SDT_DONE;
+        g_sdt.permille = 420;
+        g_sdt.kbPerSec = k == TS_SDT_GOOD ? 9318 : k == TS_SDT_OK ? 5120 : 2867;
+        g_sdt.slowestMs = k == TS_SDT_GOOD ? 41 : k == TS_SDT_OK ? 118 : 352;
+        g_sdt.rc = (Result)0xC86044D2;
+        go(a, SCR_SDTEST, 1);
+        static const char *const N[TS_SDT_N] = {"sdtest", "sdtest-run", "sdtest-good", "sdtest-ok", "sdtest-slow", "sdtest-failed"};
+        snprintf(name, cap, "%s", N[k]);
     } else if (step == TS_UNINSTALL) {
         go(a, SCR_UNINSTALL, 1);
         snprintf(name, cap, "uninstall");
@@ -2877,6 +3230,10 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
             snprintf(a->msg, sizeof(a->msg), T(m), "pm:app", 0xD8E06406ul);
         else if (m == S_MSG_CLIPS)
             snprintf(a->msg, sizeof(a->msg), T(m), 3);
+        else if (m == S_MSG_REPLAY_ON)
+            snprintf(a->msg, sizeof(a->msg), T(m), "X+SELECT", "30 s");
+        else if (m == S_MSG_REPLAY_SPACE)
+            snprintf(a->msg, sizeof(a->msg), T(m), "2 min", 2238u);
         else
             snprintf(a->msg, sizeof(a->msg), T(m), "Mario Kart 7");
         a->msgImportant = false;

@@ -12,6 +12,8 @@
 #include <citro3d.h>
 #include <stdbool.h>
 
+#include "inputs.h"
+
 #define PLAYER_TEX_W 256   /* a screen as the LCD stores it: 240 rows per column, 400 or 320 columns */
 #define PLAYER_TEX_H 512
 
@@ -31,6 +33,8 @@ bool player_file_audio(void);           /* the file has sound (whether or not it
 bool player_both(void);                 /* both screens recorded */
 bool player_bottom_only(void);          /* only the bottom screen recorded */
 u32 player_time_ms(void);
+bool player_has_inputs(void);           /* the recording kept the buttons (R3DI) */
+bool player_input(InputState *out);     /* the buttons at the clock; false: none kept */
 u32 player_duration_ms(void);
 
 /* After C3D_FrameBegin: copies the frames now due into the textures (PLAYER_TEX_W x PLAYER_TEX_H,

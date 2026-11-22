@@ -68,7 +68,7 @@ int main(int argc, char **argv)
     FILE *f = fopen(argv[1], "wb");
     if (!f)
         return 1;
-    R3dFileHeader fh = { R3D_MAGIC_FILE, R3D_VERSION, 0, 0, R3D_MODE_FULL_BOTH, 30, 0, R3D_AUDIO_RATE_MHZ, 0 };
+    R3dFileHeader fh = { R3D_MAGIC_FILE, R3D_VERSION, 0, 0, R3D_MODE_FULL_BOTH, 30, R3D_FILE_INPUT, R3D_AUDIO_RATE_MHZ, 0 };
     fwrite(&fh, 1, sizeof(fh), f);
 
     uint16_t *top = malloc(400 * ROWS * 2), *bot = malloc(320 * ROWS * 2);
@@ -92,6 +92,15 @@ int main(int argc, char **argv)
             const int key = i % 60 == 0;
             n = codec_xr32_encode_strided(prev, (const uint8_t *)top, 400, ROWS, ROWS * 2, 1, key, out);
             rec(f, R3D_MAGIC_YFRAME, out, (uint32_t)n, t, (uint8_t)(0 | (key ? R3D_SCREEN_KEY : 0)), 400);
+        }
+        if (i % 15 == 0) {           /* the buttons: a different one every half second, a touch in odd seconds */
+            R3dInputSample in[2] = { { 0, (uint16_t)(1u << ((i / 15) % 12)), (int8_t)((i * 4) % 200 - 100), 50,
+                                  (uint8_t)((i / 30) % 2 ? 80 : R3D_TOUCH_NONE), (uint8_t)((i / 30) % 2 ? 120 : R3D_TOUCH_NONE) } };
+            rec(f, R3D_MAGIC_INPUT, in, sizeof(in), t, R3D_STREAM_INPUT, 1);   /* len: a multiple of 16 */
+        }
+        if (i % 30 == 10) {          /* a record of a type the readers do not know: stepped over */
+            static const uint8_t future[32] = { 1, 2, 3 };
+            rec(f, 0x5A443352u /* "R3DZ" */, future, sizeof(future), t, 9, 0);
         }
         if (i % 30 == 0) {           /* bottom screen: raw, once a second */
             draw(bot, 320, (int)i, 0);

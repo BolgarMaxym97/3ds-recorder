@@ -16,6 +16,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('file'); ap.add_argument('--port', type=int, default=8090); ap.add_argument('--host', default='0.0.0.0')
 ap.add_argument('--kbs', type=int, default=0); ap.add_argument('--lang', default='uk')
 ap.add_argument('--mp4'); ap.add_argument('--prep-s', type=float, default=10); ap.add_argument('--prep')
+ap.add_argument('--keys', action='store_true')  # the console's Buttons In Video is on
 ap.add_argument('--stall-every', type=int, default=0)  # weak signal: every Nth file request stops halfway
 a = ap.parse_args()
 repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
@@ -26,7 +27,7 @@ hdr = open(a.file, 'rb').read(32)
 out = subprocess.run([os.path.join(repo, 'build/r3dconv'), '--info', a.file], capture_output=True, text=True).stderr
 secs = float(re.search(r'^([\d.]+) s,', out, re.M).group(1))
 info = {'name': name, 'size': size, 'ms': int(secs * 1000), 'closed': 'end:' in out, 'both': hdr[17] == 4,
-        'audio': int.from_bytes(hdr[20:24], 'little') != 0, 'fps': hdr[18], 'ok': True, 'lang': a.lang,
+        'audio': int.from_bytes(hdr[20:24], 'little') != 0, 'fps': hdr[18], 'keys': a.keys and (hdr[19] & 2) != 0, 'ok': True, 'lang': a.lang,
         'version': 'test', 'console': 'Mac test'}
 
 started = time.time()

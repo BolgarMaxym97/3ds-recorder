@@ -22,13 +22,18 @@
  *           len > cols * 4, an R3dAudioTrailer follows the samples.
  *     R3DM  DSP shared memory snapshot (version 4, diagnostics): `len` bytes,
  *           both DSP regions (2 x 0x8000), screen = R3D_STREAM_DSPMEM.
+ *     R3DI  button presses (version 7): `cols` R3dInputSample (8 bytes each), screen =
+ *           R3D_STREAM_INPUT, len padded to 16. A sample is the state from timeUs + dtMs on,
+ *           until the next one; written when the state changes.
  *     R3DE  end of a properly closed recording, the file's last record: an
  *           R3dEndInfo (len 16), timeUs = the recording's length. Readers take it
  *           from the file's last 32 bytes; a file without it was cut off.
  * Frames are column-major, RGB565, as the LCD stores them (column = screen x,
  * word 0 = bottom row). A file that was not closed properly ends with
  * whatever the SD card held (FAT does not zero preallocated clusters): readers
- * stop at the first record with an unknown magic.
+ * stop at the first record that is not plausible. Since version 7 a record of a type they do
+ * not know ("R3D?" magic, len a multiple of 16, under 1 MB) is skipped, not taken for the end:
+ * new record types keep their len a multiple of 16 (r3d_skippable).
  */
 #include <stdint.h>
 
@@ -43,10 +48,13 @@
 #define R3D_MAGIC_AUDIO  0x41443352u   /* "R3DA" */
 #define R3D_MAGIC_DSPMEM 0x4D443352u   /* "R3DM" */
 #define R3D_MAGIC_END    0x45443352u   /* "R3DE" */
+#define R3D_MAGIC_INPUT  0x49443352u   /* "R3DI" */
 
-#define R3D_VERSION      6u   /* 5: R3DQ and R3DH frames, bottom-screen-only mode; 6: R3DC frames */
+#define R3D_VERSION      7u   /* 5: R3DQ and R3DH frames, bottom-screen-only mode; 6: R3DC frames;
+                                 7: R3DI button presses, unknown record types skipped */
 #define R3D_STREAM_AUDIO  2u
 #define R3D_STREAM_DSPMEM 3u
+#define R3D_STREAM_INPUT  4u
 /* DSP output: 268111856 / 8192 Hz, 160 samples per DSP frame */
 #define R3D_AUDIO_RATE_MHZ 32728498u
 #define R3D_SCREEN_KEY   0x40u
@@ -69,7 +77,23 @@ typedef struct {
     uint32_t reserved;
 } R3dEndInfo;
 
-#define R3D_FILE_CLIP 1u   /* a replay clip (the last 30 seconds), made by r3d_unwrap: galleries label it */
+#define R3D_FILE_CLIP  1u   /* a replay clip (the last seconds), made by r3d_unwrap: galleries label it */
+#define R3D_FILE_INPUT 2u   /* the recorder kept the buttons (R3DI records), even if none were pressed */
+
+/* One R3DI sample: the buttons, the Circle Pad and the touch screen from timeUs + dtMs on. */
+typedef struct {
+    uint16_t dtMs;         /* after the record's timeUs */
+    uint16_t keys;         /* R3D_KEY_* (the PAD register's bits) */
+    int8_t   cx, cy;       /* Circle Pad, -127..127 (up and right positive) */
+    uint8_t  tx, ty;       /* touch: x / 2 (0..159), y (0..239); R3D_TOUCH_NONE when not touched */
+} R3dInputSample;
+#define R3D_TOUCH_NONE 0xFFu
+enum {
+    R3D_KEY_A = 1u << 0, R3D_KEY_B = 1u << 1, R3D_KEY_SELECT = 1u << 2, R3D_KEY_START = 1u << 3,
+    R3D_KEY_RIGHT = 1u << 4, R3D_KEY_LEFT = 1u << 5, R3D_KEY_UP = 1u << 6, R3D_KEY_DOWN = 1u << 7,
+    R3D_KEY_R = 1u << 8, R3D_KEY_L = 1u << 9, R3D_KEY_X = 1u << 10, R3D_KEY_Y = 1u << 11,
+};
+#define R3D_INPUT_MAX 64u   /* samples in one R3DI record */
 
 /* mode: what the file holds */
 enum { R3D_MODE_FULL_TOP = 3, R3D_MODE_FULL_BOTH = 4, R3D_MODE_FULL_BOTTOM = 5 };
@@ -94,6 +118,14 @@ typedef struct {
     uint8_t  srcFormat;    /* LCD format register (low byte) */
     uint16_t cols;         /* 400 / 320; rows = 240 */
 } R3dRecHeader;
+
+/* A record of a type this reader does not know that it may step over (version 7 on): an "R3D?"
+   magic and a len a multiple of 16, under 1 MB. Anything else ends the data. */
+#define R3D_SKIP_MAX (1u << 20)
+static inline int r3d_skippable(uint32_t magic, uint32_t len)
+{
+    return (magic & 0x00FFFFFFu) == 0x00443352u && (len & 15u) == 0 && len <= R3D_SKIP_MAX;
+}
 
 /*
  * Replay clip (.rpl, "the last 30 seconds"): the recorder keeps its stream in a file of a fixed
@@ -125,6 +157,7 @@ _Static_assert(sizeof(R3dFileHeader) == 32, "R3dFileHeader");
 _Static_assert(sizeof(R3dRecHeader) == 16, "R3dRecHeader");
 _Static_assert(sizeof(R3dAudioTrailer) == 16, "R3dAudioTrailer");
 _Static_assert(sizeof(R3dEndInfo) == 16, "R3dEndInfo");
+_Static_assert(sizeof(R3dInputSample) == 8, "R3dInputSample");
 _Static_assert(sizeof(R3dRingInfo) == 80, "R3dRingInfo");
 #endif
 

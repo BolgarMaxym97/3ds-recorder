@@ -26,7 +26,8 @@ typedef struct {
     bool ended;           /* has its R3DE end record: closed properly */
     bool readable;        /* header valid */
     bool audio, both, bottomOnly;
-    bool clip;            /* a replay clip (the last 30 seconds), not a recording the user started and stopped */
+    bool clip;            /* a replay clip (the last seconds), not a recording the user started and stopped */
+    bool inputs;          /* the buttons pressed were kept (R3D_FILE_INPUT) */
     u8 fps;
     u32 durationMs;       /* from R3DE, or estimated from the file's last records */
     u32 dropped;

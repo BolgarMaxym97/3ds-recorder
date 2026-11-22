@@ -30,4 +30,30 @@ one=$(check one --threads 1 | tee /dev/stderr | tail -1)
 two=$(check two --threads 2 | tee /dev/stderr | tail -1)
 resumed=$(check resumed --threads 2 --interrupt 150 | tee /dev/stderr | tail -1)
 [ "$one" = "$two" ] && [ "$two" = "$resumed" ] || { echo "frame counts differ: $one / $two / $resumed"; exit 1; }
+
+# A picture that stays (2 s to 4 s) is encoded once more as a sharp key frame, repeats are not encoded;
+# the buttons drawn when asked (SELECT held at 1.25 s: its pill in the left strip, x 20, y 410, is red)
+STILL="$OUT/held-src.r3d"   # (check removes $OUT/<name>.*)
+node "$REPO/tests/web/make-r3d.mjs" "$STILL" --secs 12 --fps 30 --still --inputs --unknown >/dev/null
+IN="$STILL"
+plain=$(check still --threads 1 | tail -1)
+keys=$(check keys --threads 1 --inputs 1 | tail -1)
+[ "$plain" -lt 320 ] || { echo "still: $plain frames, the held picture was encoded again and again"; exit 1; }
+ktime=$(ffprobe -v error -select_streams v:0 -show_entries frame=pts_time,pict_type -of csv=p=0 "$OUT/still.mp4" |
+    awk -F, '$1 > 1.95 && $1 < 2.1 && $2 == "I" { print $1 }' | head -1)
+[ -n "$ktime" ] || { echo "still: the held picture (2 s) is not a key frame"; exit 1; }
+px() { ffmpeg -v error -ss "$2" -i "$1" -frames:v 1 -f rawvideo -pix_fmt rgb24 - | python3 -c "
+import sys
+d = sys.stdin.buffer.read(); i = (410 * 400 + 20) * 3
+print(d[i], d[i + 1], d[i + 2])"; }
+read -r r g b <<< "$(px "$OUT/keys.mp4" 1.3)"
+[ "$r" -gt 170 ] && [ "$g" -lt 140 ] || { echo "keys: SELECT not drawn ($r $g $b)"; exit 1; }
+read -r r g b <<< "$(px "$OUT/still.mp4" 1.3)"
+[ "$r" -lt 60 ] || { echo "still: buttons drawn without --inputs ($r $g $b)"; exit 1; }
+! grep -q "SPS/PPS changed" "$OUT/still.log" "$OUT/keys.log" || { echo "the held key frame changed the SPS/PPS"; exit 1; }
+read -r r g b <<< "$(px "$OUT/still.mp4" 0.5)"   # the black strip beside the bottom screen stays black
+[ "$r" -lt 24 ] && [ "$g" -lt 24 ] || { echo "still: the picture before the held one decodes wrong ($r $g $b)"; exit 1; }
+echo "still: $plain frames (key frame at $ktime s), buttons: SELECT drawn"
+resumedKeys=$(check keysresumed --threads 2 --inputs 1 --interrupt 300 | tail -1)
+[ "$resumedKeys" = "$keys" ] || { echo "buttons, resumed: $resumedKeys frames, $keys without stopping"; exit 1; }
 echo "prep: ok"

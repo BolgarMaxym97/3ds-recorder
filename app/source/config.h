@@ -26,7 +26,11 @@ typedef struct {
     Lang lang;        /* lang=<code> (i18n.h LANGS); English when missing or unknown */
     bool langSet;     /* config.ini has lang=: the language was chosen (first run asks) */
     bool guideSeen;   /* guide=done: the first-run guide was shown */
-    bool replay;      /* replay=on: the module keeps the last 30 seconds all the time (the replay buffer) */
+    bool replay;      /* replay=on: the module keeps the last seconds all the time (the replay buffer) */
+    int replaySec;    /* replay_sec: how long a clip is (15, 30, 60, 120, 300) */
+    bool mainBottom;  /* main_screen=bottom: with both screens, the bottom one keeps its frames first */
+    bool inputs;      /* inputs=on (the default): the recorder keeps the buttons pressed (R3DI) */
+    bool mp4Inputs;   /* mp4_inputs=on: the console's MP4s show them (prepare.c) */
     char replayHotkey[48]; /* replay_hotkey: saves them as a clip, e.g. X+SELECT */
     bool autostart;   /* autostart=on: the recorder starts with the console (the module sets it up: sysmod AutoApply) */
     bool convertAuto; /* convert=auto (the default): every recording becomes an MP4 in the background; manual: only the one opened in Download (prepare.c) */

@@ -11,19 +11,22 @@ The details behind the short README: how each feature works, what it costs, and 
 
 The same topics are in the app: **Help** on the panel.
 
-## Replay — the last 30 seconds
+## Replay — save what just happened
 
-- Switch **Replay 30 s** on in the Recorder tile. While a game or another program runs, the recorder keeps its last
-  30 seconds all the time (the LED glows faint blue). It begins about 15 seconds after a game starts, so the game
+- Switch **Replay** on in the Recorder tile. While a game or another program runs, the recorder keeps its last
+  seconds all the time (the LED glows faint blue): 30 at first, Settings → Recorder → **Replay Length** picks 15 s,
+  30 s, 1, 2 or 5 min. It begins about 15 seconds after a game starts, so the game
   loads undisturbed.
 - **X + SELECT** saves them as a clip: the LED blinks green twice. Red three times instead: Replay is not running
   there (it is off, or the game started less than 15 seconds ago).
-- A clip is 30 seconds, a few more at times. It is saved at once and becomes a recording in the Gallery, marked
+- A clip is that long, a few seconds more at times. It is saved at once and becomes a recording in the Gallery, marked
   *Replay*, the next time 3DS Recorder is open — keep the app open until *Saving clip* is gone.
 - It works while a game or another program is open, not in the HOME Menu alone. It pauses while a normal recording
   runs (R + SELECT still works as usual), while 3DS Recorder or an applet is open and while the lid is closed.
-- It writes to the SD card all the time — several GB an hour in a 3D game, which wears the card — and keeps 512 MB of
-  the card while it is on. In a 30-minute test on an Old 3DS the battery ran down as fast with it as without it.
+- It writes to the SD card all the time — several GB an hour in a 3D game, which wears the card — and keeps two files on
+  the card while it is on: 2 × 128 MB for 15 s, 2 × 256 MB for 30 s, up to 2 × 2.5 GB for 5 min. To switch it on, the
+  card needs that and ~190 MB more free (700 MB for 30 s, 5.2 GB for 5 min). A new length applies when Replay starts
+  again. In a 30-minute test on an Old 3DS the battery ran down as fast with it as without it.
 - It is off again after the console has been turned off: switch it on for a play session. With Launch On Startup it
   stays as you left it.
 - On an Old 3DS it runs in games that need extra memory too, with fewer frames a second there.
@@ -59,16 +62,28 @@ turned on or restarts, with Replay as you left it, and you never have to open th
 - **On a computer, in high quality:** the [converter page](https://bolgarmaxym97.github.io/3ds-recorder/) also makes bigger, sharper videos (2× or 3×), one
   screen or both side by side, for YouTube or for editing. Need DNxHR, a lossless file or one file per screen: the
   r3d2video program. Both ways: [pc-converter.md](pc-converter.md).
+- **The buttons you press** are kept with each recording (Settings → Recorder → **Record Buttons**, on at first; a few
+  KB a minute). They are drawn only where you ask: **X** in the player, Settings → App → **Buttons In Video** for the
+  console's MP4s, **Buttons** on the converter page, `--inputs` in r3d2video. With both screens they sit in the strips
+  beside the bottom screen and cover none of the game; with one screen, in a small panel in a corner. A touch is a ring
+  where you touched.
+- **A part only:** on the converter page, play the video it made, pause where the part starts → **Start here**, where
+  it ends → **End here**, then **Make this part**. **Discord** makes a video under 10 MB (Discord's limit without Nitro).
 - **Work With Lid Closed** (Settings → App, on at first): while the app converts, joins recordings or saves Replay
   clips, close the lid — the screens go dark, the work goes on, and the console sleeps once everything is done (or when
   the battery is nearly empty).
 
 ## Recording settings
 
+- **Main Screen:** with both screens recorded, the one the game is played on keeps its frames first; the other one
+  gives way when the console or the SD card falls behind (down to 10 frames a second).
+  **Bottom** for games played on the touch screen; Bottom Screen FPS below then sets the top screen's rate.
 - **Bottom Screen FPS:** with both screens recorded, the bottom one can be captured less often (15, 10, 5 or 1 fps).
   A still menu there then leaves more of the console to the top screen — smoother on an Old 3DS. A game played on the
   bottom screen looks choppy at 5 or 1 fps. A screen that does not change already costs almost nothing on the SD card;
   this saves processor time, not space.
+- **Test SD Card** (Settings → App): writes 96 MB the way the recorder does (20–40 s) and tells how fast the card is
+  and what that is enough for. Both screens of a 3D game at 30 fps need about 5.4 MB/s on an Old 3DS.
 - **Quality — Auto:** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
   the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay
   exact. **Lossless** keeps every frame exact; in 3D games the SD card then cannot take every frame.
@@ -113,7 +128,8 @@ they start and when they close. A New 3DS does not restart for them.
 ## Limits
 
 - **Plugin menus:** CTRPluginFramework menus are recorded. A 3GX plugin that draws its own screens elsewhere leaves
-  the game's last picture in the video while its menu is open.
+  the game's last picture in the video while its menu is open. If a game with a plugin crashes while its menu is
+  recorded, add the line `ctrpf_capture=off` to `/3ds/recorder/config.ini`: the menu is then left out of the video.
 - **NTR streaming** competes with the recorder for the console: stop the recorder (or turn off Launch On Startup)
   while you stream with NTR.
 - **DS and GBA games can't be recorded:** they run in a separate mode of the console.

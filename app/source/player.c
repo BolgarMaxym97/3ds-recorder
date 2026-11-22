@@ -8,6 +8,7 @@
 #include "audio_place.h"
 #include "codec.h"
 #include "huff.h"
+#include "inputs.h"
 #include "r3d_format.h"
 #include "recorder.h"
 
@@ -48,6 +49,9 @@ static volatile bool g_quit;
 static Handle g_file;
 static u64 g_size;
 static R3dFileHeader g_hdr;
+/* the buttons (R3DI): read ahead with the rest by the thread, asked for at the clock by the UI */
+static InputTrack *g_in;
+static LightLock g_inLock;
 static u8 *g_buf;
 static u64 g_bufOff;                 /* file offset of g_buf[0] */
 static u32 g_bufLen, g_pos;
@@ -202,6 +206,12 @@ static void skip(u32 n)
         reposition(g_bufOff + g_pos + n);
 }
 
+static bool is_frame(u32 m)
+{
+    return m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME ||
+           m == R3D_MAGIC_XFRAME || m == R3D_MAGIC_FRAME;
+}
+
 static bool plausible(const R3dRecHeader *h)
 {
     const u32 m = h->magic;
@@ -211,6 +221,8 @@ static bool plausible(const R3dRecHeader *h)
         return h->len <= (1u << 20);
     if (m == R3D_MAGIC_AUDIO)
         return h->len <= 4096 && h->cols == 160;
+    if (m == R3D_MAGIC_INPUT || (!is_frame(m) && m != R3D_MAGIC_END && r3d_skippable(m, h->len)))   /* the buttons; a newer type: stepped over */
+        return (h->len & 15u) == 0 && h->len <= (1u << 20);
     return (m == R3D_MAGIC_YFRAME || m == R3D_MAGIC_HFRAME || m == R3D_MAGIC_QFRAME || m == R3D_MAGIC_CFRAME || m == R3D_MAGIC_XFRAME ||
             m == R3D_MAGIC_FRAME) &&
            h->len <= MAX_RECORD &&
@@ -656,6 +668,11 @@ static void do_seek(u32 targetUs)
     queue_clear();
     audio_reset(targetUs); /* the old sound stops; the clock holds at the target meanwhile */
     g_haveKey[0] = g_haveKey[1] = false;
+    if (g_in) {   /* the buttons from the new place on (a sample comes at least every second) */
+        LightLock_Lock(&g_inLock);
+        input_track_init(g_in);
+        LightLock_Unlock(&g_inLock);
+    }
     const u64 from = seek_landing(targetUs);
     /* 1. walk the record headers up to the target: per screen, the frames since its last keyframe */
     static u64 chain[2][CHAIN_MAX];
@@ -665,7 +682,7 @@ static void do_seek(u32 targetUs)
     u64 p = from;
     R3dRecHeader h;
     while (!seek_aborted() && p + sizeof(h) <= g_size && header_at(p, &h) && plausible(&h) && h.timeUs < targetUs) {
-        if (h.magic != R3D_MAGIC_AUDIO && h.magic != R3D_MAGIC_PAD && h.magic != R3D_MAGIC_DSPMEM) {
+        if (is_frame(h.magic)) {
             const int sc = h.screen & 0x3F;
             if (h.magic == R3D_MAGIC_FRAME || (h.screen & R3D_SCREEN_KEY)) {
                 n[sc] = 0;
@@ -784,6 +801,19 @@ static bool read_ahead(u32 now)
         skip(sizeof(h) + len);
         return true;
     }
+    if (h.magic == R3D_MAGIC_INPUT || !(h.magic == R3D_MAGIC_AUDIO || is_frame(h.magic))) {
+        if (h.magic == R3D_MAGIC_INPUT && g_in) {
+            if (!fill(sizeof(h) + len)) {
+                finish();
+                return false;
+            }
+            LightLock_Lock(&g_inLock);
+            input_track_add(g_in, &h, g_buf + g_pos + sizeof(h), len);
+            LightLock_Unlock(&g_inLock);
+        }
+        skip(sizeof(h) + len);
+        return true;
+    }
     const bool video = h.magic != R3D_MAGIC_AUDIO;
     if (h.timeUs > now + LEAD_US || (video && queue_full(h.len))) {
         /* The sound is the clock: across a stretch with no records at all (the recorder skips
@@ -877,6 +907,10 @@ bool player_start(const char *name, u32 durationMs)
     }
     g_durationMs = durationMs;
     LightLock_Init(&g_lock);
+    LightLock_Init(&g_inLock);
+    g_in = (g_hdr.flags & R3D_FILE_INPUT) ? malloc(sizeof(InputTrack)) : NULL;
+    if (g_in)
+        input_track_init(g_in);
     LightEvent_Init(&g_wake, RESET_ONESHOT);
     g_quit = g_paused = g_ended = g_eof = false;
     g_shown = 0;
@@ -970,6 +1004,8 @@ void player_stop(void)
         g_preThread = NULL;
     }
     queue_clear();
+    free(g_in);
+    g_in = NULL;
     if (g_ndspOk) {
         ndspChnWaveBufClear(0);
         ndspExit();
@@ -1060,6 +1096,22 @@ u32 player_time_ms(void)
     /* while seeking: its target (so presses in a row add up); at the end: the last frame's time */
     const u32 t = (g_seekBusy ? g_seekShowUs : g_ended ? g_lastVideoUs : clock_us()) / 1000;
     return g_durationMs && t > g_durationMs ? g_durationMs : t;
+}
+
+bool player_has_inputs(void)
+{
+    return g_in != NULL;
+}
+
+bool player_input(InputState *out)
+{
+    if (!g_in)
+        return false;
+    const u32 us = (g_seekBusy ? g_seekShowUs : g_ended ? g_lastVideoUs : clock_us());
+    LightLock_Lock(&g_inLock);
+    *out = *input_track_at(g_in, us);
+    LightLock_Unlock(&g_inLock);
+    return true;
 }
 
 int player_present(C3D_Tex *top, C3D_Tex *bottom)

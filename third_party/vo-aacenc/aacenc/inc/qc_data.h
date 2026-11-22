@@ -1,5 +1,6 @@
 /*
  ** Copyright 2003-2010, VisualOn, Inc.
+ ** Modified for 3DS Recorder: AAC samples in MP4 without empty fill elements (from Yu08083/3ds-recorder y02).
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
  ** you may not use this file except in compliance with the License.
@@ -108,6 +109,7 @@ typedef struct
   Word16          alignBits;
   Word16          bitResTot;
   Word16          averageBitsTot;
+  Word16          omitRawFill;
 } QC_OUT;
 
 typedef struct {

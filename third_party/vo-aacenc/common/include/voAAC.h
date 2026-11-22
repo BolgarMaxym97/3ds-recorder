@@ -1,5 +1,6 @@
 /*
  ** Copyright 2003-2010, VisualOn, Inc.
+ ** Modified for 3DS Recorder: AAC samples in MP4 without empty fill elements (from Yu08083/3ds-recorder y02).
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
  ** you may not use this file except in compliance with the License.
@@ -51,6 +52,7 @@ typedef  struct {
 /* AAC Param ID */
 #define VO_PID_AAC_Mdoule				0x42211000
 #define VO_PID_AAC_ENCPARAM				VO_PID_AAC_Mdoule | 0x0040  /*!< get/set AAC encoder parameter, the parameter is a pointer to AACENC_PARAM */
+#define VO_PID_AAC_MP4_ENCPARAM (VO_PID_AAC_Mdoule | 0x0041)
 
 /* AAC decoder error ID */
 #define VO_ERR_AAC_Mdoule				0x82210000

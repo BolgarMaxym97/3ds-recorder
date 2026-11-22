@@ -657,6 +657,12 @@ static void writer_main(void *arg)
    producer leaves about half the time idle (New 3DS XL logs, 2026-11-14: H.264 863 of 1138 s on this
    core, the producer waiting 583 s). Above the producer there; this core waits for it per picture. */
 static Thread g_slicer;
+static volatile bool g_inputs;   /* mp4_inputs: the buttons drawn in the MP4s (prepare_set_inputs) */
+
+void prepare_set_inputs(bool on)
+{
+    g_inputs = on;
+}
 static LightEvent g_sgo, g_sdone;
 static void (*volatile g_sliceJob)(void *);
 static void *volatile g_sliceData;
@@ -782,7 +788,7 @@ static void tune(PrepJob *job, Tune *t, const char *name)
 static void thread_main(void *arg)
 {
     (void)arg;
-    const PrepOptions opt = {0, 0, now_us, sleep_us, g_slicer ? 2 : 1, run_jobs, NULL};
+    PrepOptions opt = {0, 0, now_us, sleep_us, g_slicer ? 2 : 1, run_jobs, NULL, 0};
     PrepJob *job = NULL;
     char name[20] = "";
     u64 scanned = 0, clipLook = 0, joinLook = 0;
@@ -829,6 +835,7 @@ static void thread_main(void *arg)
             char src[96], base[96], err[128];
             prepare_path(src, sizeof(src), name, "r3d");
             base_of(base, sizeof(base), name);
+            opt.inputs = g_inputs;   /* Buttons In Video, as it is when the job opens */
             job = prep_open(src, base, &opt, err, sizeof(err));
             if (!job) {
                 app_log("prepare %s: %s", name, err);
