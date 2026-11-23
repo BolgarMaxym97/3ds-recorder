@@ -692,7 +692,15 @@
     const W = view.w * scale, H = view.h * scale;
     const codec = codecs.video, opus = codecs.audio === 'opus';
     const withAudio = !!(hdr.audio && codecs.audio); // the codec was chosen from the file's details: they agree, but in case
-    const target = new Mp4Muxer.ArrayBufferTarget();
+    // the MP4 in 16 MB pieces, not one ArrayBuffer: Firefox makes no Blob of a buffer over 2 GB (issue #35:
+    // 3x for editing). With fastStart 'in-memory' the muxer writes them in order, the same bytes as before
+    const parts = [];
+    let partsEnd = 0, partsOk = true;
+    const target = new Mp4Muxer.StreamTarget({ chunked: true, onData: (data, pos) => {
+      if (pos !== partsEnd) partsOk = false;
+      parts.push(data);
+      partsEnd = pos + data.byteLength;
+    } });
     const muxer = new Mp4Muxer.Muxer({
       target,
       video: { codec: 'avc', width: W, height: H, frameRate: hdr.fps },
@@ -805,7 +813,8 @@
         if (aenc) await aenc.flush();
         if (error) throw error;
         muxer.finalize();
-        return new Blob([target.buffer], { type: 'video/mp4' });
+        if (!partsOk) throw new Error('MP4 written out of order');
+        return new Blob(parts, { type: 'video/mp4' });
       },
     };
   }
