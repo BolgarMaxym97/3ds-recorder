@@ -429,7 +429,12 @@
   }
   const why = (e) => (e && (e.name ? e.name + ': ' : '') + (e.message || '')) || String(e);
   window.addEventListener('error', (e) => report('js error: ' + e.message + ' (' + (e.filename || '').split('/').pop() + ':' + e.lineno + ')'));
-  window.addEventListener('unhandledrejection', (e) => report('js promise: ' + why(e.reason)));
+  // where a rejection came from: "Error: Na" alone (Chrome on iPhone, 2026-11-23) told nothing
+  const at = (e) => {
+    const line = e && typeof e.stack === 'string' ? e.stack.split('\n').find((l) => /\d+:\d+/.test(l)) : '';
+    return line ? ' @ ' + line.trim().split('/').pop() : '';
+  };
+  window.addEventListener('unhandledrejection', (e) => report('js promise: ' + why(e.reason) + at(e.reason)));
   document.addEventListener('visibilitychange', () => report('page ' + document.visibilityState));
 
   /* ------------------------------------------------------------ UI */

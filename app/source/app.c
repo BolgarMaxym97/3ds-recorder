@@ -315,7 +315,7 @@ static void toast_tick(App *a)
 static void go(App *a, Screen s, int focus)
 {
     static const char *const names[] = {"panel", "firstrun", "help", "settings", "hotkey", "gallery", "player",
-                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group"};
+                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group", "sd test"};
     if (s != a->screen || !a->frame)
         app_log("screen: %s", (unsigned)s < sizeof(names) / sizeof(names[0]) ? names[s] : "?");
     a->screen = s;

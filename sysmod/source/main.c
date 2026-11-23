@@ -1163,7 +1163,7 @@ static volatile bool g_prepDone;
 
 /* application owning FCRAM framebuffers: pid only, never a handle */
 static u32 g_appPid, g_appBase, g_ownPid;
-static u64 g_lastAppTid;   /* the last application LogStarted saw (for the limit left after it) */
+static u64 g_lastAppTid;   /* the last application SeeApplication saw (for the limit left after it) */
 static Handle g_appResLimit;   /* the applications' resource limit (pm's), for AppMemFix; never a process */
 
 /* ------------------------------------------------------------------ prepared file */
@@ -6466,11 +6466,9 @@ static void WriteSystemStop(bool gameClosed)
 
 /* ------------------------------------------------------------------ main loop */
 
-/* A moment after pm said an application started (0x10C): which one, at what processor speed and
-   with how much memory, whatever the recorder is doing. In a recording UpdateBoost says it too;
-   the replay buffer and the idle recorder said nothing, and a report about a game that did not
-   start had no line naming the game (New 3DS, 2026-11-14). */
-static void LogStarted(void)
+/* The application running now (0 if none): its title becomes g_lastAppTid, and its resource limit
+   (pm's one for every application, so any application's will do) is kept for AppMemFix. */
+static u32 SeeApplication(s64 *tidOut)
 {
     const u32 pid = ApplicationPid();
     s64 tid = 0;
@@ -6483,6 +6481,19 @@ static void LogStarted(void)
         svcCloseHandle(h);
         g_lastAppTid = (u64)tid;
     }
+    if (tidOut)
+        *tidOut = tid;
+    return pid;
+}
+
+/* A moment after pm said an application started (0x10C): which one, at what processor speed and
+   with how much memory, whatever the recorder is doing. In a recording UpdateBoost says it too;
+   the replay buffer and the idle recorder said nothing, and a report about a game that did not
+   start had no line naming the game (New 3DS, 2026-11-14). */
+static void LogStarted(void)
+{
+    s64 tid = 0;
+    const u32 pid = SeeApplication(&tid);
     if (!pid)
     {
         Log("program started: gone again 3 s later (%s)", CpuState());
@@ -6508,16 +6519,7 @@ static void AppMemFix(void)
     if (!g_cfg.appMemFix || !app_limit_stuck(type, before))
         return;
     if (!g_appResLimit)
-    {
-        const u32 pid = ApplicationPid();
-        Handle h = 0;
-        if (pid && R_SUCCEEDED(svcOpenProcess(&h, pid)))
-        {
-            if (R_FAILED(svcGetResourceLimit(&g_appResLimit, h)))
-                g_appResLimit = 0;
-            svcCloseHandle(h);
-        }
-    }
+        SeeApplication(NULL);
     if (!g_appResLimit)
     {
         Log("application memory limit %lu KB: not put back (no application seen yet to reach pm's limit)", before / KB);
@@ -6578,6 +6580,13 @@ int main(void)
         svcGetSystemInfo(&n3ds, 0x10000, 0x201);
         g_isNew3ds = n3ds != 0;
     }
+    /* Started by the app: pm said nothing (0x10C) about the app, so LogStarted never saw it. The
+       limit pm leaves at 64 MB after the app (New 3DS) could then not be put back, and Smash /
+       CTGP-7 started next with it and rebooted the console (field logs 2026-11-22/23: "not put
+       back", title 0, 5 of 5 after a start by the app). The app's own process gives the limit;
+       taken first thing, while the app surely still runs. Logged once the log is open. */
+    s64 appTidAtStart = 0;
+    const u32 appPidAtStart = SeeApplication(&appTidAtStart);
     BootWait();
     InitFs();
     BootGuard();
@@ -6711,6 +6720,9 @@ int main(void)
         CodecBench();
     Log("start: %s, %lu ms after the kernel, waited %lu ms for the card and services; launch on startup %s", g_bootStart ? "WITH THE CONSOLE" : "by the app or the plugin",
         (u32)(TicksToUs64(g_startTick) / 1000u), (u32)g_bootWaitMs, g_cfg.autostart ? "on" : "off");
+    if (appPidAtStart)
+        Log("application at the start: pid %lu title %016llX, the applications' memory limit %s", appPidAtStart,
+            (u64)appTidAtStart, g_appResLimit ? "kept for later" : "NOT reachable");
     AutoApply();
     const bool resumeInGame = AfterReboot();
     RecoverCutOff();   /* before PrepareNext: it deletes NEXT_FS */

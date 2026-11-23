@@ -326,15 +326,27 @@ bool recorder_stop(void)
 {
     if (!ModuleRunning())
         return true;
+    const u64 t0 = osGetTime();
     recorder_command(REC_CMD_EXIT);
     for (int i = 0; i < 150; i++) { /* up to 15 s: a recording is saved first */
         svcSleepThread(100 * 1000 * 1000);
         if (!ModuleRunning())
             return true;
     }
-    WithPmApp(TerminateFn, NULL);
-    svcSleepThread(500 * 1000 * 1000);
-    return !ModuleRunning();
+    const Result rc = WithPmApp(TerminateFn, NULL);
+    /* pm ends it a moment later, not at once: "did not stop" came while the module was still going
+       away and the next start then worked (New 3DS 2026-11-22) */
+    for (int i = 0; i < 30; i++) { /* up to 3 s more */
+        svcSleepThread(100 * 1000 * 1000);
+        if (!ModuleRunning()) {
+            app_log("stop: the module ended only when pm ended it (rc %08lX), %llu ms", (unsigned long)rc,
+                    (unsigned long long)(osGetTime() - t0));
+            return true;
+        }
+    }
+    app_log("stop: the module still runs after %llu ms (pm's end rc %08lX)", (unsigned long long)(osGetTime() - t0),
+            (unsigned long)rc);
+    return false;
 }
 
 /* ------------------------------------------------------------------ files */
