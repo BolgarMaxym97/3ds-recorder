@@ -32,6 +32,7 @@ static bool g_ctxOpen;
 /* Static: the app's heap is busy with the MP4 work, and these live for one send per launch. */
 static char g_appBuf[APP_CAP + 1], g_recBuf[REC_CAP + 1], g_config[4096];
 static char g_body[96 * 1024] __attribute__((aligned(4))); /* httpcAddPostDataRaw takes u32 * */
+_Static_assert(sizeof(g_body) + 0x8000 <= NET_HTTPC_SHM, "the POST body must fit httpc's shared memory");
 static u8 g_dump[DUMP_MAX] __attribute__((aligned(4)));
 
 /* Through a temporary file: a power-off mid-write must not lose the marks (the lines would go again). */
@@ -341,7 +342,7 @@ static void Run(void *arg)
         return;
     /* POST data goes through httpc's shared memory (with 0 every POST fails: 0xD8A0A003, 3ds-ua):
        room for the whole report */
-    if (R_FAILED(httpcInit(sizeof(g_body) + 0x8000)))
+    if (R_FAILED(httpcInit(NET_HTTPC_SHM)))
         return;
     LogDumpDates();
     if (SendReport())

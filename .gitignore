@@ -57,3 +57,4 @@ tests/host/test_appletguard
 tests/host/test_join
 tests/host/test_stats
 tests/host/test_srvtoken
+tests/host/test_update

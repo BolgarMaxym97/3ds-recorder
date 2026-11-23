@@ -22,13 +22,21 @@ APP_AUTHOR      := 3ds-screen-recorder
 BUILD           := build
 AAC             := ../third_party/vo-aacenc
 SOURCES         := source source/lang ../codec/source ../prep/source ../third_party/qrcodegen \
-                   $(AAC)/aacenc/src $(AAC)/aacenc/basic_op $(AAC)/common
-INCLUDES        := source ../codec/include ../prep/include ../tools/r3dconv ../third_party/qrcodegen \
+                   $(AAC)/aacenc/src $(AAC)/aacenc/basic_op $(AAC)/common ../third_party/monocypher
+INCLUDES        := source ../codec/include ../prep/include ../tools/r3dconv ../third_party/qrcodegen ../third_party/monocypher \
                    ../third_party/minih264 $(AAC)/aacenc/inc $(AAC)/aacenc/basic_op $(AAC)/common/include
 
 ARCH     := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS   := -g -Wall -Wextra -O2 -mword-relocations -ffunction-sections $(ARCH) -std=gnu11
 CFLAGS   += $(INCLUDE) -D__3DS__ -DAPP_VERSION=\"$(APP_VERSION)\" -DAPP_CHANNEL=\"$(APP_CHANNEL)\"
+# A test build against a local Worker with its own key (stats/README.md, "Test an update"):
+#   make STATS_URL=http://192.168.1.20:8787 UPDATE_KEY=/abs/path/test_key.h APP_VERSION=1.6.1
+ifneq ($(STATS_URL),)
+CFLAGS   += -DSTATS_URL=\"$(STATS_URL)\"
+endif
+ifneq ($(UPDATE_KEY),)
+CFLAGS   += -DUPDATE_KEY_FILE=\"$(UPDATE_KEY)\"
+endif
 ASFLAGS  := -g $(ARCH)
 # make TOUR=1: a build that draws every screen in every language and saves each to
 # sdmc:/3ds/recorder/tour/ (tools/azahar/tour.sh runs it in Azahar), then quits
@@ -68,10 +76,11 @@ all: $(BUILD)
 	@python3 ../tools/build-web.py ../web romfs/web/index.html.gz
 	@# the 3dsx embeds romfs but its rule only follows the ELF: rebuild it when romfs changed
 	@if [ -f $(TARGET).3dsx ] && [ -n "$$(find romfs -newer $(TARGET).3dsx -type f)" ]; then rm -f $(TARGET).3dsx; fi
-	@# the objects that print the version: rebuilt when APP_VERSION / APP_CHANNEL change (make does not
-	@# follow CFLAGS; 0.9.12-0.9.14 showed "0.9.11" on the panel, 2026-11-08)
-	@mkdir -p $(BUILD); if [ "$$(cat $(BUILD)/.app_version 2>/dev/null)" != "$(APP_VERSION) $(APP_CHANNEL)" ]; then \
-		rm -f $(BUILD)/app.o $(BUILD)/recorder.o $(BUILD)/stats.o; echo "$(APP_VERSION) $(APP_CHANNEL)" > $(BUILD)/.app_version; fi
+	@# the objects that print the version or use the Worker's address and the update key: rebuilt when
+	@# they change (make does not follow CFLAGS; 0.9.12-0.9.14 showed "0.9.11" on the panel, 2026-11-08)
+	@mkdir -p $(BUILD); if [ "$$(cat $(BUILD)/.app_version 2>/dev/null)" != "$(APP_VERSION) $(APP_CHANNEL) $(STATS_URL) $(UPDATE_KEY)" ]; then \
+		rm -f $(BUILD)/app.o $(BUILD)/recorder.o $(BUILD)/stats.o $(BUILD)/update.o; \
+		echo "$(APP_VERSION) $(APP_CHANNEL) $(STATS_URL) $(UPDATE_KEY)" > $(BUILD)/.app_version; fi
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):

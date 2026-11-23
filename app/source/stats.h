@@ -18,6 +18,9 @@
 #define STATS_URL "http://3ds-recorder-stats.bolgar-maxym.workers.dev"
 #endif
 #define STATS_INI "sdmc:/3ds/recorder/stats.ini"
+/* httpc's shared memory, the same for every httpcInit in the app (stats.c, update.c): libctru counts
+   the inits and only the first one sets it, and a POST needs room for its whole body (96 KB) */
+#define NET_HTTPC_SHM (128 * 1024)
 
 /* Starts the thread when enabled (config.ini stats=on). */
 void stats_start(bool enabled);

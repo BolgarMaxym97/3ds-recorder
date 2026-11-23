@@ -15,6 +15,10 @@ web/app.js (TEXT).
                                   "web.<key>"): what a blind back-translation gets
   tools/i18n.py review <code> <back.json>
                                   Markdown: key | English | translation | back-translation, for a reviewer
+  tools/i18n.py notes <dir>       the in-app update's "What's new" (<dir>/<code>.txt, one point a
+                                  line): English there, at most NOTES_MAX lines of at most
+                                  NOTES_LINE characters, every character in that language's built
+                                  font; exit 1 on a problem (stats/scripts/update-manifest.mjs runs it)
   tools/i18n.py context           every key with its English and Ukrainian text and the code that draws
                                   it (function, size, width), as Markdown: for translators
 
@@ -329,6 +333,43 @@ def json_str(s):
     return json.dumps(s, ensure_ascii=False)
 
 
+NOTES_MAX = 6
+NOTES_LINE = 120
+
+
+def notes(folder):
+    """problems of a release's "What's new" texts (see the docstring), printed; the exit code"""
+    problems = []
+    codes = {code: font for _, code, _, _, font in langs()}
+    found = {f[:-4] for f in os.listdir(folder) if f.endswith(".txt")}
+    if "en" not in found:
+        problems.append("en.txt missing: English is what every other language falls back to")
+    for code in sorted(found):
+        if code not in codes:
+            problems.append(f"{code}.txt: no such language (codes: {', '.join(codes)})")
+            continue
+        text = open(os.path.join(folder, code + ".txt"), encoding="utf-8").read()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            problems.append(f"{code}.txt: empty")
+        if len(lines) > NOTES_MAX:
+            problems.append(f"{code}.txt: {len(lines)} lines, at most {NOTES_MAX}")
+        font = codes[code]
+        have = bcfnt_chars(os.path.join(FONTS, ("inter" if font == "base" else font) + "_500.bcfnt"))
+        for n, line in enumerate(lines, 1):
+            if len(line) > NOTES_LINE:
+                problems.append(f"{code}.txt:{n}: {len(line)} characters, at most {NOTES_LINE}")
+            if "|" in line or "=" in line[:1]:
+                problems.append(f"{code}.txt:{n}: '|' separates the lines in the manifest")
+            missing = sorted({c for c in line if ord(c) not in have})
+            if missing:
+                problems.append(f"{code}.txt:{n}: not in the {font} font: {''.join(missing)}")
+    for p in problems:
+        print(p)
+    print(f"notes: {len(problems)} problem(s), {len(found)} language(s)")
+    return 1 if problems else 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
     if cmd == "check":
@@ -342,6 +383,8 @@ def main():
         print(json.dumps(texts(sys.argv[2]), ensure_ascii=False, indent=1))
     elif cmd == "review":
         print(review(sys.argv[2], sys.argv[3]))
+    elif cmd == "notes":
+        sys.exit(notes(sys.argv[2]))
     elif cmd == "context":
         print(context())
     elif cmd == "table":

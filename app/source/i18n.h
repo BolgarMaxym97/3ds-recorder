@@ -183,6 +183,36 @@
     X(S_MP4_INPUTS_NOTE, "Buttons In Video: the MP4s this app makes show the buttons pressed, beside the bottom screen (in a corner with one screen). For recordings made with Record Buttons on; MP4s already made stay as they are.") \
     X(S_SDTEST, "Test SD Card") \
     X(S_SDTEST_NOTE, "Test SD Card: writes 96 MB the way the recorder does, shows how fast the card is and what that is enough for, then deletes them.") \
+    X(S_UPDATES, "Updates") \
+    X(S_UPD_AUTO, "Check Automatically") \
+    X(S_UPD_NOTE, "Check Automatically: when this app opens with Wi-Fi, it asks whether a newer version is out. The question carries nothing about you or the console. Every update is signed by the developer: the app installs nothing else.") \
+    X(S_UPD_CHECK_NOW, "Check Now") \
+    X(S_UPD_CHECKING, "Checking…") \
+    X(S_UPD_LATEST, "You have the latest version") \
+    X(S_UPD_NOT_CHECKED, "Not checked yet") \
+    X(S_UPD_NO_WIFI, "No Wi-Fi: connect and check again") \
+    X(S_UPD_CHECK_FAILED, "The update server did not answer") \
+    X(S_UPD_NEW, "Version %s is out") \
+    X(S_UPD_HAVE, "You have %s · %s to download") \
+    X(S_UPD_WHATS_NEW, "What's New") \
+    X(S_UPD_UPDATE, "Update") \
+    X(S_UPD_TILE, "Update %s") \
+    X(S_UPD_DOWNLOADING, "Downloading… %u%%") \
+    X(S_UPD_INSTALLING, "Installing…") \
+    X(S_UPD_KEEP_ON, "Keep the console on until it is done.") \
+    X(S_UPD_DONE, "Updated to %s") \
+    X(S_UPD_DONE_CIA, "Restart the app to use the new version. The recorder restarts with it.") \
+    X(S_UPD_DONE_3DSX, "Close the app and open it again from the Homebrew Launcher.") \
+    X(S_UPD_RESTART, "Restart") \
+    X(S_UPD_CLOSE, "Close") \
+    X(S_UPD_ERR_NET, "The connection was lost. Check Wi-Fi and try again.") \
+    X(S_UPD_ERR_SERVER, "The update server did not give the file. Try again later.") \
+    X(S_UPD_ERR_SPACE, "Not enough free space on the SD card: %s needed.") \
+    X(S_UPD_ERR_CHECK, "The downloaded file is damaged. Nothing was installed: try again.") \
+    X(S_UPD_ERR_INSTALL, "The system did not install the update (%08lX). Nothing was changed.") \
+    X(S_UPD_MANUAL, "Or install it by hand: scan the code for the page with every version.") \
+    X(S_UPD_BLOCK_REC, "Stop the recording first.") \
+    X(S_UPD_BLOCK_BATTERY, "Charge the console first: the battery is nearly empty.") \
     X(S_SDT_INTRO, "The test writes 96 MB to the SD card the way the recorder does (20–40 s) and deletes them afterwards. Recordings are not touched.") \
     X(S_SDT_RUNNING, "Writing… %d%%") \
     X(S_SDT_SPEED, "%s MB/s") \

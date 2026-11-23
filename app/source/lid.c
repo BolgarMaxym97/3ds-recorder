@@ -8,6 +8,7 @@
 
 #include "prepare.h"
 #include "recorder.h"
+#include "update.h"
 
 #define POLL_MS        100u
 #define IDLE_GRACE_MS  6000u    /* prepare.c looks for clips and joins every 5 s: no gap is "done" */
@@ -39,10 +40,20 @@ static u8 battery(bool *charging)
     return level;
 }
 
-/* Sleep is refused while there is work, unless the battery is nearly empty. */
+bool lid_battery_low(void)
+{
+    bool charging = false;
+    const u8 level = battery(&charging);
+    return level <= BATTERY_LOW && !charging;
+}
+
+/* Sleep is refused while there is work, unless the battery is nearly empty; always while an
+   update downloads and installs (a few minutes at most). */
 static bool want_refuse(bool enabled, bool *lowBattery)
 {
     *lowBattery = false;
+    if (update_busy())
+        return true;
     if (!enabled || prepare_idle_ms() >= IDLE_GRACE_MS)
         return false;
     bool charging = false;

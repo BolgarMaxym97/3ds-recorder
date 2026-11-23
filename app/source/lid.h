@@ -14,5 +14,7 @@ void lid_exit(void);
 /* Each main-loop pass; enabled: the setting (config.ini lid_work). True while the lid is closed:
    nothing is drawn then (the GPU waits for the lid otherwise and the loop would stop). */
 bool lid_step(bool enabled);
+/* The battery is nearly empty (the red LED) and not charging. */
+bool lid_battery_low(void);
 
 #endif

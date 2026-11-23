@@ -1,14 +1,29 @@
+import manifest from "../update/latest.txt";
+import manifestSig from "../update/latest.sig.txt";
 import { DUMP_NAME, extract, INSTALL_ID, isDump, MAX_DUMP, MAX_REPORT, parseReport } from "./report";
+import { type Fetcher, fileResponse, manifestResponse } from "./update";
 
 // POST /v1/report - new log lines from one app launch (JSON); 204
 // POST /v1/dump   - one Luma crash dump (raw bytes, X-Id and X-Name headers); 204
 // GET  /v1/health - "ok", for checking a console can reach the Worker at all
+// GET  /v1/update, /v1/update/<version>/<cia|3dsx> - in-app update (src/update.ts)
 // The app only looks at the status: 2xx means "sent, do not send it again".
 export default {
   async fetch(request, env): Promise<Response> {
     const { pathname } = new URL(request.url);
 
     if (pathname === "/v1/health" && request.method === "GET") return new Response("ok");
+    if (pathname === "/v1/update" || pathname.startsWith("/v1/update/")) {
+      if (request.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      if (pathname === "/v1/update") return manifestResponse(manifest, manifestSig);
+      // a download is a few requests (a resume after a lost connection); the same limit as the POSTs
+      const { success } = await env.LIMITER.limit({ key: request.headers.get("cf-connecting-ip") ?? "none" });
+      if (!success) return new Response(null, { status: 429 });
+      // RELEASES_URL: a local test only (`wrangler dev --var RELEASES_URL:http://...`, README)
+      const releases = (env as { RELEASES_URL?: string }).RELEASES_URL;
+      const fetcher: Fetcher = (url, init) => fetch(url, init);
+      return (await fileResponse(pathname, request, manifest, fetcher, releases || undefined)) ?? new Response(null, { status: 404 });
+    }
     if (pathname !== "/v1/report" && pathname !== "/v1/dump") return new Response(null, { status: 404 });
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
 

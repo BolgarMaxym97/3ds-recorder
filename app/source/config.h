@@ -35,6 +35,7 @@ typedef struct {
     bool autostart;   /* autostart=on: the recorder starts with the console (the module sets it up: sysmod AutoApply) */
     bool convertAuto; /* convert=auto (the default): every recording becomes an MP4 in the background; manual: only the one opened in Download (prepare.c) */
     bool lidWork;     /* lid_work=on (the default): this app's background work goes on with the lid closed (lid.h) */
+    bool updates;     /* updates=on (the default): the app asks for a newer version when it starts (update.h) */
     bool stats;       /* stats=on (the default): new log lines go to the developer when the app starts (stats.h) */
     bool mp4Slices;   /* mp4_threads=1 (not in the app) turns it off: a New 3DS encodes MP4s on two cores (prepare.c) */
 } Config;

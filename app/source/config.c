@@ -52,6 +52,7 @@ void config_load(Config *c)
     c->lidWork = true;
     c->mp4Slices = true;
     c->stats = true;
+    c->updates = true;
     c->replaySec = 30;
     c->mainBottom = false;
     c->inputs = true;
@@ -104,6 +105,8 @@ void config_load(Config *c)
             c->lidWork = strcasecmp(v, "off") != 0;
         else if (strcasecmp(line, "stats") == 0)
             c->stats = strcasecmp(v, "off") != 0;
+        else if (strcasecmp(line, "updates") == 0)
+            c->updates = strcasecmp(v, "off") != 0;
         else if (strcasecmp(line, "mp4_threads") == 0)
             c->mp4Slices = strcmp(v, "1") != 0;
         else if (strcasecmp(line, "replay_hotkey") == 0 && *v)

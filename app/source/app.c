@@ -8,6 +8,7 @@
 #include "../../sysmod/source/shared.h"
 #include "gallery.h"
 #include "i18n.h"
+#include "lid.h"
 #include "player.h"
 #include "sdtest.h"
 #include "prepare.h"
@@ -15,6 +16,7 @@
 #include "server.h"
 #include "stats.h"
 #include "ui.h"
+#include "update.h"
 
 /* ------------------------------------------------------------------ layout helpers */
 
@@ -53,17 +55,19 @@ static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: the groups (SCR_SETTINGS), each one's rows (SCR_SETGROUP), the language list (SCR_LANG) */
 enum { ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND, ROW_HOTKEY, ROW_LED, ROW_AUTOSTART, ROW_CONVERT,
-       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_MAIN_SCREEN, ROW_REPLAY_LEN, ROW_INPUTS, ROW_MP4_INPUTS, ROW_SDTEST, ROW_COUNT };
+       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_MAIN_SCREEN, ROW_REPLAY_LEN, ROW_INPUTS, ROW_MP4_INPUTS, ROW_SDTEST, ROW_UPDATES, ROW_COUNT };
 enum { GRP_RECORDING, GRP_RECORDER, GRP_APP, GRP_LANG, GRP_COUNT };
-#define GROUP_MAX 6
+#define GROUP_MAX 7
 static const int GROUP_ROWS[GRP_LANG][GROUP_MAX] = {
     [GRP_RECORDING] = {ROW_FPS, ROW_SCREENS, ROW_MAIN_SCREEN, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND},
     [GRP_RECORDER] = {ROW_HOTKEY, ROW_REPLAY_LEN, ROW_INPUTS, ROW_LED, ROW_AUTOSTART},
-    [GRP_APP] = {ROW_CONVERT, ROW_MP4_INPUTS, ROW_LID, ROW_STATS, ROW_SDTEST, ROW_UNINSTALL},
+    [GRP_APP] = {ROW_UPDATES, ROW_CONVERT, ROW_MP4_INPUTS, ROW_LID, ROW_STATS, ROW_SDTEST, ROW_UNINSTALL},
 };
-static const int GROUP_N[GRP_LANG] = {6, 5, 6};
+static const int GROUP_N[GRP_LANG] = {6, 5, 7};
 static Rect grp_card(int i) { return (Rect){10, 34 + i * 50.0f, 300, 44}; }   /* down to y 228 */
-static Rect set_row(int i) { return (Rect){10, 34 + i * 30.0f, 300, 26}; }      /* 6 rows: down to y 210 */
+/* 6 rows: down to y 210; 7 a little closer: down to y 227 */
+static Rect set_row_n(int i, int n) { return n > 6 ? (Rect){10, 34 + i * 28.0f, 300, 25} : (Rect){10, 34 + i * 30.0f, 300, 26}; }
+static Rect set_row(int i) { return set_row_n(i, 6); }
 static const Rect SET_BACK = {10, 6, 21, 21};
 /* the language list: first run (a Continue button under it) or from Settings. Two columns, so
    every language is on screen at once (10 today); more rows than fit scroll, with a bar. */
@@ -315,7 +319,7 @@ static void toast_tick(App *a)
 static void go(App *a, Screen s, int focus)
 {
     static const char *const names[] = {"panel", "firstrun", "help", "settings", "hotkey", "gallery", "player",
-                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group", "sd test"};
+                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group", "sd test", "update"};
     if (s != a->screen || !a->frame)
         app_log("screen: %s", (unsigned)s < sizeof(names) / sizeof(names[0]) ? names[s] : "?");
     a->screen = s;
@@ -367,6 +371,7 @@ void app_init(App *a, const char *selfPath)
     prepare_start(n3ds, n3ds && a->cfg.mp4Slices, a->cfg.convertAuto); /* recordings become MP4s for the phone in the background */
 #ifndef UI_TOUR /* the screen tour runs in Azahar: its logs are no console's */
     stats_start(a->cfg.stats); /* new log lines to the developer, quietly (stats.h) */
+    update_start(a->cfg.updates, a->selfPath); /* a newer version? (update.h) */
 #endif
     /* The recorder starts with the app. Only when Luma cannot load it does the first-run
        screen come up, to say what to change. */
@@ -430,6 +435,7 @@ void app_exit(App *a)
         g_info = NULL;
     }
     stats_stop();
+    update_stop();
     prepare_stop(); /* the job keeps its resume point */
 }
 
@@ -909,6 +915,8 @@ static void settings_activate(App *a, int row)
         set_mp4_inputs(a, !a->cfg.mp4Inputs);
     else if (row == ROW_SDTEST)
         open_sdtest(a);
+    else if (row == ROW_UPDATES)
+        go(a, SCR_UPDATE, 2);
     else if (row == ROW_SOUND)
         apply_setting(a, "audio", a->cfg.audio ? "off" : "on");
     else if (row == ROW_AUTOSTART)
@@ -1236,7 +1244,7 @@ static void update_setgroup(App *a, const Input *in)
         settings_activate(a, row);
     for (int i = 0; i < n && in->tapped; i++) {
         const int r = GROUP_ROWS[a->setGroup][i];
-        const Rect rr = set_row(i);
+        const Rect rr = set_row_n(i, n);
         if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
             seg_layout(rr, g.labels, g.n, opt);
@@ -1404,6 +1412,112 @@ static void update_sdtest(App *a, const Input *in)
         else
             sdtest_hold(false);
     }
+}
+
+/* ------------------------------------------------------------------ updates (update.h) */
+
+#define UPD_RELEASES_URL "https://github.com/BolgarMaxym97/3ds-recorder/releases"
+static const Rect UPD_BTN[2] = {{12, 200, 144, 28}, {164, 200, 144, 28}};   /* Later, the main action */
+enum { UF_AUTO, UF_LATER, UF_MAIN };   /* the focus on the update screen */
+typedef enum { UB_NONE, UB_UPDATE, UB_CHECK, UB_CANCEL, UB_RESTART, UB_CLOSE } UpdButton;
+
+/* a newer version to offer: the dot on the panel's Settings, the App group and its row */
+static bool update_shown(void)
+{
+    const UpdPhase p = update_phase();
+    return p == UPD_AVAILABLE || p == UPD_FAILED || p == UPD_DOWNLOADING || p == UPD_INSTALLING;
+}
+
+/* why the update cannot start now; S_COUNT when it can */
+static Str update_block(const App *a)
+{
+    if (a->st.running && a->st.state == REC_STATE_RECORDING)
+        return S_UPD_BLOCK_REC;   /* the new app restarts the recorder */
+    if (lid_battery_low())
+        return S_UPD_BLOCK_BATTERY;
+    return S_COUNT;
+}
+
+static UpdButton update_main_button(void)
+{
+    switch (update_phase()) {
+    case UPD_AVAILABLE:
+    case UPD_FAILED: return UB_UPDATE;
+    case UPD_DOWNLOADING: return UB_CANCEL;
+    case UPD_INSTALLING: return UB_NONE;
+    case UPD_DONE: return envIsHomebrew() ? UB_CLOSE : UB_RESTART;
+    default: return update_check() == UPD_CHK_RUNNING ? UB_NONE : UB_CHECK;
+    }
+}
+
+static bool update_later_shown(void) { return update_phase() == UPD_AVAILABLE || update_phase() == UPD_FAILED; }
+
+static void update_auto(App *a, bool on)
+{
+    if (on == a->cfg.updates)
+        return;
+    apply_setting(a, "updates", on ? "on" : "off");
+    update_set_enabled(on);
+}
+
+static void update_press(App *a, UpdButton b)
+{
+    switch (b) {
+    case UB_UPDATE: {
+        const Str why = update_block(a);
+        if (why != S_COUNT) {
+            say(a, T(why));
+            return;
+        }
+        update_begin();
+        break;
+    }
+    case UB_CHECK: update_check_now(); break;
+    case UB_CANCEL: update_cancel(); break;
+    case UB_RESTART:   /* into the new version: libctru starts this title again when the app ends */
+        app_log("update: restart into %s", update_info()->version);
+        aptSetChainloaderToSelf();
+        a->quit = true;
+        break;
+    case UB_CLOSE: a->quit = true; break;
+    default: break;
+    }
+}
+
+static void update_update(App *a, const Input *in)
+{
+    const u32 d = in->down;
+    const UpdButton main = update_main_button();
+    const bool later = update_later_shown();
+    if (d & KEY_DUP)
+        a->focus = UF_AUTO;
+    if (d & KEY_DDOWN && a->focus == UF_AUTO)
+        a->focus = UF_MAIN;
+    if (d & KEY_DLEFT && a->focus == UF_MAIN && later)
+        a->focus = UF_LATER;
+    if (d & KEY_DRIGHT && a->focus == UF_LATER)
+        a->focus = UF_MAIN;
+    if (a->focus == UF_LATER && !later)
+        a->focus = UF_MAIN;
+    bool back = (d & KEY_B) || hit(SET_BACK, in);
+    if ((d & KEY_A) && a->focus == UF_AUTO)
+        update_auto(a, !a->cfg.updates);
+    else if ((d & KEY_A) && a->focus == UF_LATER)
+        back = true;
+    else if ((d & KEY_A) && a->focus == UF_MAIN)
+        update_press(a, main);
+    if (hit(set_row(0), in)) {
+        a->focus = UF_AUTO;
+        update_auto(a, !a->cfg.updates);
+    }
+    if (later && hit(UPD_BTN[0], in))
+        back = true;
+    if (main != UB_NONE && hit(UPD_BTN[1], in)) {
+        a->focus = UF_MAIN;
+        update_press(a, main);
+    }
+    if (back && !update_busy())   /* the download is shown to its end (Cancel stops it) */
+        open_group_at(a, GRP_APP, ROW_UPDATES);
 }
 
 static void update_uninstall(App *a, const Input *in)
@@ -1818,6 +1932,7 @@ void app_update(App *a, const Input *in)
     case SCR_PHONE: update_phone(a, in); break;
     case SCR_UNINSTALL: update_uninstall(a, in); break;
     case SCR_SDTEST: update_sdtest(a, in); break;
+    case SCR_UPDATE: update_update(a, in); break;
     case SCR_UNINSTALLED:
         if ((in->down & (KEY_A | KEY_B | KEY_START)) || in->tapped)
             a->quit = true;
@@ -2238,6 +2353,8 @@ static void draw_settings_top(App *a)
         snprintf(note, sizeof(note), "%s", T(S_MP4_INPUTS_NOTE));
     else if (row == ROW_SDTEST)
         snprintf(note, sizeof(note), "%s", T(S_SDTEST_NOTE));
+    else if (row == ROW_UPDATES)
+        snprintf(note, sizeof(note), "%s", T(S_UPD_NOTE));
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     /* right under the stat cards (the toast takes the bottom of the screen); a note too long for that
@@ -2353,6 +2470,107 @@ static void draw_sdtest_top(App *a)
     ui_text_wrap(46, 114, 330, 10, FONT_REG, col, verdict);
     snprintf(buf, sizeof(buf), T(S_SDT_SLOWEST), (unsigned)r->slowestMs);
     ui_text(14, 104 + ch + 12, 9, FONT_REG, COL_MUTED, buf);
+}
+
+/* "8.4 MB" */
+static void format_mb1(char *buf, size_t cap, u32 bytes)
+{
+    const u32 tenths = (u32)(((u64)bytes * 10 + 512 * 1024) / (1024 * 1024));
+    snprintf(buf, cap, "%lu%c%lu %s", (unsigned long)(tenths / 10), i18n_decimal(), (unsigned long)(tenths % 10), T(S_MB));
+}
+
+/* "What's new" in the language on, in English when its font lacks a character of it (notes are
+   written after this app's fonts were made) */
+static int update_lines(const App *a, char lines[][UPD_NOTE_LEN])
+{
+    int n = update_notes(LANGS[a->cfg.lang].code, lines, UPD_NOTES_MAX);
+    for (int i = 0; i < n; i++)
+        if (!ui_has_glyphs(lines[i]))
+            return update_notes("en", lines, UPD_NOTES_MAX);
+    return n;
+}
+
+static u8 g_updQr[qrcodegen_BUFFER_LEN_FOR_VERSION(4)];
+static int g_updQrOk;   /* 0 not made yet, 1 made, -1 failed */
+
+static void draw_update_top(App *a)
+{
+    static char lines[UPD_NOTES_MAX][UPD_NOTE_LEN];
+    char buf[160], size[24];
+    ui_text(14, 13, 9, FONT_REG, COL_MUTED, "3DS Recorder " APP_VERSION);
+    const UpdPhase p = update_phase();
+    const UpdManifest *m = update_info();
+    if (p == UPD_NONE) {
+        const UpdCheck c = update_check();
+        const Str title = c == UPD_CHK_RUNNING ? S_UPD_CHECKING : c == UPD_CHK_LATEST ? S_UPD_LATEST
+                          : c == UPD_CHK_NO_WIFI ? S_UPD_NO_WIFI : c == UPD_CHK_FAILED ? S_UPD_CHECK_FAILED
+                                                                                        : S_UPD_NOT_CHECKED;
+        float x = 14;
+        if (c == UPD_CHK_LATEST) {
+            ui_icon(ICON_CHECK, 24, 35, 18, COL_OK);
+            x = 40;
+        } else if (c == UPD_CHK_NO_WIFI || c == UPD_CHK_FAILED) {
+            ui_icon(ICON_WARN, 24, 35, 18, COL_WARN);
+            x = 40;
+        }
+        const float h = ui_text_wrap(x, 25, 386 - x, 17, FONT_BOLD, COL_TEXT, T(title));
+        ui_text_wrap(14, 25 + h + 12, 372, 10, FONT_REG, COL_SOFT, T(S_UPD_NOTE));
+        return;
+    }
+    if (p == UPD_DONE) {
+        snprintf(buf, sizeof(buf), T(S_UPD_DONE), m->version);
+        ui_icon(ICON_CHECK, 24, 35, 18, COL_OK);
+        ui_text(40, 25, 17, FONT_BOLD, COL_TEXT, buf);
+        ui_text_wrap(14, 58, 372, 10, FONT_REG, COL_SOFT, T(envIsHomebrew() ? S_UPD_DONE_3DSX : S_UPD_DONE_CIA));
+        return;
+    }
+    snprintf(buf, sizeof(buf), T(S_UPD_NEW), m->version);
+    ui_text(14, 25, 17, FONT_BOLD, COL_TEXT, buf);
+    format_mb1(size, sizeof(size), update_size());
+    snprintf(buf, sizeof(buf), T(S_UPD_HAVE), APP_VERSION, size);
+    ui_text(14, 50, 9.5f, FONT_REG, COL_MUTED, buf);
+    if (p == UPD_FAILED) {   /* what went wrong, and the way by hand: the releases page */
+        const UpdError e = update_error();
+        if (e == UPD_ERR_SPACE) {
+            char need[24];
+            format_mb1(need, sizeof(need), update_size() + 8u * 1024 * 1024);
+            snprintf(buf, sizeof(buf), T(S_UPD_ERR_SPACE), need);
+        } else if (e == UPD_ERR_INSTALL)
+            snprintf(buf, sizeof(buf), T(S_UPD_ERR_INSTALL), (unsigned long)update_result());
+        else
+            snprintf(buf, sizeof(buf), "%s", T(e == UPD_ERR_CHECK ? S_UPD_ERR_CHECK : e == UPD_ERR_SERVER ? S_UPD_ERR_SERVER : S_UPD_ERR_NET));
+        const float th = ui_text_wrap_height(334, 10, FONT_REG, buf), ch = th + 18;
+        ui_card(14, 72, 372, ch, 8, COL_ERR_BG);
+        ui_icon(ICON_WARN, 30, 72 + ch / 2, 14, COL_ERR);
+        ui_text_wrap(46, 81, 334, 10, FONT_REG, COL_ERR, buf);
+        if (!g_updQrOk) {
+            u8 tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(4)];
+            g_updQrOk = qrcodegen_encodeText(UPD_RELEASES_URL, tmp, g_updQr, qrcodegen_Ecc_MEDIUM, 1, 4, qrcodegen_Mask_AUTO, true) ? 1 : -1;
+        }
+        const float box = 96, by = 72 + ch + 10;
+        if (g_updQrOk > 0 && by + box <= SCREEN_H - 6) {
+            ui_rrect(14, by, box, box, 8, COL_WHITE);
+            const int n = qrcodegen_getSize(g_updQr);
+            const float mod = (float)(int)((box - 10) / n), q = 14 + (box - mod * n) / 2, qy = by + (box - mod * n) / 2;
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                    if (qrcodegen_getModule(g_updQr, x, y))
+                        ui_rect(q + x * mod, qy + y * mod, mod, mod, COL_BG);
+            ui_text_wrap(122, by + 4, 264, 9.5f, FONT_REG, COL_SOFT, T(S_UPD_MANUAL));
+            ui_text_wrap(122, by + box - 22, 264, 9, FONT_REG, COL_MUTED, "github.com/BolgarMaxym97/3ds-recorder/releases");
+        }
+        return;
+    }
+    const int n = update_lines(a, lines);
+    if (!n)
+        return;
+    ui_text(14, 74, 10, FONT_BOLD, COL_TEXT, T(S_UPD_WHATS_NEW));
+    float y = 94;
+    for (int i = 0; i < n && y < SCREEN_H - 20; i++) {
+        ui_circle(19, y + 7, 2, COL_ACCENT);
+        const int left = (int)((SCREEN_H - 8 - y) / (9.5f * 1.3f));
+        y += ui_text_wrap_lines(28, y, 358, 9.5f, FONT_REG, COL_SOFT, lines[i], left < 1 ? 1 : left) + 5;
+    }
 }
 
 static void draw_uninstalled_top(App *a)
@@ -2584,6 +2802,7 @@ void app_draw_top(App *a)
     case SCR_PHONE: draw_phone_top(a); break;
     case SCR_UNINSTALL: draw_uninstall_top(a); break;
     case SCR_SDTEST: draw_sdtest_top(a); break;
+    case SCR_UPDATE: draw_update_top(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_top(a); break;
     }
     draw_toast(a);
@@ -2633,6 +2852,12 @@ static void draw_panel_bottom(App *a)
         } else
             ui_icon(icon[i], t.x + 20, t.y + 21, 20, COL_TEXT);
         ui_text(t.x + 10, t.y + t.h - 34, 11, FONT_BOLD, COL_TEXT, T(title[i]));
+        if (i == 3 && update_shown()) {   /* a newer version: a dot, and it in place of the subtitle */
+            ui_circle(t.x + t.w - 16, t.y + 16, 4, COL_ACCENT);
+            snprintf(buf, sizeof(buf), T(S_UPD_TILE), update_info()->version);
+            ui_text_fit(t.x + 10, t.y + t.h - 18, t.w - 20, 9, FONT_BOLD, COL_ACCENT, buf);
+            continue;
+        }
         const char *sub = i == 1   ? (a->files.count ? i18n_recordings(a->files.count, buf, sizeof(buf)) : T(S_NO_RECORDINGS))
                           : i == 2 ? T(S_TILE_HELP_SUB)
                                    : T(S_TILE_SETTINGS_SUB);
@@ -2736,7 +2961,12 @@ static void draw_settings_bottom(App *a)
         }
         ui_text(x, c.y + 7, 10.5f, FONT_BOLD, COL_TEXT, group_name(i));
         group_summary(a, i, sum, sizeof(sum));
-        ui_text(x, c.y + 25, 9, FONT_REG, COL_MUTED, sum);
+        if (i == GRP_APP && update_shown()) {   /* an update waits in here */
+            snprintf(sum, sizeof(sum), T(S_UPD_TILE), update_info()->version);
+            ui_circle(x + 3, c.y + 30, 3, COL_ACCENT);
+            ui_text(x + 10, c.y + 25, 9, FONT_BOLD, COL_ACCENT, sum);
+        } else
+            ui_text(x, c.y + 25, 9, FONT_REG, COL_MUTED, sum);
         ui_icon(ICON_NEXT, c.x + c.w - 12, c.y + c.h / 2, 11, COL_MUTED);
         if (a->focus == i)
             focus_ring(c, 8);
@@ -2750,12 +2980,12 @@ static void draw_setgroup_bottom(App *a)
         [ROW_SOUND] = S_SOUND,       [ROW_HOTKEY] = S_HOTKEY,   [ROW_LED] = S_LED,               [ROW_AUTOSTART] = S_AUTOSTART,
         [ROW_CONVERT] = S_CONVERT,   [ROW_LID] = S_LID_WORK,    [ROW_STATS] = S_STATS,           [ROW_UNINSTALL] = S_UNINSTALL_ROW,
         [ROW_MAIN_SCREEN] = S_MAIN_SCREEN, [ROW_REPLAY_LEN] = S_REPLAY_LEN, [ROW_INPUTS] = S_INPUTS,
-        [ROW_MP4_INPUTS] = S_MP4_INPUTS,   [ROW_SDTEST] = S_SDTEST,
+        [ROW_MP4_INPUTS] = S_MP4_INPUTS,   [ROW_SDTEST] = S_SDTEST, [ROW_UPDATES] = S_UPDATES,
     };
     settings_header(group_name(a->setGroup));
     for (int i = 0; i < GROUP_N[a->setGroup]; i++) {
         const int r = GROUP_ROWS[a->setGroup][i];
-        const Rect row = set_row(i);
+        const Rect row = set_row_n(i, GROUP_N[a->setGroup]);
         const bool off = (r == ROW_BOTTOM_FPS || r == ROW_MAIN_SCREEN) && !bottom_fps_on(a);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
@@ -2797,6 +3027,14 @@ static void draw_setgroup_bottom(App *a)
             x += hk_chips(x, row.y + 6, m, COL_MUTED) + 1;
             x += ui_text(x, row.y + 7, 9, FONT_REG, COL_FAINT, "·") + 4;
             hk_chips(x, row.y + 6, m2, COL_MUTED);
+            ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
+        } else if (r == ROW_UPDATES) {
+            /* the version there is: the new one in red with a dot, else this one */
+            const bool fresh = update_shown();
+            const char *v = fresh ? update_info()->version : APP_VERSION;
+            const float vw = ui_text_right(row.x + row.w - 20, row.y + 7, 9.5f, FONT_BOLD, fresh ? COL_ACCENT : COL_MUTED, v);
+            if (fresh)
+                ui_circle(row.x + row.w - 28 - vw, row.y + row.h / 2, 3, COL_ACCENT);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
@@ -2872,6 +3110,55 @@ static void draw_sdtest_bottom(App *a)
     }
     button(SDT_BTN[0], T(g_sdt.state == SDT_IDLE ? S_CANCEL : S_BACK), 0, a->focus == 0);
     button(SDT_BTN[1], T(g_sdt.state == SDT_IDLE ? S_START : S_SDT_AGAIN), 1, a->focus == 1);
+}
+
+static void draw_update_bottom(App *a)
+{
+    char buf[96];
+    settings_header(T(S_UPDATES));
+    const Rect row = set_row(0);
+    ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
+    ui_text(row.x + 9, row.y + 7, 9.5f, FONT_BOLD, COL_TEXT, T(S_UPD_AUTO));
+    ui_toggle(row.x + row.w - 38, row.y + 4, a->cfg.updates);
+    if (a->focus == UF_AUTO)
+        focus_ring(row, 6);
+
+    const UpdPhase p = update_phase();
+    if (p == UPD_DOWNLOADING || p == UPD_INSTALLING) {
+        const float f = update_progress();
+        if (p == UPD_DOWNLOADING)
+            snprintf(buf, sizeof(buf), T(S_UPD_DOWNLOADING), (unsigned)(f * 100));
+        else
+            snprintf(buf, sizeof(buf), "%s", T(S_UPD_INSTALLING));
+        ui_text(12, 82, 11, FONT_BOLD, COL_TEXT, buf);
+        ui_rrect(12, 104, 296, 8, 4, COL_SURFACE2);
+        ui_rrect(12, 104, p == UPD_INSTALLING ? 296 : 296 * f, 8, 4, COL_ACCENT);
+        ui_text_wrap(12, 124, 296, 9, FONT_REG, COL_MUTED, T(S_UPD_KEEP_ON));
+        if (p == UPD_INSTALLING)
+            ui_spinner(160, 172, 9, COL_FAINT);
+    } else if (p == UPD_AVAILABLE || p == UPD_FAILED) {
+        const Str why = update_block(a);
+        if (why != S_COUNT) {
+            const float h = ui_text_wrap_height(262, 9.5f, FONT_REG, T(why)) + 14;
+            ui_rrect(12, 76, 296, h, 7, COL_WARN_BG);
+            ui_icon(ICON_WARN, 27, 76 + h / 2, 13, COL_WARN);
+            ui_text_wrap(42, 83, 262, 9.5f, FONT_REG, COL_WARN, T(why));
+        }
+    } else if (p == UPD_NONE && update_check() == UPD_CHK_RUNNING) {
+        ui_spinner(160, 120, 10, COL_FAINT);
+    }
+
+    const UpdButton main = update_main_button();
+    if (update_later_shown())
+        button(UPD_BTN[0], T(S_LATER), 0, a->focus == UF_LATER);
+    if (main != UB_NONE) {
+        static const Str LABEL[] = {[UB_UPDATE] = S_UPD_UPDATE, [UB_CHECK] = S_UPD_CHECK_NOW, [UB_CANCEL] = S_CANCEL,
+                                    [UB_RESTART] = S_UPD_RESTART, [UB_CLOSE] = S_UPD_CLOSE};
+        const Str label = main == UB_UPDATE && p == UPD_FAILED ? S_PH_RETRY : LABEL[main];
+        const bool blocked = main == UB_UPDATE && update_block(a) != S_COUNT;
+        const int style = blocked ? 3 : main == UB_CANCEL || main == UB_CHECK ? 0 : 1;
+        button(UPD_BTN[1], T(label), style, a->focus == UF_MAIN);
+    }
 }
 
 static void draw_uninstalled_bottom(App *a)
@@ -3099,6 +3386,7 @@ void app_draw_bottom(App *a)
     case SCR_PHONE: draw_phone_bottom(a); break;
     case SCR_UNINSTALL: draw_uninstall_bottom(a); break;
     case SCR_SDTEST: draw_sdtest_bottom(a); break;
+    case SCR_UPDATE: draw_update_bottom(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_bottom(a); break;
     }
     if (a->busy) {
@@ -3121,10 +3409,28 @@ static const Str TOUR_MSG[] = {
 #define TOUR_N_MSG ((int)(sizeof(TOUR_MSG) / sizeof(*TOUR_MSG)))
 #define TOUR_ROWS (GROUP_MAX * GRP_LANG)   /* every row of every group in focus (its note on the top screen) */
 enum { TS_SDT_IDLE, TS_SDT_RUN, TS_SDT_GOOD, TS_SDT_OK, TS_SDT_SLOW, TS_SDT_FAILED, TS_SDT_N };
+/* the update screen in each state, then the panel and Settings with an update waiting */
+static const struct { const char *name; UpdPhase phase; UpdCheck check; UpdError error; Screen screen; } TOUR_UPD[] = {
+    {"update-not-checked", UPD_NONE, UPD_CHK_NOT, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-checking", UPD_NONE, UPD_CHK_RUNNING, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-latest", UPD_NONE, UPD_CHK_LATEST, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-no-wifi", UPD_NONE, UPD_CHK_NO_WIFI, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-available", UPD_AVAILABLE, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-downloading", UPD_DOWNLOADING, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-installing", UPD_INSTALLING, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-failed-net", UPD_FAILED, UPD_CHK_NEWER, UPD_ERR_NET, SCR_UPDATE},
+    {"update-failed-space", UPD_FAILED, UPD_CHK_NEWER, UPD_ERR_SPACE, SCR_UPDATE},
+    {"update-failed-install", UPD_FAILED, UPD_CHK_NEWER, UPD_ERR_INSTALL, SCR_UPDATE},
+    {"update-done", UPD_DONE, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_UPDATE},
+    {"update-panel", UPD_AVAILABLE, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_PANEL},
+    {"update-settings", UPD_AVAILABLE, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_SETTINGS},
+    {"update-group", UPD_AVAILABLE, UPD_CHK_NEWER, UPD_ERR_NONE, SCR_SETGROUP},
+};
+#define TS_UPD_N ((int)(sizeof(TOUR_UPD) / sizeof(*TOUR_UPD)))
 enum {
     TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_PANEL_REPLAY, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
     TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS, TS_HOTKEY2, TS_GALLERY, TS_GAL_DELETE,
-    TS_PLAYER, TS_SDTEST, TS_UNINSTALL = TS_SDTEST + TS_SDT_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
+    TS_PLAYER, TS_SDTEST, TS_UPDATE = TS_SDTEST + TS_SDT_N, TS_UNINSTALL = TS_UPDATE + TS_UPD_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
     TS_PER_LANG = TS_MSG + TOUR_N_MSG
 };
 
@@ -3141,6 +3447,7 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
     a->msg[0] = 0;
     a->msgNext[0] = 0;
     a->galConfirm = false;
+    update_tour(UPD_NONE, UPD_CHK_NOT, UPD_ERR_NONE);
     int wait = 3;
     if (step == TS_LANG_FIRST) {
         a->langFirst = true;
@@ -3212,6 +3519,15 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         }
         wait = 150;
         snprintf(name, cap, "player-buttons");
+    } else if (step >= TS_UPDATE && step < TS_UNINSTALL) {
+        const int k = step - TS_UPDATE;
+        update_tour(TOUR_UPD[k].phase, TOUR_UPD[k].check, TOUR_UPD[k].error);
+        if (TOUR_UPD[k].screen == SCR_SETGROUP) {
+            a->setGroup = GRP_APP;
+            go(a, SCR_SETGROUP, 0);
+        } else
+            go(a, TOUR_UPD[k].screen, TOUR_UPD[k].screen == SCR_SETTINGS ? GRP_APP : TOUR_UPD[k].screen == SCR_UPDATE ? 2 : 3);
+        snprintf(name, cap, "%s", TOUR_UPD[k].name);
     } else if (step < TS_UNINSTALL) {
         if (a->screen == SCR_PLAYER)
             close_player(a);

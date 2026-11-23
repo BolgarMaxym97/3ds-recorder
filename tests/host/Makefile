@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs test_srvtoken
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs test_srvtoken test_update
 
 .PHONY: test clean
 
@@ -61,3 +61,8 @@ test_inputs: test_inputs.c ../../codec/source/inputs.c ../../codec/include/input
 
 test_srvtoken: test_srvtoken.c ../../app/source/srvtoken.h
 	$(CC) $(CFLAGS) -I../../app/source -o $@ test_srvtoken.c
+
+MONO := ../../third_party/monocypher
+test_update: test_update.c ../../app/source/update_core.c ../../app/source/update_core.h ../../app/source/sha256.c
+	$(CC) $(CFLAGS) -I../../app/source -I$(MONO) -o $@ test_update.c ../../app/source/update_core.c \
+		../../app/source/sha256.c $(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c

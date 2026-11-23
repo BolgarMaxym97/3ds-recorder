@@ -30,6 +30,48 @@ and shown in Settings next to the switch (`XXXX-XXXX`; look it up without the da
 The app talks plain HTTP: the console's TLS does not get through to workers.dev (3ds-ua, 2026-10-23;
 again 2026-11-19: workers.dev has an ECDSA certificate and refuses the RSA / CBC suites the 3DS offers).
 
+## In-app update
+
+- `GET /v1/update` — the signed manifest of the newest release (`update/latest.txt`, the signature
+  in `X-Sig`), `404` until one is signed. Nothing about the console is sent with it.
+- `GET /v1/update/<version>/<cia|3dsx>` — that release's file from GitHub, passed through
+  (`Range` too); only the manifest's version (no open proxy), `502` when GitHub fails. Same
+  `LIMITER` as the POSTs.
+
+The Worker holds no key: the manifest is signed on the maintainer's Mac and the app
+(`app/source/update.c`) checks the signature (Ed25519, public key in `app/source/update_key.h`)
+and each file's sha256 before it installs anything.
+
+At a release, after the GitHub release has its `3ds-recorder.cia` / `.3dsx`:
+
+```bash
+# once: the key pair (private: ~/.config/3ds-recorder/update-key.json, keep a copy in a password manager)
+node scripts/update-manifest.mjs keygen
+# "What's new": tools/i18n/notes/<version>/<lang>.txt, one point a line (en needed, others fall back
+# to it); checked against the app's fonts (tools/i18n.py notes)
+node scripts/update-manifest.mjs sign 1.7.0 ../app/3ds-recorder.cia ../app/3ds-recorder.3dsx ../tools/i18n/notes/1.7.0
+npx wrangler deploy
+curl -si http://3ds-recorder-stats.bolgar-maxym.workers.dev/v1/update | head -5
+```
+
+The files must be the ones attached to the release, byte for byte (the sha256 is checked).
+
+### Test an update locally
+
+Two builds with a throwaway key against a Worker on the Mac (`build/` is not committed):
+
+```bash
+node scripts/update-manifest.mjs keygen --key /tmp/test-key.json      # prints the C array
+# build/update-test/test_key.h: #define UPDATE_PUBLIC_KEY { 0x.., ... }
+tools/dkp.sh app make cia APP_VERSION=1.6.1 STATS_URL=http://<mac ip>:8787 UPDATE_KEY=/work/build/update-test/test_key.h
+#   copy app/3ds-recorder.cia/.3dsx to build/update-test/v1.6.1/, then build 1.6.0 the same way to install
+node scripts/update-manifest.mjs sign 1.6.1 <cia> <3dsx> <notes dir> --key /tmp/test-key.json   # into update/
+(cd ../build/update-test && python3 -m http.server 8000)
+npx wrangler dev --ip 0.0.0.0 --port 8787 --var RELEASES_URL:http://127.0.0.1:8000
+```
+
+Empty `update/latest*.txt` again before committing.
+
 ## Develop
 
 ```bash

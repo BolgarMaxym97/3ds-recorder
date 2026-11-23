@@ -27,6 +27,22 @@ static C2D_TextBuf text_buf;
 
 static C2D_Font font_of(FontWeight weight) { return !base_only && script[weight] ? script[weight] : base[weight]; }
 
+bool ui_has_glyphs(const char *str)
+{
+    C2D_Font f = font_of(FONT_REG);
+    const FINF_s *info = C2D_FontGetInfo(f);
+    for (const u8 *p = (const u8 *)str; *p;) {
+        u32 cp = 0;
+        const ssize_t n = decode_utf8(&cp, p);
+        if (n <= 0)
+            return false;
+        p += n;
+        if (cp >= 0x20 && info && C2D_FontGlyphIndexFromCodePoint(f, cp) == info->alterCharIndex)
+            return false;
+    }
+    return true;
+}
+
 /* citro2d sizes a font by its cell height (C2D_Font's textScale = 30 / cellHeight), and mkbcfnt
  * makes the cell as tall as the font's tallest glyph: a font with kanji, or with a few more
  * letters, would come out smaller and sit lower. Every font is drawn as Inter's own cut was

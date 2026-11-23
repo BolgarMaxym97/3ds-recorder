@@ -64,6 +64,9 @@ bool ui_set_script(Script s);
 /* true: all text in the base font, which has every language's name and first-run language screen
    (the language list, where the hovered language previews without loading its font) */
 void ui_base_font(bool on);
+/* every character of `str` is in the font text is drawn with now (texts from outside the app: the
+   update's notes, written after this app's fonts were made) */
+bool ui_has_glyphs(const char *str);
 
 /* Text. `px` is the em size in screen pixels. Returns the drawn width. */
 float ui_text(float x, float y, float px, FontWeight weight, u32 color, const char *str);
