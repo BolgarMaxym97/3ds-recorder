@@ -200,8 +200,12 @@ static void InstallThread(void *arg)
         got = net_get(&g_net, path, from, ToOut, &out, &status, NULL, NULL, 0);
         if (!got && (out.failed || (status && status != 200 && status != 206)))
             break; /* the card refused, or the server said no: trying again does not help */
-        if (!got && t + 1 < TRIES && !g_cancel)
+        if (!got && t + 1 < TRIES && !g_cancel) {
             app_log("update: connection lost at %lu KB, try %d", (unsigned long)(out.offset / 1024), t + 2);
+            /* a moment for the Wi-Fi to come back: at once, all tries failed within 40 ms (O3DS) */
+            for (int i = 0; i < 30 && !g_cancel && !g_stop; i++)
+                svcSleepThread(100 * 1000 * 1000);
+        }
     }
     if (out.f)
         fclose(out.f);

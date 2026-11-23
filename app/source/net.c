@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "recorder.h"
 #include "stats.h"
 
 #define CHUNK 0x4000
@@ -67,6 +68,13 @@ bool net_get(NetConn *c, const char *path, u32 from, NetSink sink, void *ctx, u3
                     ok = false;
             }
             free(buf);
+            /* a connection closed before Content-Length ends without an error: a cut, not the end
+               (the update goes on with a Range request; Azahar e2e 2026-11-23) */
+            u32 got = 0, total = 0;
+            if (ok && R_SUCCEEDED(httpcGetDownloadSizeState(&c->ctx, &got, &total)) && total && got < total) {
+                app_log("net: %s cut at %lu of %lu bytes", path, (unsigned long)got, (unsigned long)total);
+                ok = false;
+            }
         }
     }
     if (R_FAILED(r))
