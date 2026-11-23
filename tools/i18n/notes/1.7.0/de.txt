@@ -1,0 +1,6 @@
+Updates aus der App: Einstellungen → App → Updates, kein Installieren von Hand mehr
+New 3DS: Smash Bros und CTGP-7 starten die Konsole nach dieser App nicht mehr neu
+Behoben: Ausschalten während einer Aufnahme mit Tastenaufzeichnung ließ die Konsole abstürzen
+Behoben: Mario Kart 7 stürzte mit einem CTRPF-Plugin-Menü während der Aufnahme ab
+Hilfe → Projekt unterstützen, und die Hilfe-Liste lässt sich jetzt scrollen
+Der Download-Link fürs Handy hat einen privaten Schlüssel; die Konverterseite macht MP4s über 2 GB

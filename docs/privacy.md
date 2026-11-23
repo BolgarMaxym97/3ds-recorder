@@ -25,6 +25,11 @@ model, versions, settings, title IDs, frame counts) stay for the statistics.
 **How it travels:** over plain HTTP, the way the console's own network stack reaches the server, so it is not
 encrypted on the way.
 
+**Updates and Help:** with Settings → App → **Updates → Check Automatically** on (or when you press **Check Now**), the
+app asks the same server whether a newer version is out; **Help** asks it for the links of its **Support the project**
+topic. These two requests carry only the app version (and, for an update, which file); no console ID, no logs, and
+they work with Share Statistics off.
+
 **Your ID** is shown in Settings → App next to the switch. To have your records deleted, write it in an
 [issue](https://github.com/BolgarMaxym97/3ds-recorder/issues/new) or on Telegram (t.me/side_quest_ua). Deleting
 `/3ds/recorder/stats.ini` makes a new ID.

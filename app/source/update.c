@@ -372,13 +372,11 @@ void update_stop(void)
 void update_tour(UpdPhase phase, UpdCheck check, UpdError error)
 {
     static const char TEXT[] =
-        "version=1.7.0\n"
+        "version=1.7.1\n"
         "cia=8812544 0000000000000000000000000000000000000000000000000000000000000000\n"
         "3dsx=9012345 0000000000000000000000000000000000000000000000000000000000000000\n"
-        "notes.en=Update the app from Settings: no more trips to GitHub|Buttons in the MP4 on the phone too|"
-        "Replay starts faster after a game launches|Fixes for New 3DS\n"
-        "notes.uk=Оновлення застосунку прямо з Налаштувань|Кнопки в MP4 і на телефоні|"
-        "Replay швидше вмикається після запуску гри|Виправлення для New 3DS\n"
+        "notes.en=What is new in that version comes here|In the app's language|A few points, one a line\n"
+        "notes.uk=Тут — що нового в тій версії|Мовою додатка|Кілька пунктів, по одному в рядку\n"
         "notes.ja=設定からソフトをアップデート|新しい機能\n";
     g_textLen = sizeof(TEXT) - 1;
     memcpy(g_text, TEXT, sizeof(TEXT));

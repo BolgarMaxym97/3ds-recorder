@@ -1,0 +1,6 @@
+Atualizações pelo app: Configurações → Aplicativo → Atualizações, sem instalar à mão
+New 3DS: Smash Bros e CTGP-7 não reiniciam mais o console depois deste app
+Corrigido: desligar o console durante uma gravação com os botões gravados travava o console
+Corrigido: Mario Kart 7 fechava com um menu de plugin CTRPF durante a gravação
+Ajuda → Apoie o projeto, e a lista da Ajuda agora rola
+O link de download para o celular tem uma chave privada; o conversor faz MP4 acima de 2 GB

@@ -1,0 +1,6 @@
+Updates from the app: Settings → App → Updates, no more installing by hand
+New 3DS: Smash Bros and CTGP-7 no longer restart the console after this app was opened
+Fixed: turning the console off during a recording with Record Buttons on crashed it
+Fixed: Mario Kart 7 crashed with a CTRPF plugin menu while recording
+Help → Support the project, and the Help list now scrolls
+The phone download link has a private key; the converter page makes MP4s over 2 GB

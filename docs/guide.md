@@ -84,6 +84,11 @@ turned on or restarts, with Replay as you left it, and you never have to open th
   this saves processor time, not space.
 - **Test SD Card** (Settings → App): writes 96 MB the way the recorder does (20–40 s) and tells how fast the card is
   and what that is enough for. Both screens of a 3D game at 30 fps need about 5.4 MB/s on an Old 3DS.
+- **Updates** (Settings → App, since 1.7.0): **Check Automatically** (on at first) asks the server for a newer version
+  when the app opens with Wi-Fi; a dot on Settings then shows it, with what is new in your language. **Update**
+  downloads it and installs it (the `.cia` into the system, the `.3dsx` over itself), then **Restart**. Every update is
+  signed by the developer and each file is checked before anything is installed; a lost connection goes on where it
+  stopped. Not while a recording runs: the new version restarts the recorder.
 - **Quality — Auto:** a picture that changes all over (a 3D game in motion) is stored the way video is, colour at half
   the resolution, so both screens keep up to 30 frames a second on an Old 3DS; menus, 2D games and still pictures stay
   exact. **Lossless** keeps every frame exact; in 3D games the SD card then cannot take every frame.

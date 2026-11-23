@@ -59,8 +59,9 @@ release.
 
 <img src="docs/qr-latest-cia.png" width="160" alt="QR code: the latest 3ds-recorder.cia">
 
-**To update,** install the new `.cia` over the old one (or replace the `.3dsx`) and open the app. Settings and
-recordings stay.
+**To update,** open Settings → App → **Updates** and press **Update** (from 1.7.0 on; the app also checks by itself
+when it opens with Wi-Fi, and a dot on Settings shows a new version). Before 1.7.0: install the new `.cia` over the old
+one (or replace the `.3dsx`) and open the app. Settings and recordings stay.
 
 ## How to use
 
