@@ -10,6 +10,12 @@ and the console is on Wi-Fi, and it never shows the result (`app/source/stats.h`
 - `POST /v1/dump` — one Luma ARM11 crash dump as raw bytes, at most 48 KB, with `X-Id` (install
   ID) and `X-Name` (`crash_dump_NNNNNNNN.dmp`). `204` / `400` / `413`.
 - `GET /v1/health` — `ok`.
+- `GET /v1/support` — Help → «Support the project» in the app: the links of
+  [`.github/FUNDING.yml`](../.github/FUNDING.yml) on `main`, one `<label> <url>` a line (`ko_fi`,
+  `buy_me_a_coffee`, `patreon`, `liberapay`, `github` and `custom` URLs; `https://` only, at most 3).
+  Empty when there are none (the app then has no such topic); `502` when GitHub does not answer.
+  GitHub's file is cached at the edge for an hour, so a changed link reaches consoles within the
+  hour — edit FUNDING.yml, no app release and no deploy (`src/support.ts`, `app/source/support.c`).
 - Both POSTs: at most 10 a minute from one client address (Workers Rate Limiting binding
   `LIMITER`), else `429`. A launch sends 1-2; the counters are per Cloudflare location and
   approximate, so a burst gets through a little past 10 before the 429s start.

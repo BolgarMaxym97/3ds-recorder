@@ -4,22 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "net.h"
 #include "recorder.h"
 #include "sha256.h"
 #include "stats.h"
 #include "update_key.h"
 
-#define CHUNK 0x4000
-#define CONNECT_NS (10ull * 1000 * 1000 * 1000)
-#define READ_NS (15ull * 1000 * 1000 * 1000)
 #define TRIES 3                       /* a lost connection goes on from where it stopped */
 #define SPACE_MARGIN (8u * 1024 * 1024)
 
 static const u8 KEY[32] = UPDATE_PUBLIC_KEY;
 
-static LightLock g_lock;              /* g_ctx while it is open */
-static httpcContext g_ctx;
-static bool g_ctxOpen;
+static NetConn g_net;
 static Thread g_thread;
 static volatile bool g_enabled, g_stop, g_cancel;
 static volatile UpdPhase g_phase;
@@ -31,70 +27,9 @@ static char g_text[UPD_MANIFEST_MAX + 1];   /* the manifest as signed */
 static size_t g_textLen;
 static UpdManifest g_m;
 
-typedef bool (*Sink)(const u8 *data, u32 len, void *ctx);
-
 static bool is3dsx(void) { return envIsHomebrew(); }
 u32 update_size(void) { return is3dsx() ? g_m.x3dsx.size : g_m.cia.size; }
 static const UpdFile *file(void) { return is3dsx() ? &g_m.x3dsx : &g_m.cia; }
-
-/* One GET of STATS_URL `path` from byte `from` on; the body goes to `sink`. The HTTP status in
- * *status (0: no answer). False when the transfer did not finish (cancelled, lost, refused by the sink). */
-static bool Get(const char *path, u32 from, Sink sink, void *ctx, u32 *status, char *sig, size_t sigSize)
-{
-    *status = 0;
-    char url[160], range[32];
-    snprintf(url, sizeof(url), "%s%s", STATS_URL, path);
-    LightLock_Lock(&g_lock);
-    Result r = g_stop || g_cancel ? -1 : httpcOpenContext(&g_ctx, HTTPC_METHOD_GET, url, 1);
-    if (R_FAILED(r)) {
-        LightLock_Unlock(&g_lock);
-        g_result = (u32)r;
-        return false;
-    }
-    g_ctxOpen = true;
-    LightLock_Unlock(&g_lock);
-    httpcAddRequestHeaderField(&g_ctx, "User-Agent", "3ds-recorder/" APP_VERSION);
-    if (from) {
-        snprintf(range, sizeof(range), "bytes=%lu-", (unsigned long)from);
-        httpcAddRequestHeaderField(&g_ctx, "Range", range);
-    }
-    bool ok = false;
-    u32 st = 0;
-    if (R_SUCCEEDED(r = httpcBeginRequest(&g_ctx)) && R_SUCCEEDED(r = httpcGetResponseStatusCodeTimeout(&g_ctx, &st, CONNECT_NS)) &&
-        st >= 100 && st <= 599) {
-        *status = st;
-        if ((st == 200 && !from) || (st == 206 && from)) {
-            if (sig && R_FAILED(httpcGetResponseHeader(&g_ctx, "X-Sig", sig, sigSize)))
-                sig[0] = 0;
-            u8 *buf = malloc(CHUNK);
-            ok = buf != NULL;
-            for (r = HTTPC_RESULTCODE_DOWNLOADPENDING; ok && r == (Result)HTTPC_RESULTCODE_DOWNLOADPENDING;) {
-                if (g_stop || g_cancel) {
-                    ok = false;
-                    break;
-                }
-                u32 before = 0, after = 0;
-                httpcGetDownloadSizeState(&g_ctx, &before, NULL);
-                r = httpcReceiveDataTimeout(&g_ctx, buf, CHUNK, READ_NS);
-                httpcGetDownloadSizeState(&g_ctx, &after, NULL);
-                if (r != (Result)HTTPC_RESULTCODE_DOWNLOADPENDING && R_FAILED(r)) {
-                    ok = false;
-                    break;
-                }
-                if (after > before && !sink(buf, after - before, ctx))
-                    ok = false;
-            }
-            free(buf);
-        }
-    }
-    if (R_FAILED(r))
-        g_result = (u32)r;
-    LightLock_Lock(&g_lock);
-    g_ctxOpen = false;
-    httpcCloseContext(&g_ctx);
-    LightLock_Unlock(&g_lock);
-    return ok;
-}
 
 /* ---------------------------------------------------------------- the check */
 
@@ -114,7 +49,7 @@ static UpdCheck Check(void)
     char sig[160] = "";
     u32 status;
     g_textLen = 0;
-    if (!Get("/v1/update", 0, ToText, NULL, &status, sig, sizeof(sig))) {
+    if (!net_get(&g_net, "/v1/update", 0, ToText, NULL, &status, "X-Sig", sig, sizeof(sig))) {
         if (status == 404) {
             app_log("update: no release on the server yet");
             return UPD_CHK_LATEST;
@@ -262,7 +197,7 @@ static void InstallThread(void *arg)
     bool got = false;
     for (int t = 0; t < TRIES && !got && !g_cancel && !g_stop; t++) {
         const u32 from = out.offset;
-        got = Get(path, from, ToOut, &out, &status, NULL, 0);
+        got = net_get(&g_net, path, from, ToOut, &out, &status, NULL, NULL, 0);
         if (!got && (out.failed || (status && status != 200 && status != 206)))
             break; /* the card refused, or the server said no: trying again does not help */
         if (!got && t + 1 < TRIES && !g_cancel)
@@ -338,7 +273,7 @@ static void StartCheck(bool now)
 
 void update_start(bool enabled, const char *self)
 {
-    LightLock_Init(&g_lock);
+    net_conn_init(&g_net, &g_stop, &g_cancel, &g_result);
     snprintf(g_self, sizeof(g_self), "%s", self ? self : "/3ds/3ds-recorder.3dsx");
     g_enabled = enabled;
     if (enabled)
@@ -414,10 +349,7 @@ void update_cancel(void)
     if (g_phase != UPD_DOWNLOADING)
         return;
     g_cancel = true;
-    LightLock_Lock(&g_lock);
-    if (g_ctxOpen)
-        httpcCancelConnection(&g_ctx);
-    LightLock_Unlock(&g_lock);
+    net_abort(&g_net);
 }
 
 void update_stop(void)
@@ -427,10 +359,7 @@ void update_stop(void)
     g_stop = true;
     if (g_phase == UPD_INSTALLING) /* a CIA being committed, or the 3dsx renamed: let it finish */
         Join();
-    LightLock_Lock(&g_lock);
-    if (g_ctxOpen)
-        httpcCancelConnection(&g_ctx);
-    LightLock_Unlock(&g_lock);
+    net_abort(&g_net);
     Join();
 }
 

@@ -79,7 +79,7 @@ all: $(BUILD)
 	@# the objects that print the version or use the Worker's address and the update key: rebuilt when
 	@# they change (make does not follow CFLAGS; 0.9.12-0.9.14 showed "0.9.11" on the panel, 2026-11-08)
 	@mkdir -p $(BUILD); if [ "$$(cat $(BUILD)/.app_version 2>/dev/null)" != "$(APP_VERSION) $(APP_CHANNEL) $(STATS_URL) $(UPDATE_KEY)" ]; then \
-		rm -f $(BUILD)/app.o $(BUILD)/recorder.o $(BUILD)/stats.o $(BUILD)/update.o; \
+		rm -f $(BUILD)/app.o $(BUILD)/recorder.o $(BUILD)/stats.o $(BUILD)/update.o $(BUILD)/net.o; \
 		echo "$(APP_VERSION) $(APP_CHANNEL) $(STATS_URL) $(UPDATE_KEY)" > $(BUILD)/.app_version; fi
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 

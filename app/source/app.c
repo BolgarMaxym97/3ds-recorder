@@ -16,6 +16,7 @@
 #include "server.h"
 #include "stats.h"
 #include "ui.h"
+#include "support.h"
 #include "update.h"
 
 /* ------------------------------------------------------------------ layout helpers */
@@ -94,9 +95,26 @@ static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200,
 /* Uninstall dialog */
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
-/* Help topics */
+/* Help topics: 10 fill the list (y 34-238). With more (the support topic) the rows get a little
+   tighter so 10 and a half show: the cut row says there is more below. The list scrolls by pixels. */
 #define HELP_TOPICS 10
-static Rect help_row(int i) { return (Rect){12, 34 + i * 20.4f, 296, 19}; }   /* 10 topics: down to y 237 */
+#define HELP_SUPPORT HELP_TOPICS   /* "Support the project": only with links (support.c) */
+#define HELP_TOP 34.0f
+#define HELP_VIEW (240.0f - HELP_TOP)
+static float g_helpScroll;         /* px of the list above the top */
+static int help_count(void);
+static float help_row_h(void) { return help_count() > HELP_TOPICS ? HELP_VIEW / 10.5f : 20.4f; }
+static float help_scroll_max(void)
+{
+    const float m = help_count() * help_row_h() + 2 - HELP_VIEW;
+    return m > 0 ? m : 0;
+}
+static Rect help_row(int i)
+{
+    const float h = help_row_h();
+    return (Rect){12, HELP_TOP + i * h - g_helpScroll, 296, h - 1.4f};
+}
+static int help_count(void) { return HELP_TOPICS + (support_count() > 0); }
 
 /* A 3D game at 30 fps fills what the SD card takes: ~5.4 MB/s while writing, both screens or the top
    one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
@@ -436,6 +454,7 @@ void app_exit(App *a)
     }
     stats_stop();
     update_stop();
+    support_stop();
     prepare_stop(); /* the job keeps its resume point */
 }
 
@@ -983,6 +1002,8 @@ static void open_help(App *a, Screen back)
     a->back = back;
     a->backFocus = a->focus;
     a->helpTopic = 0;
+    g_helpScroll = 0;
+    support_fetch(); /* the support topic joins the list when its links arrive */
     go(a, SCR_HELP, 0);
 }
 
@@ -1084,16 +1105,54 @@ static void update_firstrun(App *a, const Input *in)
     }
 }
 
+static void help_scroll_clamp(void)
+{
+    if (g_helpScroll > help_scroll_max())
+        g_helpScroll = help_scroll_max();
+    if (g_helpScroll < 0)
+        g_helpScroll = 0;
+}
+
+/* the focused topic wholly on screen */
+static void help_scroll_to(int topic)
+{
+    const Rect r = help_row(topic);
+    if (r.y < HELP_TOP)
+        g_helpScroll -= HELP_TOP - r.y;
+    if (r.y + r.h > 240 - 2)
+        g_helpScroll += r.y + r.h - (240 - 2);
+    help_scroll_clamp();
+}
+
 static void update_help(App *a, const Input *in)
 {
+    static bool dragging;
+    static int dragY;
+    static float dragFrom;
     const u32 d = in->down;
+    const int n = help_count();
     if (d & KEY_DUP && a->helpTopic > 0)
         a->helpTopic--;
-    if (d & KEY_DDOWN && a->helpTopic < HELP_TOPICS - 1)
+    if (d & KEY_DDOWN && a->helpTopic < n - 1)
         a->helpTopic++;
-    for (int i = 0; i < HELP_TOPICS; i++)
-        if (hit(help_row(i), in))
+    if (d & (KEY_DUP | KEY_DDOWN))
+        help_scroll_to(a->helpTopic);
+    /* a finger dragged over the list scrolls it */
+    if (in->touching && !dragging) {
+        dragging = true;
+        dragY = in->touch_y;
+        dragFrom = g_helpScroll;
+    } else if (in->touching) {
+        g_helpScroll = dragFrom - (in->touch_y - dragY);
+    } else {
+        dragging = false;
+    }
+    help_scroll_clamp();
+    for (int i = 0; i < n; i++) {
+        const Rect r = help_row(i);
+        if (r.y >= HELP_TOP - r.h / 2 && hit(r, in))
             a->helpTopic = i;
+    }
     if ((d & (KEY_B | KEY_SELECT)) || hit(BACK_BTN, in))
         go(a, a->back, a->backFocus);
     if (d & KEY_Y)
@@ -2169,11 +2228,70 @@ static void help_channel(void)
     ui_text_right(386, 219.5f, 9, FONT_BOLD, COL_SOFT, "Telegram · t.me/side_quest_ua");
 }
 
+/* The support topic's codes, made once when the links arrive (support.c) */
+static u8 g_supQr[SUPPORT_MAX][qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
+static int g_supQrOk[SUPPORT_MAX]; /* 0 not made, 1 made, -1 too long */
+
+/* `s` cut with "…" to `w` px */
+static const char *fit_text(const char *s, float w, float px, FontWeight weight)
+{
+    static char buf[128];
+    snprintf(buf, sizeof(buf), "%s", s);
+    if (ui_text_width(px, weight, buf) <= w)
+        return buf;
+    for (size_t n = strlen(buf); n > 1; n--) {
+        snprintf(buf + n - 1, sizeof(buf) - (n - 1), "…");
+        if (ui_text_width(px, weight, buf) <= w)
+            break;
+    }
+    return buf;
+}
+
+static void draw_support_top(void)
+{
+    const float th = ui_text_wrap(14, 50, 372, 10, FONT_REG, COL_SOFT, T(S_H_SUPPORT_BODY));
+    const int n = support_count();
+    /* the cards between the text and the footer (labels under them, 30 px) */
+    const float y = 50 + th + 8, room = 214 - 30 - y, gap = 28;
+    float box = n == 1 ? 120 : n == 2 ? 112 : 100;
+    if (box > room)
+        box = room;
+    const float total = n * box + (n - 1) * gap;
+    for (int i = 0; i < n; i++) {
+        const SupportLink *l = support_link(i);
+        const float bx = 200 - total / 2 + i * (box + gap);
+        if (!g_supQrOk[i]) {
+            u8 tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
+            g_supQrOk[i] = qrcodegen_encodeText(l->url, tmp, g_supQr[i], qrcodegen_Ecc_MEDIUM, 1, 6, qrcodegen_Mask_AUTO, true) ? 1 : -1;
+        }
+        ui_rrect(bx, y, box, box, 10, COL_WHITE);
+        if (g_supQrOk[i] > 0) { /* dark modules, a quiet zone of at least 2 */
+            const int q = qrcodegen_getSize(g_supQr[i]);
+            const float m = (float)(int)((box - 12) / q), qx = bx + (box - m * q) / 2, qy = y + (box - m * q) / 2;
+            for (int yy = 0; yy < q; yy++)
+                for (int xx = 0; xx < q; xx++)
+                    if (qrcodegen_getModule(g_supQr[i], xx, yy))
+                        ui_rect(qx + xx * m, qy + yy * m, m, m, COL_BG);
+        }
+        const float cx = bx + box / 2, w = box + gap - 6;
+        ui_text_center(cx, y + box + 4, 10, FONT_BOLD, COL_TEXT, fit_text(l->label, w, 10, FONT_BOLD));
+        const char *url = strncmp(l->url, "https://", 8) ? l->url : l->url + 8;
+        ui_text_center(cx, y + box + 17, 8, FONT_REG, COL_MUTED, fit_text(url, w, 8, FONT_REG));
+    }
+}
+
 static void draw_help_top(App *a)
 {
     char buf[48];
-    snprintf(buf, sizeof(buf), T(S_HELP_OF), a->helpTopic + 1, HELP_TOPICS);
+    snprintf(buf, sizeof(buf), T(S_HELP_OF), a->helpTopic + 1, help_count());
     ui_text(14, 13, 9, FONT_REG, COL_MUTED, buf);
+    if (a->helpTopic == HELP_SUPPORT) {
+        ui_text(14, 25, 15, FONT_BOLD, COL_TEXT, T(S_H_SUPPORT));
+        draw_support_top();
+        ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
+        help_channel();
+        return;
+    }
     ui_text(14, 25, 15, FONT_BOLD, COL_TEXT, T(HELP_TITLE[a->helpTopic]));
     if (a->helpTopic == 1) { /* the LED: coloured lamps next to the lines */
         static const u32 lamp[5] = {COL_LED_BLUE, COL_ACCENT, COL_LED_BLUE_FAINT, COL_LED_GREEN, COL_ACCENT};
@@ -2892,17 +3010,28 @@ static void draw_firstrun_bottom(App *a)
 static void draw_help_bottom(App *a)
 {
     navbar(T(S_HELP_TITLE));
-    for (int i = 0; i < HELP_TOPICS; i++) {
+    const int n = help_count();
+    for (int i = 0; i < n; i++) {
         Rect r = help_row(i);
-        char n[4];
-        snprintf(n, sizeof(n), "%d", i + 1);
+        if (r.y < HELP_TOP - 2 || r.y > 240) /* above the list (under the bar) or below the screen */
+            continue;
+        char num[12];
+        snprintf(num, sizeof(num), "%d", i + 1);
+        const bool support = i == HELP_SUPPORT;
+        const float by = r.y + (r.h - 17) / 2;
         if (i == a->helpTopic)
             ui_rrect(r.x, r.y, r.w, r.h, 7, COL_SURFACE);
-        ui_rrect(r.x + 7, r.y + 1.5f, 17, 17, 4, COL_SURFACE2);
-        ui_text_center(r.x + 15.5f, r.y + 3.5f, 8, FONT_BOLD, COL_SOFT, n);
-        ui_text(r.x + 32, r.y + 2.5f, 10, FONT_BOLD, COL_TEXT, T(HELP_TITLE[i]));
+        ui_rrect(r.x + 7, by, 17, 17, 4, support ? COL_ACCENT : COL_SURFACE2);
+        ui_text_center(r.x + 15.5f, by + 2, 8, FONT_BOLD, support ? COL_BG : COL_SOFT, num);
+        ui_text(r.x + 32, by + 1, 10, FONT_BOLD, COL_TEXT, T(support ? S_H_SUPPORT : HELP_TITLE[i]));
         if (i == a->helpTopic)
             focus_ring(r, 7);
+    }
+    const float max = help_scroll_max();
+    if (max > 0) { /* a scroll bar on the right, as in the language list */
+        const float h = HELP_VIEW - 4, thumb = h * HELP_VIEW / (HELP_VIEW + max);
+        ui_rrect(313, HELP_TOP, 3, h, 1.5f, COL_SURFACE);
+        ui_rrect(313, HELP_TOP + (h - thumb) * g_helpScroll / max, 3, thumb, 1.5f, COL_SOFT);
     }
 }
 
@@ -3429,7 +3558,7 @@ static const struct { const char *name; UpdPhase phase; UpdCheck check; UpdError
 #define TS_UPD_N ((int)(sizeof(TOUR_UPD) / sizeof(*TOUR_UPD)))
 enum {
     TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_PANEL_REPLAY, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
-    TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS, TS_HOTKEY2, TS_GALLERY, TS_GAL_DELETE,
+    TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS + 1, TS_HOTKEY2, TS_GALLERY, TS_GAL_DELETE,
     TS_PLAYER, TS_SDTEST, TS_UPDATE = TS_SDTEST + TS_SDT_N, TS_UNINSTALL = TS_UPDATE + TS_UPD_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
     TS_PER_LANG = TS_MSG + TOUR_N_MSG
 };
@@ -3484,7 +3613,10 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         open_languages(a, SCR_SETTINGS, GRP_LANG);
         snprintf(name, cap, "lang");
     } else if (step < TS_HOTKEY) {
+        support_tour(); /* the support topic with the real links, as GitHub gives them */
         a->helpTopic = step - TS_HELP;
+        g_helpScroll = 0;
+        help_scroll_to(a->helpTopic);
         a->back = SCR_PANEL;
         go(a, SCR_HELP, 0);
         snprintf(name, cap, "help-%02d", a->helpTopic + 1);

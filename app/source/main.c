@@ -241,6 +241,8 @@ int main(int argc, char **argv)
                 dragged = true;
             last = now;
             touching = true;
+            in.touching = true;
+            in.touch_y = now.py;
         } else if (touching) {
             touching = false;
             in.tapped = !dragged; /* a tap: lifted close to where it came down */

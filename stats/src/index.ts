@@ -1,18 +1,24 @@
 import manifest from "../update/latest.txt";
 import manifestSig from "../update/latest.sig.txt";
 import { DUMP_NAME, extract, INSTALL_ID, isDump, MAX_DUMP, MAX_REPORT, parseReport } from "./report";
+import { supportResponse } from "./support";
 import { type Fetcher, fileResponse, manifestResponse } from "./update";
 
 // POST /v1/report - new log lines from one app launch (JSON); 204
 // POST /v1/dump   - one Luma crash dump (raw bytes, X-Id and X-Name headers); 204
 // GET  /v1/health - "ok", for checking a console can reach the Worker at all
 // GET  /v1/update, /v1/update/<version>/<cia|3dsx> - in-app update (src/update.ts)
+// GET  /v1/support - Help's support links from .github/FUNDING.yml (src/support.ts)
 // The app only looks at the status: 2xx means "sent, do not send it again".
 export default {
   async fetch(request, env): Promise<Response> {
     const { pathname } = new URL(request.url);
 
     if (pathname === "/v1/health" && request.method === "GET") return new Response("ok");
+    if (pathname === "/v1/support") {
+      if (request.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      return supportResponse((url, init) => fetch(url, init));
+    }
     if (pathname === "/v1/update" || pathname.startsWith("/v1/update/")) {
       if (request.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
       if (pathname === "/v1/update") return manifestResponse(manifest, manifestSig);

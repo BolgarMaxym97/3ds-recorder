@@ -15,6 +15,8 @@ typedef struct {
     u32 down, held;
     bool tapped;
     int tap_x, tap_y;
+    bool touching;          /* a finger on the screen now, at touch_y (dragging a list) */
+    int touch_y;
 } Input;
 
 typedef enum { SCR_PANEL, SCR_FIRSTRUN, SCR_HELP, SCR_SETTINGS, SCR_HOTKEY, SCR_GALLERY, SCR_PLAYER, SCR_PHONE, SCR_UNINSTALL, SCR_UNINSTALLED, SCR_GUIDE, SCR_LANG, SCR_SETGROUP, SCR_SDTEST, SCR_UPDATE } Screen;
