@@ -1,7 +1,8 @@
 /*
  * "To phone": a small HTTP server on the console for one recording, the one picked in the gallery
  * (port 8080, up to SRV_CLIENTS requests at once, one thread, non-blocking sockets + poll; after
- * tests/wifibench). The QR code opens <address>/?f=<name>. It serves
+ * tests/wifibench). The QR code opens <address>/?f=<name>&k=<key>; everything but the page needs
+ * that key (srvtoken.h: no one else on the Wi-Fi reads the recording or the logs). It serves
  *   GET /               the converter page (romfs:/web/index.html.gz, sent gzip-encoded)
  *   GET /api/rec        that recording: name, size, length, screens, sound, closed properly,
  *                       plus the page's language, the app version and the console
@@ -27,7 +28,7 @@ typedef enum { SRV_OFF, SRV_NO_WIFI, SRV_FAILED, SRV_RUNNING } ServerState;
 typedef struct {
     ServerState state;
     char address[32];     /* "http://192.168.1.20:8080" */
-    char url[80];         /* what the QR code holds: address/?f=name */
+    char url[128];        /* what the QR code holds: address/?f=name&k=key */
     int connections;      /* requests being served now */
     char file[32];        /* the recording last requested; empty: none yet */
     u64 fileSize;

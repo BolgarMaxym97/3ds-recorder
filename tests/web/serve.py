@@ -5,11 +5,12 @@
   GET /rec/<name>  the recording, with Range; --kbs throttles it like the 3DS Wi-Fi (~420 KB/s)
   GET /rec/<stem>.mp4  with --mp4 FILE: the console's prepared MP4, "ready" after --prep-s seconds
                    of "working" in /api/rec (0 = ready at once); --prep failed: the console could not
+Everything but the page needs the key from the printed address (k=, app/source/srvtoken.h): 403 without.
 Details (length, closed, screens, sound) come from build/r3dconv --info.
 Usage: tests/web/serve.py <file.r3d> [--port 8090] [--host 0.0.0.0] [--kbs 420] [--lang uk]
                           [--mp4 FILE [--prep-s 10]] [--prep failed]
 """
-import argparse, json, os, re, subprocess, sys, time
+import argparse, json, os, re, secrets, subprocess, sys, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 ap = argparse.ArgumentParser()
@@ -19,6 +20,7 @@ ap.add_argument('--mp4'); ap.add_argument('--prep-s', type=float, default=10); a
 ap.add_argument('--keys', action='store_true')  # the console's Buttons In Video is on
 ap.add_argument('--stall-every', type=int, default=0)  # weak signal: every Nth file request stops halfway
 a = ap.parse_args()
+key = secrets.token_hex(8)  # the console makes a new one each time the transfer screen opens
 repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 page = open(os.path.join(repo, 'app/romfs/web/index.html.gz'), 'rb').read()
 name = os.path.basename(a.file)
@@ -50,10 +52,13 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path in ('/', '/index.html'):
             return self.send(200, 'text/html; charset=utf-8', page, [('Content-Encoding', 'gzip')])
+        from urllib.parse import parse_qs, urlparse
+        if key not in parse_qs(urlparse(self.path).query).get('k', []):
+            print('refused (no key):', path, flush=True)
+            return self.send(403, 'text/plain', b'open the address from the QR code')
         if path == '/api/rec':
             return self.send(200, 'application/json', json.dumps({**info, **prep_info()}).encode())
         if path == '/api/log':  # the page's reports: printed, as app.log would get them
-            from urllib.parse import parse_qs, urlparse
             print('page:', parse_qs(urlparse(self.path).query).get('m', [''])[0], flush=True)
             return self.send(200, 'text/plain', b'ok')
         if path == '/log.txt':
@@ -93,5 +98,5 @@ class H(BaseHTTPRequestHandler):
         self.send(200, 'text/plain', out.encode())
     def log_message(self, *x): pass
 
-print(f'http://{a.host}:{a.port}/?f={name}  ({size >> 20} MB, {secs:.0f} s)', flush=True)
+print(f'http://{a.host}:{a.port}/?f={name}&k={key}  ({size >> 20} MB, {secs:.0f} s)', flush=True)
 ThreadingHTTPServer((a.host, a.port), H).serve_forever()

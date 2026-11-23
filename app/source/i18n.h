@@ -138,7 +138,7 @@
     X(S_TILE_RECORDER_ON_SHORT, "Hotkey works") \
     X(S_TILE_RECORDER_OFF_SHORT, "Hotkey does nothing") \
     X(S_TILE_REPLAY_ON, "Clip: %s") \
-    X(S_TILE_REPLAY_OFF, "Keeps the last %s") \
+    X(S_TILE_REPLAY_OFF, "Turn on for clips: %s") \
     X(S_MSG_REPLAY_ON, "Replay is on. It starts about 15 s after a game starts; then press %s in the game or HOME to save the last %s.") \
     X(S_MSG_REPLAY_OFF, "Replay is off.") \
     X(S_MSG_REPLAY_WRITE, "Replay stopped: the SD card refused its writes. Check the card, then turn Replay off and on again.") \

@@ -1061,8 +1061,11 @@ void prepare_forget(const char *name)
     LightLock_Lock(&g_lock);
     snprintf(g_forget, sizeof(g_forget), "%.19s", name);
     LightLock_Unlock(&g_lock);
-    /* the thread answers within a step (one video frame) or a hold check */
+    /* the thread answers after its step (one video frame), closing the job and deleting what it made.
+       A step took over 3 s with the player running next to it (New 2DS XL, 2026-11-23): 5 s ran out,
+       the job still had the recording open, and the delete failed ("could not delete"). This runs on
+       the gallery's own thread (the "Deleting..." toast), so it waits as long as that takes. */
     const u64 t0 = osGetTime();
-    const bool answered = LightEvent_WaitTimeout(&g_forgotten, 5ull * 1000 * 1000 * 1000) == 0;
+    const bool answered = LightEvent_WaitTimeout(&g_forgotten, 30ull * 1000 * 1000 * 1000) == 0;
     app_log("prepare: forget %s %s after %llu ms", name, answered ? "done" : "TIMED OUT", (unsigned long long)(osGetTime() - t0));
 }

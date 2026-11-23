@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs test_srvtoken
 
 .PHONY: test clean
 
@@ -58,3 +58,6 @@ test_i18n: test_i18n.c ../../app/source/i18n.c ../../app/source/i18n.h ../../app
 
 test_inputs: test_inputs.c ../../codec/source/inputs.c ../../codec/include/inputs.h ../../codec/include/r3d_format.h
 	$(CC) $(CFLAGS) -o $@ test_inputs.c ../../codec/source/inputs.c -lm
+
+test_srvtoken: test_srvtoken.c ../../app/source/srvtoken.h
+	$(CC) $(CFLAGS) -I../../app/source -o $@ test_srvtoken.c

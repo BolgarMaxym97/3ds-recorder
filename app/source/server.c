@@ -21,6 +21,7 @@
 
 #include "gallery.h"
 #include "recorder.h"
+#include "srvtoken.h"
 
 #define SOC_SIZE 0x100000u          /* SOC service buffer (0x1000 aligned) */
 #define CHUNK (64u << 10)           /* SD read and send() size; 4-16 KB sends measured the same */
@@ -63,6 +64,8 @@ static Client g_cl[SRV_CLIENTS];
 static u8 *g_page;
 static u32 g_pageLen;
 static char g_info[160];           /* "lang":..,"version":..,"console":.. (into /api/rec) */
+static char g_token[SRV_TOKEN_LEN + 1];   /* the key in the QR address (srvtoken.h), new each start */
+static u32 g_refused;                     /* requests without it, this start */
 static char g_offer[32];           /* the one recording served */
 /* speed: bytes sent per 250 ms slot, over the last 3 s */
 static u32 g_slots[12];
@@ -320,7 +323,12 @@ static void start_request(Client *c)
     LightLock_Lock(&g_lock); /* any request: the phone is there (it asks for progress every second) */
     g_stats.lastActivityMs = (u32)osGetTime();
     LightLock_Unlock(&g_lock);
-    if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
+    const bool page = strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0;
+    if (!page && !srv_token_ok(q, g_token)) { /* the data only with the key from the QR code */
+        if (g_refused++ < 5)   /* a few: a stranger's requests do not fill app.log */
+            app_log("srv: %s refused: no key or a wrong one", path);
+        send_text(c, "403 Forbidden", "text/plain", strdup("open the address from the QR code"));
+    } else if (page) {
         if (!g_page) {
             send_text(c, "500 Internal Server Error", "text/plain", strdup("page missing"));
             return;
@@ -368,6 +376,8 @@ static void page_log(const char *query)
         msg[n++] = ch < 0x20 ? ' ' : (char)ch;
     }
     msg[n] = 0;
+    for (char *k = g_token[0] ? strstr(msg, g_token) : NULL; k; k = strstr(k, g_token))   /* never into app.log */
+        memset(k, '*', SRV_TOKEN_LEN);
     app_log("page: %s", msg);
 }
 
@@ -669,6 +679,18 @@ ServerState server_start(const char *name, const char *lang, const char *version
     if (g_thread)
         return g_stats.state;
     snprintf(g_offer, sizeof(g_offer), "%.31s", name);
+    {   /* a new key each time the transfer screen opens (the pattern of stats.c's id) */
+        u8 bytes[SRV_TOKEN_BYTES];
+        const bool ok = R_SUCCEEDED(psInit()) && R_SUCCEEDED(PS_GenerateRandomBytes(bytes, sizeof(bytes)));
+        psExit();
+        if (!ok) {
+            const u64 t = svcGetSystemTick() ^ (osGetTime() << 20);
+            for (int i = 0; i < SRV_TOKEN_BYTES; i++)
+                bytes[i] = (u8)(t >> (i * 8) ^ t >> ((i * 8 + 29) & 63));
+        }
+        srv_token_encode(bytes, g_token);
+        g_refused = 0;
+    }
     memset(&g_stats, 0, sizeof(g_stats));
     LightLock_Init(&g_lock);
     u32 wifi = 0;
@@ -722,7 +744,7 @@ ServerState server_start(const char *name, const char *lang, const char *version
     fcntl(g_srv, F_SETFL, fcntl(g_srv, F_GETFL, 0) | O_NONBLOCK);
     struct in_addr ip = {(in_addr_t)gethostid()};
     snprintf(g_stats.address, sizeof(g_stats.address), "http://%s:%d", inet_ntoa(ip), SRV_PORT);
-    snprintf(g_stats.url, sizeof(g_stats.url), "%s/?f=%s", g_stats.address, g_offer);
+    snprintf(g_stats.url, sizeof(g_stats.url), "%s/?f=%s&k=%s", g_stats.address, g_offer, g_token);
     g_quit = false;
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);

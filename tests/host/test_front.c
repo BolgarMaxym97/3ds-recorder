@@ -148,6 +148,23 @@ int main(void)
     CHECK(ctrpf_display_buffer(0, 0) == 0x06000000u && ctrpf_display_buffer(0, 1) == 0x0602EE00u);
     CHECK(ctrpf_display_buffer(1, 0) == 0x0605DC00u && ctrpf_display_buffer(1, 1) == 0x06083400u);
 
+    /* which CTRPF buffer the screen shows, from its addresses alone (no GET_PA_FROM_VA) */
+    {
+        CtrpfPick p = { { 0, 0 } };
+        CHECK(ctrpf_pick(&p, 0, 0x256FD000u) == 0);   /* first: buffer 0 */
+        CHECK(ctrpf_pick(&p, 0, 0x2572BE00u) == 1);   /* one top buffer above */
+        CHECK(ctrpf_pick(&p, 0, 0x256FD000u) == 0);
+        CHECK(ctrpf_pick(&p, 1, 0x2575AC00u) == 0);   /* the bottom screen apart */
+        CHECK(ctrpf_pick(&p, 1, 0x25780400u) == 1);   /* 320 * 480 above */
+        CHECK(ctrpf_pick(&p, 0, 0x2572BE00u) == 1);
+        CtrpfPick q = { { 0, 0 } };
+        CHECK(ctrpf_pick(&q, 0, 0x2572BE00u) == 0);   /* first seen was buffer 1: a wrong guess... */
+        CHECK(ctrpf_pick(&q, 0, 0x256FD000u) == 0);   /* ...set right by the lower one */
+        CHECK(ctrpf_pick(&q, 0, 0x2572BE00u) == 1);
+        CHECK(ctrpf_pick(&q, 0, 0x25000000u) == 0);   /* somewhere else: from there again */
+        CHECK(ctrpf_pick(&q, 0, 0x2502EE00u) == 1);
+    }
+
     /* a refused buffer is left alone a moment, the others not */
     {
         PaBackoff b = { { 0 }, { 0 } };

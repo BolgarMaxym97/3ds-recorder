@@ -144,6 +144,25 @@ static inline uint32_t ctrpf_display_buffer(int sc, unsigned index)
     return sc == 0 ? CTRPF_VA + index * top : CTRPF_VA + 2u * top + index * bottom;
 }
 
+/* Which of a screen's two CTRPF buffers the screen shows, from the addresses it shows alone: the
+   plugin's memory is one block, so buffer 1 is one buffer above buffer 0 in physical memory too
+   (06000000 -> 256FD000, 0602EE00 -> 2572BE00, O3DS logs 2026-11-22). No asking Luma for the
+   physical address (GET_PA_FROM_VA walks the game's page tables without a lock: the kernel went down
+   three times, Mario Kart 7 with its plugin's menu, O3DS 2026-11-22/23). An address not one buffer
+   above the lowest seen starts again from it as buffer 0; a wrong first guess shows the menu's other,
+   previous picture until the lower buffer comes. lo: per screen, 0 at a new game. */
+typedef struct {
+    uint32_t lo[2];
+} CtrpfPick;
+static inline unsigned ctrpf_pick(CtrpfPick *p, int sc, uint32_t pa)
+{
+    const uint32_t step = sc == 0 ? 400u * 480u : 320u * 480u;
+    uint32_t *lo = &p->lo[sc ? 1 : 0];
+    if (pa != *lo && pa != *lo + step)
+        *lo = pa;
+    return pa == *lo ? 0u : 1u;
+}
+
 /* A framebuffer the kernel refused to DMA from (D04007F0) is left alone for a moment, that one
    only: all of the application's frames were skipped for 0.5 s after any refusal, 7100 frames on
    New 3DS consoles in a day of field logs (2026-11-21), most of them from buffers that read fine. */

@@ -173,6 +173,18 @@ static void perf_frame(const App *a, u64 ticks)
 }
 #endif
 
+/* HOME from the app went unanswered once (O3DS XL, 2026-11-22: 60 s, then POWER held): each APT
+   event goes into app.log, and so does a main loop that stood still (aptMainLoop is what answers
+   HOME), to tell a stuck loop from an event that never came. */
+static volatile bool g_aptAway;   /* an APT event since the last round: a long round is no stall */
+static void apt_log(APT_HookType hook, void *param)
+{
+    (void)param;
+    static const char *const names[] = {"suspend", "restore", "sleep", "wakeup", "exit"};
+    g_aptAway = true;
+    app_log("apt: %s", (unsigned)hook < sizeof(names) / sizeof(names[0]) ? names[hook] : "?");
+}
+
 int main(int argc, char **argv)
 {
     romfsInit();
@@ -195,6 +207,9 @@ int main(int argc, char **argv)
     const bool ready = top && bottom && ui_init();
     app_init(&app, self);
     lid_init();
+    static aptHookCookie aptCookie;
+    aptHook(&aptCookie, apt_log, NULL);
+    u64 roundAt = osGetTime();
 
 #ifdef UI_TOUR
     gfxSetDoubleBuffering(GFX_TOP, false);
@@ -207,6 +222,12 @@ int main(int argc, char **argv)
     u32 idle = 0, skipped = 0; /* frames without input; frames not drawn since the last drawn one */
     touchPosition first = {0, 0}, last = {0, 0};
     while (ready && aptMainLoop() && !app.quit) {
+        const u64 nowMs = osGetTime();
+        if (nowMs - roundAt > 1500 && !g_aptAway)
+            app_log("main loop stood still %llu ms (screen %d, busy %s)", (unsigned long long)(nowMs - roundAt),
+                    (int)app.screen, app.busy ? "yes" : "no");
+        roundAt = nowMs;
+        g_aptAway = false;
         hidScanInput();
         Input in = {.down = hidKeysDown(), .held = hidKeysHeld()};
         if (hidKeysHeld() & KEY_TOUCH) {

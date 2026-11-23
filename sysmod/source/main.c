@@ -352,6 +352,13 @@ static char g_logBuf[LOG_BUF], g_logOut[LOG_BUF], g_logLine[1536];
 static volatile u32 g_logLen;
 static LightLock g_logLock;
 static bool g_logLockOk;
+/* ptm powers the console off (0x108): nothing more goes onto the card. A kernel panic in ptm came at
+   power-offs while the module wrote to the card (a line for each process ending, O3DS 2026-11-16; a
+   recording being saved and its ~15 lines, field 2026-11-23 and O3DS 2026-11-23, reproduced), never
+   at the hundreds of power-offs with an idle module's line or two. The lines from then on stay in
+   memory and go with the process; a recording is left as it is on the card (PowerOffLeave) and
+   RecoverCutOff makes it whole at the next start. */
+static volatile bool g_powerOffQuiet;
 
 static void LogWrite(const char *text, u32 len)
 {
@@ -368,7 +375,7 @@ static void LogWrite(const char *text, u32 len)
 /* The lines kept in memory, onto the card. */
 static void LogFlush(void)
 {
-    if (!g_logLockOk || !g_logLen)
+    if (!g_logLockOk || !g_logLen || g_powerOffQuiet)
         return;
     /* copied out first: the main thread's next line must not wait for the card behind this lock */
     LightLock_Lock(&g_logLock);
@@ -403,7 +410,15 @@ static void Log(const char *fmt, ...)
     va_end(ap);
     n += t < 0 ? 0 : t >= room ? room - 1 : t;
     g_logLine[n++] = '\n';
-    if (g_recording && g_logLockOk && g_logLen + (u32)n <= LOG_BUF)
+    if (g_powerOffQuiet)
+    {
+        if (g_logLen + (u32)n <= LOG_BUF)
+        {
+            memcpy(g_logBuf + g_logLen, g_logLine, (size_t)n);
+            g_logLen += (u32)n;
+        }
+    }
+    else if (g_recording && g_logLockOk && g_logLen + (u32)n <= LOG_BUF)
     {
         memcpy(g_logBuf + g_logLen, g_logLine, (size_t)n);
         g_logLen += (u32)n;
@@ -2410,10 +2425,22 @@ static void HidClose(void)
     g_hidMem = g_hidSrv = 0;
 }
 
-/* hid:USER GetIPCHandles: the shared memory (mapped read-only) and five events (not used: closed) */
+/* GetIPCHandles: the shared memory (mapped read-only) and five events (not used: closed). The session
+   stays open while the shared memory is mapped, as any program's (libctru hidInit): it used to be
+   closed right after the map, and a power-off with a recording running took the console down
+   (hid, i2c, ptm: an imprecise abort or a kernel panic, O3DS 2026-11-23, 2 of 2) while it never
+   did with the buttons off (0 of 4). hid:SPVR first, as libctru: its own sessions, so a game
+   started later still gets one of hid:USER's few. */
+static const char *g_hidName = "";
 static Result HidOpen(void)
 {
-    Result rc = srvGetServiceHandle(&g_hidSrv, "hid:USER");
+    g_hidName = "hid:SPVR";
+    Result rc = srvGetServiceHandle(&g_hidSrv, g_hidName);
+    if (R_FAILED(rc))
+    {
+        g_hidName = "hid:USER";
+        rc = srvGetServiceHandle(&g_hidSrv, g_hidName);
+    }
     if (R_FAILED(rc))
     {
         g_hidSrv = 0;
@@ -2434,11 +2461,6 @@ static Result HidOpen(void)
         if (R_SUCCEEDED(rc))
             g_hidShm = (vu32 *)HID_SHM_VA;
     }
-    /* the session no longer: hid:USER has few, and a game started later needs one; the shared memory
-       stays mapped (our handle keeps it) and HID updates it for every client */
-    if (g_hidSrv)
-        svcCloseHandle(g_hidSrv);
-    g_hidSrv = 0;
     if (R_FAILED(rc))
         HidClose();
     return rc;
@@ -2892,31 +2914,17 @@ static bool RangeReadable(Handle proc, u32 va, u32 size)
     return true;
 }
 
-/* Where CTRPF's buffers are: Luma's GET_PA_FROM_VA walks the game's page tables without a lock and
-   took the kernel down while the plugin changed the game's memory, asked on every frame (O3DS
-   2026-11-22, Mario Kart 7 with its plugin's menu and the Replay buffer on), and again when asked
-   only when the menu flipped its two buffers. A plugin's buffers stay where they are while the game
-   runs, so each one is asked about once per game (its first page; the plugin's memory is one
-   block), at most every CTRPF_PROBE_TICKS while one is not known yet; then never again. */
-typedef struct
-{
-    u32 pid;
-    u32 pa[2][2];   /* [screen][buffer]: 0 not known (yet) */
-    u64 nextProbe;
-} CtrpfMap;
-static CtrpfMap g_ctrpfMap;
-#define CTRPF_PROBE_TICKS (5ull * SYSCLOCK_ARM11)
-
-static int CtrpfMatch(int sc, u32 pa)
-{
-    for (int i = 0; i < 2; i++)
-        if (g_ctrpfMap.pa[sc][i] && g_ctrpfMap.pa[sc][i] == pa)
-            return i;
-    return -1;
-}
+/* Which CTRPF buffer a screen shows (front.h ctrpf_pick), for the game g_ctrpfPid. Luma's
+   GET_PA_FROM_VA is not asked at all any more: it walks the game's page tables without a lock and
+   took the kernel down while the plugin changed the game's memory, asked on every frame, then on
+   every flip, then once per game (O3DS 2026-11-22 twice; 2026-11-23: R + SELECT stopped the
+   recording and opened the plugin's menu, the Replay buffer started again on it, the first look
+   asked Luma, and an imprecise abort hit i2c on core 1). */
+static CtrpfPick g_ctrpfPick;
+static u32 g_ctrpfPid;
 
 /* A frame of a CTRPluginFramework menu (front.h ctrpf_display_layout): read from the plugin's own
-   buffer in the game, at CTRPF_VA, when the screen shows that buffer's address (CtrpfMap).
+   buffer in the game, at CTRPF_VA (which of the two: ctrpf_pick).
    Anything else: not read (DEAD0026). */
 static Result CtrpfDma(Handle *dma, u8 *dst, int sc, u32 pa, u32 fmt, u32 stride, u32 size, DmaConfig *cfg)
 {
@@ -2925,33 +2933,14 @@ static Result CtrpfDma(Handle *dma, u8 *dst, int sc, u32 pa, u32 fmt, u32 stride
     if (!g_appPid && !FindApp())
         return (Result)0xDEAD0026;
     sc = sc ? 1 : 0;
-    if (g_ctrpfMap.pid != g_appPid)
-        memset(&g_ctrpfMap, 0, sizeof(g_ctrpfMap)), g_ctrpfMap.pid = g_appPid;
-    int i = CtrpfMatch(sc, pa);
-    const bool unknown = !g_ctrpfMap.pa[sc][0] || !g_ctrpfMap.pa[sc][1];
-    const u64 now = Ticks();
-    if (i < 0 && (!unknown || now < g_ctrpfMap.nextProbe))
-        return (Result)0xDEAD0026;
+    if (g_ctrpfPid != g_appPid)
+        memset(&g_ctrpfPick, 0, sizeof(g_ctrpfPick)), g_ctrpfPid = g_appPid;
     Handle app = 0;
     if (R_FAILED(svcOpenProcess(&app, g_appPid)))
         return (Result)0xDEAD0026;
-    if (i < 0)
-    {
-        enum { GET_PA_FROM_VA = 4 };
-        g_ctrpfMap.nextProbe = now + CTRPF_PROBE_TICKS;
-        for (int k = 0; k < 2; k++)
-        {
-            const u32 va = ctrpf_display_buffer(sc, (unsigned)k);
-            u32 got = 0;
-            if (!g_ctrpfMap.pa[sc][k] && RangeReadable(app, va, 1) &&
-                R_SUCCEEDED(svcControlProcess(app, GET_PA_FROM_VA, (u32)&got, va)))
-                g_ctrpfMap.pa[sc][k] = got;
-        }
-        i = CtrpfMatch(sc, pa);
-    }
     Result rc = (Result)0xDEAD0026;
-    const u32 va = i < 0 ? 0 : ctrpf_display_buffer(sc, (unsigned)i);
-    if (va && RangeReadable(app, va, size))
+    const u32 va = ctrpf_display_buffer(sc, ctrpf_pick(&g_ctrpfPick, sc, pa));
+    if (RangeReadable(app, va, size))   /* svcQueryProcessMemory: the kernel's own, locked look */
     {
         rc = svcStartInterProcessDma(dma, CUR_PROCESS_HANDLE, (u32)dst, app, va, size, cfg);
         if (R_SUCCEEDED(rc) && g_recording && g_ctrpfFrames++ == 0)
@@ -4113,15 +4102,23 @@ static bool ProcessWatch(void)
     memcpy(knownTid, tids, sizeof(knownTid));
     knownN = n;
     bool home = false, applet = false;
+    u64 appletTid = 0;   /* which one: a New 3DS hung with an applet open after HOME, 2026-11-22, unnamed */
     for (s32 i = 0; i < n; i++)
     {
         home = home || ag_is_home(tids[i]);
-        applet = applet || (ag_is_applet(tids[i]) && !ag_is_home(tids[i]));
+        if (ag_is_applet(tids[i]) && !ag_is_home(tids[i]))
+        {
+            applet = true;
+            if (!appletTid)
+                appletTid = tids[i];
+        }
     }
     homeSeen = homeSeen || home;
     const bool up = applet || (homeSeen && !home);
-    if (up != g_appletUp)
-        Log("applet %s; %s", up ? applet ? "running" : "coming (HOME Menu ended)" : "gone, HOME Menu back", doing);
+    if (up != g_appletUp && up && applet)
+        Log("applet running (title %016llX); %s", appletTid, doing);
+    else if (up != g_appletUp)
+        Log("applet %s; %s", up ? "coming (HOME Menu ended)" : "gone, HOME Menu back", doing);
     g_appletUp = up;
     return true;
 }
@@ -4489,6 +4486,66 @@ static bool GameHasPlugin(u64 tid)
     }
     FSDIR_Close(h);
     return found || R_FAILED(rc) || scanned == 32;
+}
+
+/* Started by the app right after it ended the older recorder (an update): that one may still be
+   going away, its megabytes of SYSTEM memory being given back. Asking the kernel how much memory
+   is free (svcGetSystemInfo) just then panicked it once (O3DS XL, the 1.5.0 update, 2026-11-21:
+   pc FFF1C1D8 lr FFF14754, in the "memory mode" line). So nothing asks before no other process of
+   this title is left, plus a moment for its memory (at most 3 s). Returns the ms waited. */
+static u32 g_olderWaitMs;
+static u32 OlderModuleGone(void)
+{
+    s64 own = 0;
+    if (R_FAILED(svcGetProcessInfo(&own, CUR_PROCESS_HANDLE, 0x10001)) || !own)
+        return 0;
+    const u64 t0 = Ticks();
+    bool seen = false;
+    for (u32 round = 0; round < 60; round++)   /* 50 ms each */
+    {
+        u32 pids[64];
+        s32 n = 0;
+        bool older = false;
+        if (R_SUCCEEDED(svcGetProcessList(&n, pids, 64)))
+            for (s32 i = 0; i < n && !older; i++)
+            {
+                Handle h = 0;
+                s64 tid = 0;
+                if (pids[i] == g_ownPid || R_FAILED(svcOpenProcess(&h, pids[i])))
+                    continue;
+                older = R_SUCCEEDED(svcGetProcessInfo(&tid, h, 0x10001)) && tid == own;
+                svcCloseHandle(h);
+            }
+        if (!older)
+            break;
+        seen = true;
+        svcSleepThread(50 * 1000 * 1000);
+    }
+    if (seen)   /* gone from the list: a moment more for the kernel to take its memory back */
+        svcSleepThread(300 * 1000 * 1000);
+    return seen ? (u32)(TicksToUs64(Ticks() - t0) / 1000u) : 0;
+}
+
+/* The replay buffer ran with the normal memory profile and a recording takes over from it: its memory
+   is back, but HOME Menu (or the game) may still hold some for a moment. The recording then started
+   with the light profile (a 1 MB ring) and lost 321 frames of 1810 (Mario Kart 7, 0.3 s after the
+   buffer and 4 s after HOME, O3DS 2026-11-23), while the next one a minute later had the normal one
+   and lost none. Up to 1 s for SYSTEM memory to come back over LITE_BELOW; asked at most 3 times,
+   0.5 s apart (asking for free memory while it changes is what panicked the kernel: FFF1C1D8). */
+static void WaitMemoryBack(void)
+{
+    const u32 first = osGetMemRegionFree(MEMREGION_SYSTEM);
+    if (first >= LITE_BELOW)
+        return;
+    u32 now = first, waited = 0;
+    while (now < LITE_BELOW && waited < 1000)
+    {
+        svcSleepThread(500 * 1000 * 1000);
+        waited += 500;
+        now = osGetMemRegionFree(MEMREGION_SYSTEM);
+    }
+    Log("recording after the replay buffer: SYSTEM free %lu KB, waited %lu ms: %lu KB (%s profile)", first / KB, waited,
+        now / KB, now >= LITE_BELOW ? "normal" : "still light");
 }
 
 /* At start: in which memory mode, whether the launcher plugin started us; removes our order.
@@ -6157,6 +6214,34 @@ static void ConvWaitOut(void)
     Log("stop: the converter took over 2 s to leave its frame%s", g_convInSlot ? ", still in it after 30 s more" : "");
 }
 
+/* The console powers off (0x108) with a recording or the replay buffer running: capture and card
+   writes stop, nothing more is written (g_powerOffQuiet). The recording's file (NEXT_FS) and its
+   safe length (INFO_FS) stay on the card as they are; RecoverCutOff at the next start keeps every
+   whole record up to there (under a second of the end is lost). A replay buffer is just dropped. */
+static void PowerOffLeave(void)
+{
+    const bool replay = g_replay;
+    g_recording = false;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    g_writerActive = false;
+    for (u32 i = 0; i < 500 && g_writerBusy; i++)   /* the block being written (~50-300 ms) */
+        svcSleepThread(2 * 1000 * 1000);
+    for (u32 i = 0; i < 2 * MAX_SLOTS; i++)
+    {
+        Slot *sl = &g_slots[i];
+        if (sl->state == 1 && sl->dma)
+        {
+            svcStopDma(sl->dma);
+            svcCloseHandle(sl->dma);
+            sl->dma = 0;
+        }
+    }
+    g_replay = false;
+    g_shared.state = REC_STATE_IDLE;
+    Log("power-off: %s left as it is on the card (the next start recovers it), no more card writes",
+        replay ? "the replay buffer" : "the recording");
+}
+
 static void StopRecording(const char *why, bool releaseFirst)
 {
     g_savedOk = false;
@@ -6228,8 +6313,8 @@ static void StopRecording(const char *why, bool releaseFirst)
     while (g_convInAudio)   /* ... once it leaves DrainAudio */
         svcSleepThread(1 * 1000 * 1000);
     if (hadInputs || g_inRc)
-        Log("buttons: %s, %lu samples in %lu records (%lu KB), %lu lost", hadInputs ? "kept" : "no HID", g_inSamples,
-            g_inRecords, (g_inSamples * 8u + g_inRecords * 24u) / KB, g_inLost);
+        Log("buttons: %s, %lu samples in %lu records (%lu KB), %lu lost (%s)", hadInputs ? "kept" : "no HID", g_inSamples,
+            g_inRecords, (g_inSamples * 8u + g_inRecords * 24u) / KB, g_inLost, g_hidName);
     if (g_inRc)
         Log("buttons: hid:USER refused (%08lX)", (unsigned long)g_inRc);
     HidClose();   /* a session only while recording */
@@ -6595,6 +6680,8 @@ int main(void)
     EarlyLoader();
     if (g_bootStart)   /* the rest of the system is still starting */
         svcSleepThread(2000 * 1000 * 1000);
+    else   /* before the first question about free memory (the "recorder started" line) */
+        g_olderWaitMs = OlderModuleGone();
     LoadConfig();
     ArmSelect();
     InitLed();
@@ -6720,6 +6807,8 @@ int main(void)
         CodecBench();
     Log("start: %s, %lu ms after the kernel, waited %lu ms for the card and services; launch on startup %s", g_bootStart ? "WITH THE CONSOLE" : "by the app or the plugin",
         (u32)(TicksToUs64(g_startTick) / 1000u), (u32)g_bootWaitMs, g_cfg.autostart ? "on" : "off");
+    if (g_olderWaitMs)
+        Log("start: the older recorder was still going away: waited %lu ms for it", g_olderWaitMs);
     if (appPidAtStart)
         Log("application at the start: pid %lu title %016llX, the applications' memory limit %s", appPidAtStart,
             (u64)appTidAtStart, g_appResLimit ? "kept for later" : "NOT reachable");
@@ -6817,7 +6906,7 @@ int main(void)
         }
         if (g_plgTryAt && Ticks() - g_plgTryAt > PLG_TRY_OK_US * (SYSCLOCK_ARM11 / 1000000u))
             PluginTryEnd("runs 30 s with the launcher plugin");
-        if (Ticks() - lastBattery > 600ull * SYSCLOCK_ARM11)   /* every ten minutes, whatever runs */
+        if (!g_shutdownSeen && Ticks() - lastBattery > 600ull * SYSCLOCK_ARM11)   /* every ten minutes, whatever runs (not while the system goes down: mcu, ptm:u) */
         {
             lastBattery = Ticks();
             const Battery b = BatteryNow();
@@ -6838,7 +6927,11 @@ int main(void)
         if (g_recording)
             LedKeep(g_replay);
         g_shared.replayOn = g_cfg.replay;
-        if ((g_recording || lidClosed) && ptmu && Ticks() - lastLidPoll > SYSCLOCK_ARM11 / 10)   /* every 100 ms */
+        /* not once the system goes down (0x108 / 0x100): ptm is the one powering off, and a kernel
+           panic in ptm came at a power-off with a recording running three times (pc FFF1C1D8, its
+           kernel stack FF441EC0: O3DS 2026-11-16, field 2026-11-21 and 2026-11-23), while this asked
+           ptm:u ten times a second; the lid means nothing any more then */
+        if ((g_recording || lidClosed) && ptmu && !g_shutdownSeen && Ticks() - lastLidPoll > SYSCLOCK_ARM11 / 10)   /* every 100 ms */
         {
             lastLidPoll = Ticks();
             u8 open = 1;
@@ -6878,8 +6971,18 @@ int main(void)
            (2 while our launcher plugin is swapped out for HOME, 1 again in the game). */
         if (nid == 0x204)
         {
-            Log("HOME pressed: SYSTEM free %lu KB%s", osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
-                g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard) ? ", the recording is saved to give HOME Menu its memory" : "");
+            /* what runs at that moment: HOME in a replay buffer hung the console twice (N2DS XL and
+               O3DS, 2026-11-22/23, ~5 MB SYSTEM free both times) and nothing in the log said more.
+               No more memory queries than before here: svcGetSystemInfo's free memory while another
+               process changes its memory panicked the kernel twice (pc FFF1C1D8 lr FFF14754: the
+               applet guard's polling in 0.12, this module's restart by the 1.5.0 update, 2026-11-21),
+               and HOME Menu takes its memory right now. */
+            Log("HOME pressed: SYSTEM free %lu KB; %s%s%s, applet guard %d%s",
+                osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
+                g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording",
+                g_recording && g_lite ? " (light profile)" : "", g_recording && g_inPlg ? " (in the plugin's memory)" : "",
+                (int)g_guard.st,
+                g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard) ? "; the recording is saved to give HOME Menu its memory" : "");
             /* not a light recording next to an applet (appletguard.h): that one is the guard's.
                A light replay buffer (no-plugin list) ends as well and starts again in the game. */
             if (g_recording && g_lite && !g_inPlg && !ag_lite(&g_guard))
@@ -7038,6 +7141,12 @@ int main(void)
             Log("system notification %03lX: %s", nid, nid == 0x100 ? "the recorder must end" : "power-off or reboot");
             g_shutdownSeen = true;   /* no new recording and no file prepared from now on */
             g_prepStop = g_rpStop = true;   /* a file being made stops growing: the card is left alone */
+            if (nid == PTMNOTIFID_SHUTDOWN)   /* ptm powers off: from here on nothing onto the card */
+            {
+                g_powerOffQuiet = true;
+                if (g_recording)
+                    PowerOffLeave();
+            }
             const bool wasRecording = g_recording && !g_replay;
             const bool gameReboot = nid == 0x100 && !g_powerOffSeen;   /* a game's memory mode, System Settings... */
             if (gameReboot)
@@ -7173,7 +7282,10 @@ int main(void)
             {
                 if (toggle || cmd == REC_CMD_START)
                 {
+                    const bool replayNormal = !g_lite;   /* the buffer had its memory: the recording should too */
                     StopRecording("a recording starts", false);
+                    if (replayNormal)
+                        WaitMemoryBack();
                     if (!StartRecording())
                         LED_SIGNAL(LED_ERROR);
                 }
@@ -7272,6 +7384,11 @@ int main(void)
         svcSleepThread(POLL_IDLE_US * 1000ull);
     }
 
+    if (g_powerOffQuiet)   /* a power-off: the card is left as it is (a recording for RecoverCutOff) */
+    {
+        g_shared.state = REC_STATE_EXITED;
+        svcExitProcess();
+    }
     BootTryDone(NULL);
     /* exit (uninstall / update from the app): nothing may stay behind */
     if (g_prepThread || g_prepFile)

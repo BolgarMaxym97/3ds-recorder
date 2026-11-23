@@ -385,9 +385,12 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const LOCAL = document.documentElement.dataset.mode === 'local';
 
-  // the QR code names the recording; the address typed by hand (shown under the code) does not:
-  // then it is the one the console offers
+  // the QR code names the recording (f) and holds the key (k) the console wants for everything but
+  // this page: no one else on the Wi-Fi reads the recording or the logs. A new key each time the
+  // transfer screen opens, so an old tab gets 403: "pick it on the console again".
   let name = new URLSearchParams(location.search).get('f');
+  const KEY = new URLSearchParams(location.search).get('k') || '';
+  const keyed = (u) => u + (u.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(KEY);
   let info = null;
   let localFile = null; // local mode: the File being converted
   const opts = { scale: 1, eq: true, layout: 'auto', quality: 'normal', inputs: false }; // local mode: size, sound, screens, purpose, buttons (remembered in the browser)
@@ -424,7 +427,7 @@
   function report(msg) {
     if (LOCAL || ++reports > 200) return; // local: no console to tell
     try {
-      fetch('/api/log?m=' + encodeURIComponent(String(msg).slice(0, 300)), { cache: 'no-store' }).catch(() => {});
+      fetch(keyed('/api/log?m=' + encodeURIComponent(String(msg).replace(/[?&]k=[^&\s]*/g, '').slice(0, 300))), { cache: 'no-store' }).catch(() => {});
     } catch (e) { /* no fetch */ }
   }
   const why = (e) => (e && (e.name ? e.name + ': ' : '') + (e.message || '')) || String(e);
@@ -528,7 +531,7 @@
         const before = have;
         try {
           const r = await fetch(this.url, { headers: { Range: `bytes=${a + have}-${b}` }, signal: ctl.signal, cache: 'no-store' });
-          if (r.status === 404) { const e = new Error('404'); e.notFound = true; throw e; }
+          if (r.status === 404 || r.status === 403) { const e = new Error(String(r.status)); e.notFound = true; throw e; }
           if (r.status !== 206 && r.status !== 200) throw new Error('HTTP ' + r.status);
           if (r.body && r.body.getReader) {
             const rd = r.body.getReader();
@@ -1005,7 +1008,7 @@
 
   // mode: { fast, label, make(hdr, onTime, conv), inputs (draw the buttons), trim ({ from, to } s, fast only) }
   async function run(mode) {
-    const url = '/rec/' + encodeURIComponent(name);
+    const url = keyed('/rec/' + encodeURIComponent(name));
     let enc = null, hdr = null, firstErr = null;
     // a part (trim): the frames before it are decoded but not made, the video starts at its start; the
     // reading stops after its end. The sound by its samples (the decoder places them from time 0).
@@ -1160,7 +1163,8 @@
       ` | mem ${navigator.deviceMemory || '?'} GB | secure ${window.isSecureContext} | VideoEncoder ${typeof VideoEncoder}` +
       ` | MediaRecorder ${typeof MediaRecorder}`);
     try {
-      const r = await fetch('/api/rec', { cache: 'no-store' });
+      const r = await fetch(keyed('/api/rec'), { cache: 'no-store' });
+      if (r.status === 403) { report('no key or an old one: 403'); fail(t('notFound')); return; }
       info = await r.json();
     } catch (e) { fail(t('lost'), main); return; }
     if (!name) name = info.name;
@@ -1174,10 +1178,11 @@
     $('fname').textContent = name;
     $('len').textContent = clock(info.ms / 1000);
     const raw = $('raw');
-    raw.href = '/rec/' + encodeURIComponent(name);
+    raw.href = keyed('/rec/' + encodeURIComponent(name));
     raw.download = name;
     raw.textContent = t('raw');
     $('sd').textContent = t('sd');
+    $('diag').href = keyed('/log.txt');
     $('diag').addEventListener('click', () => report('diagnostics file saved'));
     step(3, '');
     if (info.prep && info.prep !== 'failed') consoleVideo();
@@ -1305,7 +1310,7 @@
         (st.prep === 'working' ? t('c1x') : t('c1q')) + (left ? ' · ' + t('left', duration(left)) : ''));
       await sleep(1000);
       try {
-        st = await (await fetch('/api/rec', { cache: 'no-store' })).json();
+        st = await (await fetch(keyed('/api/rec'), { cache: 'no-store' })).json();
         fails = 0;
       } catch (e) {
         if (++fails >= 5) { fail(t('lost'), consoleVideo); return; }
@@ -1318,7 +1323,7 @@
     const stem = name.replace(/\.r3d$/, '');
     const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(name) || [];
     const direct = $('direct');
-    direct.href = '/rec/' + encodeURIComponent(stem + '.mp4');
+    direct.href = keyed('/rec/' + encodeURIComponent(stem + '.mp4'));
     direct.download = `3DS ${m[1]}-${m[2]}-${m[3]} ${m[4]}-${m[5]}-${m[6]}.mp4`;
     if (st.mp4 > BIG_MP4) { // too big to hold in a phone's memory: the browser's own download
       direct.textContent = t('direct') + ' · ' + mb(st.mp4);
@@ -1330,7 +1335,7 @@
       return;
     }
     const parts = [];
-    const dl = new Download('/rec/' + encodeURIComponent(stem + '.mp4'), st.mp4, async (piece) => { parts.push(piece); },
+    const dl = new Download(keyed('/rec/' + encodeURIComponent(stem + '.mp4')), st.mp4, async (piece) => { parts.push(piece); },
       (g, size, rate) => {
         const rest = rate ? (size - g) / rate : 0;
         step(2, g >= size ? 'done' : 'on', (g / size) * 100, Math.floor((g / size) * 100) + '%',

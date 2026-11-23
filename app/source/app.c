@@ -501,6 +501,13 @@ static bool run_pending(App *a)
             say(a, T(S_MSG_STARTED));
             if (a->screen == SCR_FIRSTRUN)
                 go(a, SCR_PANEL, 0);
+        } else if (g_workRc == -3) {
+            /* recorder_install_and_start: Luma's "Enable loading external FIRMs and modules" is off.
+               The first-run screen says how to turn it on; a toast "(luma, FFFFFFFD)" did not
+               (the most frequent start error in the field logs, 45 times by 2026-11-23, issue #4) */
+            app_log("start refused: Luma's external modules option is off: first-run screen");
+            a->lumaModules = false;
+            go(a, SCR_FIRSTRUN, 0);
         } else {
             /* C8804478 (FS: not found) from pm when it launched the module. Luma started from
                CTRNAND looks for the module there, not on the SD card (recorder_luma_sd_mode); else
@@ -1744,7 +1751,8 @@ static void phone_start(App *a)
     ServerStats ss;
     server_stats(&ss);
     static const char *const states[] = {"off", "no Wi-Fi", "failed", "running"};
-    app_log("download: %s, server %s %s, prepare %d", a->phoneName, (unsigned)st < 4 ? states[st] : "?", ss.url,
+    app_log("download: %s, server %s %s, prepare %d", a->phoneName, (unsigned)st < 4 ? states[st] : "?",
+            ss.address,   /* not ss.url: its key stays out of app.log (it goes to the statistics) */
             (int)prepare_state(a->phoneName, NULL));
     if (st == SRV_RUNNING) {
         u8 tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
@@ -2608,11 +2616,11 @@ static void draw_panel_bottom(App *a)
         char len[16], title[48], off[64];
         replay_len_label(a->cfg.replaySec, len, sizeof(len));
         snprintf(title, sizeof(title), T(S_REPLAY), len);
-        snprintf(off, sizeof(off), T(S_TILE_REPLAY_OFF), len);
+        snprintf(off, sizeof(off), T(S_TILE_REPLAY_OFF), hk);   /* the clip key does nothing while it is off (31 presses so in the field logs, 2026-11-23) */
         snprintf(buf, sizeof(buf), T(S_TILE_REPLAY_ON), hk);
         ui_text(r.x + 10, r.y + 9, 11, FONT_BOLD, COL_TEXT, title);
         ui_toggle(r.x + r.w - 42, r.y + 8, a->cfg.replay);
-        ui_text(r.x + 10, r.y + 27, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : off);
+        ui_text_fit(r.x + 10, r.y + 27, r.w - 20, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : off);
     }
     static const Icon icon[4] = {ICON_CHECK, ICON_GRID, ICON_INFO, ICON_SLIDERS};
     const Str title[4] = {S_TILE_RECORDER, S_TILE_GALLERY, S_TILE_HELP, S_TILE_SETTINGS};
