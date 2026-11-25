@@ -1,0 +1,31 @@
+{
+  "name": "3ds-recorder-promo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prep": "bash prep.sh",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Promo out/promo.mp4 --codec h264 --crf 16 --gl angle",
+    "still": "remotion still src/index.ts Promo"
+  },
+  "dependencies": {
+    "@react-three/drei": "10.7.9",
+    "@react-three/fiber": "9.8.2",
+    "@react-three/postprocessing": "3.2.2",
+    "@remotion/cli": "4.0.547",
+    "@remotion/google-fonts": "4.0.547",
+    "@remotion/media": "4.0.547",
+    "@remotion/motion-blur": "4.0.547",
+    "@remotion/three": "4.0.547",
+    "postprocessing": "6.39.6",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.547",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.1",
+    "@types/three": "0.187.0",
+    "typescript": "7.0.2"
+  }
+}
