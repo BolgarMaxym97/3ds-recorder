@@ -9,6 +9,11 @@
   <b>English</b> · <a href="README.uk.md"><b>Українська</b></a>
 </p>
 
+https://github.com/user-attachments/assets/d1b3c15e-1c8d-4e66-b38b-ae4036cdea3c
+
+<p align="center"><sub>Every clip was recorded on a real 3DS with 3DS Recorder itself. Also on <a href="https://youtu.be/zydtKqTY6Zo">YouTube</a>.<br>
+3D models (CC BY 4.0, Sketchfab): “Nintendo 3DS” by Broeach8972, “Apple iPhone 13 Pro Max” by DatSketch. Music: “High Energy Adventure Theme” by srg774 (CC0).</sub></p>
+
 <p align="center">
   <img src="docs/screenshots/en/panel.png" width="260" alt="Main screen">
   <img src="docs/screenshots/en/gallery.png" width="260" alt="Gallery">
