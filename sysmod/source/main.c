@@ -2010,14 +2010,15 @@ static Result g_dspCacheRc;   /* first failure of the cache invalidation, for th
 
 /* Diagnostics for recordings without sound (Pokemon Ultra Moon on a New 2DS XL: two frames, then
    nothing while the DSP ran, field logs 2026-11-19). The final mix is read at fixed places; these
-   say whether the DSP still went on there (its frame counters) while no frame came, and once per
-   recording where in its memory it writes then (DspScan). */
+   say whether the DSP still went on there (its frame counters) while no frame came. (1.6.0-1.7.0
+   also scanned all DSP memory on the first stall; a read there while the DSP was being reset at a
+   game's start aborted the module and rebooted the console, so the scan is gone.) */
 static u16  g_dspCntFirst[2], g_dspCntPrev[2];
 static bool g_dspCntSeen;
 static u32  g_dspCntChanges;     /* polls whose counters differed from the previous poll's */
 static u64  g_audioLastFrameTick;
 static u32  g_audioStalls;       /* times the DSP ran on with no new frame for AUDIO_STALL_US */
-static bool g_audioInStall, g_dspScanned;
+static bool g_audioInStall;
 static u8   g_dspOffOr, g_dspOffLast;   /* PDN_DSP_CNT's values while "off" (CSND games?) */
 #define AUDIO_STALL_US 1000000u
 
@@ -2095,53 +2096,6 @@ static void RingCommit(u32 advance)
  * changed. A block equal to the last one taken from that region (silence,
  * paused DSP) is not stored. Tests: plan 3.7.
  */
-/* Where the DSP writes now: its memory (0x1FF00000-0x1FF7FFFF) hashed in 256-byte chunks twice
-   ~10 ms apart, the chunks that changed logged as ranges. Once per recording, on its first stall. */
-#define DSP_SCAN_BASE  0x1FF00000u
-#define DSP_SCAN_SIZE  0x80000u
-#define DSP_SCAN_CHUNK 256u
-static u32 g_dspScanHash[DSP_SCAN_SIZE / DSP_SCAN_CHUNK];
-
-static u32 DspChunkHash(u32 va)
-{
-    const volatile u32 *p = (const volatile u32 *)va;
-    u32 h = 2166136261u;
-    for (u32 i = 0; i < DSP_SCAN_CHUNK / 4u; i++)
-        h = (h ^ p[i]) * 16777619u;
-    return h;
-}
-
-static void DspScan(void)
-{
-    const u32 n = DSP_SCAN_SIZE / DSP_SCAN_CHUNK;
-    DspInvalidate(DSP_SCAN_BASE, DSP_SCAN_SIZE);   /* once a pass: 2048 calls a chunk took far longer */
-    for (u32 i = 0; i < n; i++)
-        g_dspScanHash[i] = DspChunkHash(DSP_SCAN_BASE + i * DSP_SCAN_CHUNK);
-    svcSleepThread(10ull * 1000 * 1000);
-    DspInvalidate(DSP_SCAN_BASE, DSP_SCAN_SIZE);
-    char line[480];
-    u32 len = 0, ranges = 0, changed = 0;
-    s32 from = -1;
-    for (u32 i = 0; i <= n; i++)
-    {
-        const bool ch = i < n && DspChunkHash(DSP_SCAN_BASE + i * DSP_SCAN_CHUNK) != g_dspScanHash[i];
-        changed += ch;
-        if (ch && from < 0)
-            from = (s32)i;
-        else if (!ch && from >= 0)
-        {
-            if (len < sizeof(line) - 24u)
-                len += (u32)snprintf(line + len, sizeof(line) - len, " %05lX-%05lX", (u32)from * DSP_SCAN_CHUNK,
-                                     i * DSP_SCAN_CHUNK);
-            ranges++;
-            from = -1;
-        }
-    }
-    line[len] = 0;
-    Log("audio stall: DSP memory written in 10 ms: %lu chunks of 256 B in %lu ranges (offsets from 1FF00000):%s", changed,
-        ranges, len ? line : " none");
-}
-
 static void PollAudio(void)
 {
     if (!g_aq)
@@ -2211,11 +2165,6 @@ static void PollAudio(void)
     {
         g_audioInStall = true;
         g_audioStalls++;
-        if (!g_dspScanned)
-        {
-            g_dspScanned = true;
-            DspScan();
-        }
     }
     const bool both = done[0] && done[1];
     if (both)
@@ -5829,7 +5778,7 @@ static bool StartRecordingAs(bool replay)
     g_audioReserve = g_aq != NULL;
     g_aqHead = g_aqTail = 0;
     g_audioFrames = g_audioDropped = g_dspSnaps = g_dspOffPolls = 0;
-    g_dspCntSeen = g_audioInStall = g_dspScanned = false;
+    g_dspCntSeen = g_audioInStall = false;
     g_dspCntChanges = g_audioStalls = 0;
     g_dspOffOr = g_dspOffLast = 0;
     g_dspCacheRc = 0;
