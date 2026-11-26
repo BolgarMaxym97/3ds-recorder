@@ -4267,6 +4267,11 @@ static const u32 NO_PLG_BUILTIN[] = {
     0x0011D700u,   /* Monster Hunter 4G (JPN) */
     0x00155400u,   /* Monster Hunter X (JPN) */
     0x00197100u,   /* Monster Hunter XX (JPN) */
+    /* CTGP-7: its own title only starts Mario Kart 7 with the CTGP-7 plugin. With our order it
+       never got that far on Old 3DS (field logs 1.5.0-1.7.0: 50 reboots into it on 27 consoles,
+       none came back unless the recorder starts with the console; Reddit 2026-11-26). Our plugin
+       never ran in it, so PLG_TRY_FS could not learn it. */
+    0x03070C00u,
 };
 static u32 g_noPlg[NO_PLG_MAX];
 static u32 g_noPlgCount;
