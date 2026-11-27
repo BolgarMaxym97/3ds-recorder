@@ -6529,19 +6529,20 @@ static u32 SeeApplication(s64 *tidOut)
    with how much memory, whatever the recorder is doing. In a recording UpdateBoost says it too;
    the replay buffer and the idle recorder said nothing, and a report about a game that did not
    start had no line naming the game (New 3DS, 2026-11-14). */
-static void LogStarted(void)
+static u32 LogStarted(void)
 {
     s64 tid = 0;
     const u32 pid = SeeApplication(&tid);
     if (!pid)
     {
         Log("program started: gone again 3 s later (%s)", CpuState());
-        return;
+        return 0;
     }
     Log("program started: pid %lu title %016llX (%s; application memory %lu KB, free %ld KB; SYSTEM free %lu KB; %s)",
         pid, (u64)tid, CpuState(), OS_KernelConfig->memregion_sz[0] / KB,
         (s32)osGetMemRegionFree(MEMREGION_APPLICATION) / (s32)KB, osGetMemRegionFree(MEMREGION_SYSTEM) / KB,
         g_recording ? g_replay ? "the replay buffer runs" : "a recording runs" : "not recording");
+    return pid;
 }
 
 /* New 3DS: the application memory limit pm left too low after an application ended (front.h
@@ -6570,6 +6571,89 @@ static void AppMemFix(void)
     const Result rc = svcSetResourceLimitValues(g_appResLimit, &cat, &value, 1);
     Log("application memory limit %lu KB put back to %lu KB (rc %08lX, now %lu KB)", before / KB, full / KB, (u32)rc,
         *(const volatile u32 *)0x1FF80040 / KB);
+}
+
+/* CTGP-7's launcher title (the New 3DS above all): it lives a few seconds and starts Mario Kart 7 with its
+   plugin. On three New 3DS consoles (USA, recorder started from the app) it never left: no Mario
+   Kart, HOME did nothing, the console was forced off (D1 2026-11-17..26, Reddit 2026-11-27), and
+   the log said nothing in between. These lines say where it stands. Only cheap looks: the config
+   page, the process list and APT (as after HOME); never plg:ldr (one session, the launcher's now)
+   and no free-memory queries (kernel panics next to a process changing its memory, see HOME). */
+#define CTGP_LAUNCHER_TID  0x03070C00u
+#define CTGP_WATCH_S       300u    /* watched this long at most */
+#define CTGP_REPORT_S      30u     /* a line this often while it stays */
+static struct {
+    u64 at;          /* the launcher started (tick); 0 not watched */
+    u32 pid;
+    u32 lastReport;  /* seconds of the last "still there" line */
+    u64 homeLookAt;  /* HOME pressed in it: APT is asked at this tick */
+} g_ctgp;
+
+static void CtgpLine(const char *what, u32 secs)
+{
+    const u32 pid = ApplicationPid();
+    const u32 active = AptActiveApplet();
+    Log("CTGP-7 launcher %s %lu s: APT applet in front %03lX, application pid %lu (%s), plugin status %lu, "
+        "application memory limit %lu KB, memory type %lu",
+        what, secs, active, pid, pid == g_ctgp.pid ? "the launcher" : pid ? "another one" : "none",
+        *(const volatile u32 *)0x1FF800F0 & 0xFFFFu, *(const volatile u32 *)0x1FF80040 / KB,
+        (u32)*(const volatile u8 *)0x1FF80030);
+}
+
+/* From LogStarted's moment: the launcher is the application now. */
+static void CtgpWatchStart(u32 pid)
+{
+    memset(&g_ctgp, 0, sizeof(g_ctgp));
+    if (!pid || (u32)g_lastAppTid != CTGP_LAUNCHER_TID)
+        return;
+    g_ctgp.at = Ticks();
+    g_ctgp.pid = pid;
+    Log("CTGP-7 launcher: recorder started %s (%lu s ago), applications' limit %s, AppMemFix %s, "
+        "plugin status %lu, application memory limit %lu KB, memory type %lu, APT applet in front %03lX",
+        g_bootStart ? "with the console" : "by the app", (u32)((Ticks() - g_startTick) / SYSCLOCK_ARM11),
+        g_appResLimit ? "held" : "not held", g_cfg.appMemFix ? "on" : "off",
+        *(const volatile u32 *)0x1FF800F0 & 0xFFFFu, *(const volatile u32 *)0x1FF80040 / KB,
+        (u32)*(const volatile u8 *)0x1FF80030, AptActiveApplet());
+}
+
+/* Every round of the main loop: ends when its plugin is up, another program runs or time is out. */
+static void CtgpWatchPoll(u32 nid)
+{
+    if (!g_ctgp.at || g_shutdownSeen)
+        return;
+    const u32 secs = (u32)((Ticks() - g_ctgp.at) / SYSCLOCK_ARM11);
+    const u32 plg = *(const volatile u32 *)0x1FF800F0 & 0xFFFFu;
+    if (plg == 1 || nid == 0x10C)   /* Mario Kart with the plugin, or the next program: it did its job */
+    {
+        if (secs >= CTGP_REPORT_S)   /* only a slow one is worth a line */
+            Log("CTGP-7 launcher: done after %lu s (%s)", secs, plg == 1 ? "plugin in the game" : "a program started");
+        g_ctgp.at = 0;
+        return;
+    }
+    if (nid >= 0x110 && nid <= 0x113)   /* it ended; the next "program started" says what came */
+    {
+        if (secs >= CTGP_REPORT_S)
+            Log("CTGP-7 launcher: ended after %lu s", secs);
+        g_ctgp.at = 0;
+        return;
+    }
+    if (nid == 0x204)   /* does HOME get to APT in it? asked a moment later, once HOME Menu had its time */
+        g_ctgp.homeLookAt = Ticks() + 2ull * SYSCLOCK_ARM11;
+    if (g_ctgp.homeLookAt && Ticks() >= g_ctgp.homeLookAt)
+    {
+        g_ctgp.homeLookAt = 0;
+        CtgpLine("2 s after HOME, at", secs);
+    }
+    if (secs >= CTGP_REPORT_S && secs - g_ctgp.lastReport >= CTGP_REPORT_S)
+    {
+        g_ctgp.lastReport = secs;
+        CtgpLine("still there after", secs);
+    }
+    if (secs >= CTGP_WATCH_S)
+    {
+        Log("CTGP-7 launcher: no longer watched after %lu s", secs);
+        g_ctgp.at = 0;
+    }
 }
 
 /* The app is on the screen: it adds to g_shared.appBeat every second or so while it runs in front.
@@ -7085,8 +7169,9 @@ int main(void)
         if (startedLogAt && Ticks() >= startedLogAt && !g_shutdownSeen)
         {
             startedLogAt = 0;
-            LogStarted();
+            CtgpWatchStart(LogStarted());
         }
+        CtgpWatchPoll(nid);
         if (nid == PTMNOTIFID_SHUTDOWN || nid == 0x100)
         {
             g_powerOffNow = nid == PTMNOTIFID_SHUTDOWN || g_powerOffSeen;
