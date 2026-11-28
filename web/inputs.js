@@ -40,64 +40,94 @@
     return l;
   }
 
+  // Redesign 2.0: held = white with a dark letter, not held = outlined with a light one, the strips a
+  // dark controller panel (codec/source/inputs.c the same)
   const SOFT = [0xc3 / 255, 0xc9 / 255, 0xd0 / 255, 0.92];
-  const ACCENT = [1, 0x4d / 255, 0x4f / 255, 1];
+  const PRESS = [1, 1, 1, 1];
+  const INK = [0x14 / 255, 0x16 / 255, 0x1a / 255, 1];
+  const PANEL = [0x17 / 255, 0x1a / 255, 0x20 / 255, 1];
   const DARK = [0x0e / 255, 0x10 / 255, 0x14 / 255, 0.62];
   const HALO = [0x0e / 255, 0x10 / 255, 0x14 / 255, 0.55];
   const NONE = [0, 0, 0, 0];
+  const GLYPH = [
+    [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11], // A
+    [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e], // B
+    [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11], // X
+    [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04], // Y
+    [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f], // L
+    [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11], // R
+  ];
+  const G_A = 0, G_B = 1, G_X = 2, G_Y = 3, G_L = 4, G_R = 5;
   const f = Math.fround;
 
   function shapes(l, st) {
     const o = [], k = st.keys, touched = st.tx !== TOUCH_NONE;
     const put = (cross, cx, cy, hx, hy, r, fill, stroke, sw) => o.push({ cross, cx, cy, hx, hy, r, fill, stroke, sw });
-    const button = (cx, cy, hx, hy, r, held, sw) => put(false, cx, cy, hx, hy, r, held ? ACCENT : NONE, held ? ACCENT : SOFT, sw);
+    const button = (cx, cy, hx, hy, r, held, sw) => put(false, cx, cy, hx, hy, r, held ? PRESS : NONE, held ? PRESS : SOFT, sw);
+    // a letter, 5 x 7 cells of s centred on (cx, cy): each row's runs of cells as boxes
+    const letter = (g, cx, cy, s, held) => {
+      for (let row = 0; row < 7; row++)
+        for (let c = 0; c < 5;) {
+          if (!((GLYPH[g][row] >> (4 - c)) & 1)) { c++; continue; }
+          let e = c;
+          while (e < 5 && ((GLYPH[g][row] >> (4 - e)) & 1)) e++;
+          // (+0.5: at 1x the cells fall on whole pixels, the letter sharp)
+          put(false, cx + 0.5 + f(((c + e) * 0.5 - 2.5) * s), cy + 0.5 + f((row - 3) * s), f((e - c) * s * 0.5), f(s * 0.5), 0, held ? INK : SOFT, NONE, 0);
+          c = e;
+        }
+    };
+    const shoulder = (cx, cy, hx, hy, held, sw, s, g) => { button(cx, cy, hx, hy, hy, held, sw); letter(g, cx, cy, s, held); };
     const dpad = (cx, cy, u, sw) => {
       const h = u * 0.5;
-      if (k & KEY.UP) put(false, cx, cy - u, h, h, 1, ACCENT, NONE, 0);
-      if (k & KEY.DOWN) put(false, cx, cy + u, h, h, 1, ACCENT, NONE, 0);
-      if (k & KEY.LEFT) put(false, cx - u, cy, h, h, 1, ACCENT, NONE, 0);
-      if (k & KEY.RIGHT) put(false, cx + u, cy, h, h, 1, ACCENT, NONE, 0);
+      if (k & KEY.UP) put(false, cx, cy - u, h, h, 1, PRESS, NONE, 0);
+      if (k & KEY.DOWN) put(false, cx, cy + u, h, h, 1, PRESS, NONE, 0);
+      if (k & KEY.LEFT) put(false, cx - u, cy, h, h, 1, PRESS, NONE, 0);
+      if (k & KEY.RIGHT) put(false, cx + u, cy, h, h, 1, PRESS, NONE, 0);
       put(true, cx, cy, u * 1.5, h, 1.5, NONE, SOFT, sw);
     };
     const stick = (cx, cy, ring, dot, travel, sw) => {
       put(false, cx, cy, ring, ring, ring, NONE, SOFT, sw);
-      put(false, cx + f(st.cx * travel / 127), cy + f(-st.cy * travel / 127), dot, dot, dot, SOFT, NONE, 0);
+      const pushed = st.cx * st.cx + st.cy * st.cy > 24 * 24; // white past a small dead zone
+      put(false, cx + f(st.cx * travel / 127), cy + f(-st.cy * travel / 127), dot, dot, dot, pushed ? PRESS : SOFT, NONE, 0);
     };
-    const abxy = (cx, cy, d, r, sw) => {
-      button(cx, cy - d, r, r, r, k & KEY.X, sw);
-      button(cx - d, cy, r, r, r, k & KEY.Y, sw);
-      button(cx + d, cy, r, r, r, k & KEY.A, sw);
-      button(cx, cy + d, r, r, r, k & KEY.B, sw);
+    const abxy = (cx, cy, d, r, sw, s) => {
+      for (const [key, dx, dy, g] of [[KEY.X, 0, -1, G_X], [KEY.Y, -1, 0, G_Y], [KEY.A, 1, 0, G_A], [KEY.B, 0, 1, G_B]]) {
+        const held = (k & key) !== 0;
+        button(cx + dx * d, cy + dy * d, r, r, r, held, sw);
+        letter(g, cx + dx * d, cy + dy * d, s, held);
+      }
     };
     if (l.strips) {
       const sw = 1.3, y0 = l.oy, lx = l.ox - 20, rx = l.ox + 340;
-      button(lx, y0 + 14, 14, 4, 4, k & KEY.L, sw);
+      put(false, lx, y0 + 120, 17, 116, 9, PANEL, NONE, 0); // the controller's two halves
+      put(false, rx, y0 + 120, 17, 116, 9, PANEL, NONE, 0);
+      shoulder(lx, y0 + 14, 14, 5, (k & KEY.L) !== 0, sw, 1, G_L);
       stick(lx, y0 + 62, 13, 5, 8, sw); // as on the console: the stick above the D-pad
       dpad(lx, y0 + 118, 9, sw);
       button(lx, y0 + 170, 10, 3.5, 3.5, k & KEY.SELECT, sw);
-      button(rx, y0 + 14, 14, 4, 4, k & KEY.R, sw);
-      abxy(rx, y0 + 70, 11, 5.5, sw);
+      shoulder(rx, y0 + 14, 14, 5, (k & KEY.R) !== 0, sw, 1, G_R);
+      abxy(rx, y0 + 70, 11, 6, sw, 1);
       button(rx, y0 + 170, 10, 3.5, 3.5, k & KEY.START, sw);
     } else {
       const sw = 1.1, x0 = l.ox, y0 = l.oy;
       put(false, x0 + PANEL_W / 2, y0 + PANEL_H / 2, PANEL_W / 2, PANEL_H / 2, 8, DARK, NONE, 0);
-      button(x0 + 19, y0 + 7, 13, 3, 3, k & KEY.L, sw);
-      button(x0 + 97, y0 + 7, 13, 3, 3, k & KEY.R, sw);
+      shoulder(x0 + 19, y0 + 7, 13, 4, (k & KEY.L) !== 0, sw, f(0.8), G_L);
+      shoulder(x0 + 97, y0 + 7, 13, 4, (k & KEY.R) !== 0, sw, f(0.8), G_R);
       stick(x0 + 19, y0 + 25, 8, 3.2, 5, sw);
       dpad(x0 + 19, y0 + 47, 6, sw);
       if (!l.botShown) {
         put(false, x0 + 58, y0 + 27, 16, 12, 2, NONE, SOFT, sw);
-        if (touched) put(false, x0 + 42 + f((st.tx * 2 + 1) / 10), y0 + 15 + f(st.ty / 10), 2, 2, 2, ACCENT, NONE, 0);
+        if (touched) put(false, x0 + 42 + f((st.tx * 2 + 1) / 10), y0 + 15 + f(st.ty / 10), 2, 2, 2, PRESS, NONE, 0);
       }
       button(x0 + 51, y0 + 48, 6, 2.2, 2.2, k & KEY.SELECT, sw);
       button(x0 + 65, y0 + 48, 6, 2.2, 2.2, k & KEY.START, sw);
-      abxy(x0 + 97, y0 + 31, 9, 4, sw);
+      abxy(x0 + 97, y0 + 31, 9, 4.5, sw, f(0.75));
     }
     if (l.botShown && touched) {
       const x = l.botX + st.tx * 2 + 1, y = l.botY + st.ty + 0.5;
       put(false, x, y, 8.5, 8.5, 8.5, NONE, HALO, 3);
-      put(false, x, y, 7, 7, 7, NONE, ACCENT, 2);
-      put(false, x, y, 2, 2, 2, ACCENT, NONE, 0);
+      put(false, x, y, 7, 7, 7, NONE, PRESS, 2);
+      put(false, x, y, 2, 2, 2, PRESS, NONE, 0);
     }
     return o;
   }

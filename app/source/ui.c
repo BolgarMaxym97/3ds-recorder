@@ -507,6 +507,77 @@ void ui_icon(Icon icon, float cx, float cy, float size, u32 color)
         poly(&p, can, 4, false);
         break;
     }
+    case ICON_REC: /* the recording's dot */
+        ui_circle(cx, cy, 6.5f * p.k, color);
+        break;
+    case ICON_REPLAY: /* a circle arrow going back, a play triangle inside */
+        arc(&p, 12, 12, 8.5f, -140, 180);
+        line(&p, 5.5f, 6.5f, 5.5f, 2.5f);
+        line(&p, 5.5f, 6.5f, 9.5f, 6.5f);
+        C2D_DrawTriangle(p.x + 10 * p.k, p.y + 8.5f * p.k, color, p.x + 10 * p.k, p.y + 15.5f * p.k, color,
+                         p.x + 15.5f * p.k, p.y + 12 * p.k, color, UI_DEPTH);
+        break;
+    case ICON_GEAR:
+        arc(&p, 12, 12, 3, 0, 360);
+        arc(&p, 12, 12, 7, 0, 360);
+        for (int i = 0; i < 8; i++) {
+            const float a = i * (float)M_PI / 4;
+            line(&p, 12 + cosf(a) * 7, 12 + sinf(a) * 7, 12 + cosf(a) * 9.5f, 12 + sinf(a) * 9.5f);
+        }
+        break;
+    case ICON_LED:
+        arc(&p, 12, 12, 4, 0, 360);
+        for (int i = 0; i < 8; i++) {
+            const float a = i * (float)M_PI / 4;
+            line(&p, 12 + cosf(a) * 7, 12 + sinf(a) * 7, 12 + cosf(a) * 9.5f, 12 + sinf(a) * 9.5f);
+        }
+        break;
+    case ICON_DOWNLOAD:
+    case ICON_UPDATE: { /* an arrow down onto a line, or up from one */
+        const bool down = icon == ICON_DOWNLOAD;
+        const float head[] = {7, down ? 10 : 13, 12, down ? 15 : 8, 17, down ? 10 : 13};
+        line(&p, 12, down ? 4 : 20, 12, down ? 15 : 8);
+        poly(&p, head, 3, false);
+        line(&p, 5, down ? 20 : 4, 19, down ? 20 : 4);
+        break;
+    }
+    case ICON_GLOBE:
+        arc(&p, 12, 12, 9, 0, 360);
+        line(&p, 3, 12, 21, 12);
+        arc(&p, 4.5f, 12, 11, -55, 55);
+        arc(&p, 19.5f, 12, 11, 125, 235);
+        break;
+    case ICON_CLOCK:
+        arc(&p, 12, 12, 9, 0, 360);
+        line(&p, 12, 7, 12, 12);
+        line(&p, 12, 12, 15, 14);
+        break;
+    case ICON_BLOCK:
+        arc(&p, 12, 12, 9, 0, 360);
+        line(&p, 5.6f, 5.6f, 18.4f, 18.4f);
+        break;
+    case ICON_STOP:
+        ui_rrect(p.x + 6 * p.k, p.y + 6 * p.k, 12 * p.k, 12 * p.k, 2 * p.k, color);
+        break;
+    case ICON_SD: {
+        const float card[] = {7, 3, 15, 3, 19, 7, 19, 21, 7, 21};
+        poly(&p, card, 5, true);
+        line(&p, 10, 6, 10, 9);
+        line(&p, 13, 6, 13, 9);
+        break;
+    }
+    case ICON_HELP:
+        arc(&p, 12, 12, 9, 0, 360);
+        arc(&p, 12, 9.5f, 2.6f, 180, 400);
+        line(&p, 14, 11.2f, 12, 13);
+        line(&p, 12, 13, 12, 14);
+        ui_circle(cx, p.y + 17 * p.k, p.thick * 0.7f, color);
+        break;
+    case ICON_BOLT: {
+        const float bolt[] = {13, 3, 5, 14, 11, 14, 10, 21, 19, 10, 13, 10};
+        poly(&p, bolt, 6, true);
+        break;
+    }
     }
 }
 
@@ -522,32 +593,116 @@ void ui_spinner(float cx, float cy, float r, u32 color)
     }
 }
 
-static float key_cap_width(const char *key)
+/* ---------------------------------------------------------------- 3DS buttons */
+
+#define BTN_H 14.0f
+
+typedef enum { SHAPE_ROUND, SHAPE_SHOULDER, SHAPE_ZSHOULDER, SHAPE_DPAD, SHAPE_PILL } BtnShape;
+
+static BtnShape btn_shape(const char *key)
 {
-    return strlen(key) > 1 ? ui_text_width(7, FONT_BOLD, key) + 10 : 15;
+    if (!strcmp(key, "A") || !strcmp(key, "B") || !strcmp(key, "X") || !strcmp(key, "Y"))
+        return SHAPE_ROUND;
+    if (!strcmp(key, "L") || !strcmp(key, "R"))
+        return SHAPE_SHOULDER;
+    if (!strcmp(key, "ZL") || !strcmp(key, "ZR"))
+        return SHAPE_ZSHOULDER;
+    /* the arrows (↑ ↓ ← →, also "←→" for the player's seek) are 3 bytes each in UTF-8 */
+    if ((u8)key[0] == 0xE2 && (u8)key[1] == 0x86)
+        return SHAPE_DPAD;
+    return SHAPE_PILL;
+}
+
+float ui_btn_width(const char *key)
+{
+    switch (btn_shape(key)) {
+    case SHAPE_ROUND:
+        return BTN_H;
+    case SHAPE_SHOULDER:
+        return 18;
+    case SHAPE_ZSHOULDER:
+        return 21;
+    case SHAPE_DPAD:
+        return fmaxf(BTN_H, ui_text_width(8, FONT_BOLD, key) + 6);
+    default:
+        return ui_text_width(7, FONT_BOLD, key) + 10;
+    }
+}
+
+/* the top corners round like a shoulder button, the bottom ones nearly square */
+static void shoulder(float x, float y, float w, float h, u32 color)
+{
+    ui_rrect(x, y, w, h, h * 0.45f, color);
+    ui_rrect(x, y + h / 2, w, h / 2, 1.5f, color);
+}
+
+float ui_btn(float x, float y, const char *key, BtnStyle style)
+{
+    static const u32 FILL[] = {COL_TEXT, COL_TRACK, COL_WARN_FILL, COL_REC, COL_REPLAY};
+    const u32 fill = FILL[style], ink = style == BTN_MUTED ? COL_SOFT : COL_BG;
+    const float w = ui_btn_width(key);
+    switch (btn_shape(key)) {
+    case SHAPE_ROUND:
+        ui_circle(x + BTN_H / 2, y + BTN_H / 2, BTN_H / 2, fill);
+        ui_text_center(x + BTN_H / 2, y + 2.5f, 8, FONT_BOLD, ink, key);
+        break;
+    case SHAPE_SHOULDER:
+        shoulder(x, y, w, BTN_H, fill);
+        ui_text_center(x + w / 2, y + 2.5f, 8, FONT_BOLD, ink, key);
+        break;
+    case SHAPE_ZSHOULDER: /* only on New 3DS: drawn in outline to tell it from L / R */
+        shoulder(x, y, w, BTN_H, fill);
+        shoulder(x + 1.3f, y + 1.3f, w - 2.6f, BTN_H - 2.6f, COL_SURFACE);
+        ui_text_center(x + w / 2, y + 3, 7, FONT_BOLD, fill, key);
+        break;
+    case SHAPE_DPAD:
+        ui_rrect(x, y, w, BTN_H, 3, fill);
+        ui_text_center(x + w / 2, y + 2.5f, 8, FONT_BOLD, ink, key);
+        break;
+    default:
+        ui_rrect(x, y, w, BTN_H, BTN_H / 2, fill);
+        ui_text_center(x + w / 2, y + 3, 7, FONT_BOLD, ink, key);
+        break;
+    }
+    return w;
 }
 
 float ui_key_hint_width(const char *key, const char *label)
 {
-    return key_cap_width(key) + 4 + ui_text_width(9, FONT_REG, label);
+    return ui_btn_width(key) + 4 + ui_text_width(9, FONT_REG, label);
 }
 
 float ui_key_hint(float x, float y, const char *key, const char *label)
 {
-    float h = 15;
-    float w = key_cap_width(key);
-    ui_rrect(x, y, w, h, h / 2, COL_SURFACE2);
-    ui_text_center(x + w / 2, y + (strlen(key) > 1 ? 3.5f : 1.5f), strlen(key) > 1 ? 7 : 9, FONT_BOLD, COL_TEXT, key);
+    const float w = ui_btn(x, y, key, BTN_NORMAL);
     return w + 4 + ui_text(x + w + 4, y + 1.5f, 9, FONT_REG, COL_MUTED, label);
 }
 
-/* A key chip as in the design (R, ↓, SELECT): rounded rectangle, label inside. */
-float ui_key_chip(float x, float y, const char *key)
+float ui_key_chip(float x, float y, const char *key) { return ui_btn(x, y, key, BTN_NORMAL); }
+
+float ui_key_chip_width(const char *key) { return ui_btn_width(key); }
+
+float ui_badge_width(const char *label) { return ui_text_width(8, FONT_BOLD, label) + 10; }
+
+float ui_badge(float x, float y, const char *label, u32 fg, u32 bg)
 {
-    float w = ui_text_width(8, FONT_BOLD, key) + 8;
-    ui_rrect(x, y, w, 14, 4, COL_SURFACE2);
-    ui_text(x + 4, y + 1.5f, 8, FONT_BOLD, COL_TEXT, key);
+    const float w = ui_badge_width(label);
+    ui_rrect(x, y, w, 13, 4, bg);
+    ui_text(x + 5, y + 2, 8, FONT_BOLD, fg, label);
     return w;
+}
+
+void ui_progress(float x, float y, float w, float h, float frac, u32 fg, u32 track)
+{
+    frac = frac < 0 ? 0 : frac > 1 ? 1 : frac;
+    ui_rrect(x, y, w, h, h / 2, track);
+    if (frac > 0)
+        ui_rrect(x, y, fmaxf(h, w * frac), h, h / 2, fg);
+}
+
+void ui_focus(float x, float y, float w, float h, float r)
+{
+    ui_frame(x - 2, y - 2, w + 4, h + 4, r + 2, 1.5f, COL_FOCUS);
 }
 
 /* The languages' flags, 21 x 13 (English: US stripes + canton; Ukrainian: blue over yellow). */
@@ -618,11 +773,13 @@ void ui_flag_sized(float x, float y, float w, int lang)
     }
 }
 
-void ui_toggle(float x, float y, bool on)
+void ui_toggle_c(float x, float y, bool on, u32 on_color)
 {
-    ui_rrect(x, y, 32, 18, 9, on ? COL_ACCENT : COL_TRACK);
+    ui_rrect(x, y, 32, 18, 9, on ? on_color : COL_TRACK);
     ui_circle(on ? x + 23 : x + 9, y + 9, 7, on ? COL_WHITE : COL_SOFT);
 }
+
+void ui_toggle(float x, float y, bool on) { ui_toggle_c(x, y, on, COL_ACCENT); }
 
 void ui_pill(float x, float y, const char *label, u32 fg, u32 bg, bool dot_filled)
 {

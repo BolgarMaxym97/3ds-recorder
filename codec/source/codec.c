@@ -764,8 +764,11 @@ size_t codec_c420_encode_888(const uint8_t *src, uint32_t cols, uint32_t rows, u
     return (size_t)((uint8_t *)o - out);
 }
 
-static uint16_t c420_r[96], c420_g[128];
-static uint8_t c420_b[96];
+uint16_t codec_c420_r[96], codec_c420_g[128];
+uint8_t codec_c420_b[96];
+#define c420_r codec_c420_r
+#define c420_g codec_c420_g
+#define c420_b codec_c420_b
 static int c420_ready;
 
 static void c420_tables(void)
@@ -813,6 +816,29 @@ int codec_c420_decode_strided(const uint8_t *in, size_t in_size, uint16_t *frame
         }
     }
     return 0;
+}
+
+void codec_c420_init(void)
+{
+    if (!c420_ready)
+        c420_tables();
+}
+
+void codec_c420_block(uint32_t w, uint16_t px[4])
+{
+    if (!c420_ready)
+        c420_tables();
+    const int32_t co = (int32_t)((w >> 20) & 63u) - 32, cg = (int32_t)(w >> 26) - 32;
+    const uint32_t A = (uint32_t)(2 * co - 2 * cg + 2 + 128), B = (uint32_t)(-2 * co - 2 * cg + 2 + 128),
+                   C = (uint32_t)(2 * cg + 1 + 64);
+    uint32_t s;
+#define C420_PX(y, o) \
+    (s = 4u * (y) + 2u - (o), (uint16_t)(c420_r[(s + A) >> 2] | c420_g[(s + C) >> 1] | c420_b[(s + B) >> 2]))
+    px[0] = C420_PX(w & 31u, 0u);
+    px[1] = C420_PX((w >> 5) & 31u, 2u);
+    px[2] = C420_PX((w >> 10) & 31u, 2u);
+    px[3] = C420_PX((w >> 15) & 31u, 1u);
+#undef C420_PX
 }
 
 uint32_t codec_sample_changed(uint32_t *samples, const uint8_t *src, uint32_t cols, uint32_t rows, uint32_t stride,

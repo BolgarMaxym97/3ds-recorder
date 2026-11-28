@@ -64,8 +64,8 @@
     X(S_G3_BODY, "Open the Gallery: A plays a recording, Y downloads it to a phone over Wi-Fi through a QR code. Or take it straight from the SD card in a computer: /3ds/recorder/recordings (a converted recording has its MP4 next to it). While this app is open, the console converts recordings into small MP4 videos in the background (or only the one you download: Settings → App → Convert To MP4).") \
     X(S_G4_TITLE, "After turning the console on") \
     X(S_G4_BODY, "Open this app once: the recorder starts by itself and keeps running after you leave the app. When it is ready, the LED glows blue for a moment. When the console is turned off or restarts (leaving System Settings or starting a DS or GBA game restarts it), the recorder stops and a recording is saved: open this app again then. Or switch on Settings → Recorder → Launch On Startup: the recorder then starts with the console.") \
-    X(S_TILE_HELP_SUB, "Recording, LED, download") \
-    X(S_TILE_SETTINGS_SUB, "Recording, app, language") \
+    X(S_TILE_HELP_SUB, "LED, hotkeys") \
+    X(S_TILE_SETTINGS_SUB, "App, language") \
     X(S_START_STOP, "Start / stop:") \
     X(S_MSG_STARTED, "Recorder started: the LED glows blue.") \
     X(S_MSG_STOPPED, "Recorder stopped.") \
@@ -110,13 +110,13 @@
     X(S_H4, "Getting a recording off") \
     X(S_H4_BODY, "Watch recordings in the Gallery (A) and download them to a phone over Wi-Fi (Y). While this app is open, the console converts each recording into a small MP4 in the background; it lies next to the recording in /3ds/recorder/recordings, so the SD card in a computer has it too. To convert on a computer instead (faster for long ones: bolgarmaxym97.github.io/3ds-recorder), set Settings → App → Convert To MP4 → On Download: then only the recording you download is converted.\nYou can close the lid while this app converts, joins recordings or saves clips: the screens go dark, the work goes on, and the console goes to sleep when all is done (Settings → App → Work With Lid Closed).\nThe buttons you press are kept with each recording (Settings → Recorder → Record Buttons): Y in the player shows them, Settings → App → Buttons In Video puts them into the MP4s, and the converter page and r3d2video can draw them too.") \
     X(S_H5, "Hotkeys and limits") \
-    X(S_H5_BODY, "The recording hotkey is %s; Replay has its own for saving a clip (see 8). Change both in Settings → Recorder → Hotkeys: first the recording one, then the Replay one; START keeps the current one. Not allowed: L + R together (opens the Camera in HOME), L + ↓ + SELECT (the Rosalina menu) or a part of it, START, and one hotkey holding all the buttons of the other. A long recording goes on in a new file every 4 GB or every hour (a 1–2 s gap); Settings shows how many minutes one file holds.") \
+    X(S_H5_BODY, "The recording hotkey is %s; Replay has its own for saving a clip (see 8). Change them on the Recorder and Replay pages (Settings, or the gear on their card); START keeps the current one. Not allowed: L + R together (opens the Camera in HOME), L + ↓ + SELECT (the Rosalina menu) or a part of it, START, and one hotkey holding all the buttons of the other. A long recording goes on in a new file every 4 GB or every hour (a 1–2 s gap); Settings shows how many minutes one file holds.") \
     X(S_H6, "If something is wrong") \
-    X(S_H6_BODY, "Red three times: the recording did not start or stopped, usually because the SD card is full. Skipped frames: the SD card could not keep up, the video is still fine. A 3D game looks jerky in the video: set Settings → Recording → Quality → Auto. The top screen runs short of frames while the bottom one shows a still menu: lower Settings → Recording → Bottom Screen FPS. A game played on the bottom screen looks choppy: set Settings → Recording → Main Screen → Bottom. Settings → App → Test SD Card shows whether the card keeps up.\nA game does not start or freezes while the recorder runs: switch Recorder off on the panel and play without it. Please tell us in Issues at github.com/BolgarMaxym97/3ds-recorder: name the game and the console, and attach the logs /3ds/recorder/recorder.log and app.log (or Download → Log for the developer). With Settings → App → Share Statistics on, the logs reach us by themselves when this app opens with Wi-Fi.") \
+    X(S_H6_BODY, "Red three times: the recording did not start or stopped, usually because the SD card is full. Skipped frames: the SD card could not keep up, the video is still fine. A 3D game looks jerky in the video: set Settings → Recorder → Quality → Auto. The top screen runs short of frames while the bottom one shows a still menu: lower Settings → Recorder → Bottom Screen FPS. A game played on the bottom screen looks choppy: set Settings → Recorder → Main Screen → Bottom. Settings → App → Test SD Card shows whether the card keeps up.\nA game does not start or freezes while the recorder runs: switch Recorder off on the panel and play without it. Please tell us in Issues at github.com/BolgarMaxym97/3ds-recorder: name the game and the console, and attach the logs /3ds/recorder/recorder.log and app.log (or Download → Log for the developer). With Settings → App → Share Statistics on, the logs reach us by themselves when this app opens with Wi-Fi.") \
     X(S_H7, "Games that need extra memory") \
-    X(S_H7_BODY, "On Old 3DS some games need more memory: Smash Bros, Pokemon Sun / Moon and Ultra Sun / Ultra Moon, Super Mario Maker, Monster Hunter. The console restarts when they start and when they close. If the recorder runs, it comes back by itself inside the game through a tiny plugin of Luma: a recording goes on in a new file, Replay works too. Luma's Plugin Loader must be on (Rosalina menu, L + ↓ + SELECT); with Launch On Startup the recorder turns it on just for that game. The game has 2 MB less memory and the video is less smooth; Settings → Recording → Screens → Top makes it smoother. Monster Hunter 4 Ultimate, Generations and XX need all of their memory: no plugin there, so the recorder is in them only with Launch On Startup (see 9). When such a game closes, the recording is saved; open this app or use Launch On Startup to record again. New 3DS does not restart for these games.") \
+    X(S_H7_BODY, "On Old 3DS some games need more memory: Smash Bros, Pokemon Sun / Moon and Ultra Sun / Ultra Moon, Super Mario Maker, Monster Hunter. The console restarts when they start and when they close. If the recorder runs, it comes back by itself inside the game through a tiny plugin of Luma: a recording goes on in a new file, Replay works too. Luma's Plugin Loader must be on (Rosalina menu, L + ↓ + SELECT); with Launch On Startup the recorder turns it on just for that game. The game has 2 MB less memory and the video is less smooth; Settings → Recorder → Screens → Top makes it smoother. Monster Hunter 4 Ultimate, Generations and XX need all of their memory: no plugin there, so the recorder is in them only with Launch On Startup (see 9). When such a game closes, the recording is saved; open this app or use Launch On Startup to record again. New 3DS does not restart for these games.") \
     X(S_H8, "Replay: save what just happened") \
-    X(S_H8_BODY, "Switch Replay on (the panel); Settings → Recorder → Replay Length sets how much it keeps, 15 s to 5 min (30 s at first). While a game or another program runs (not in the HOME Menu alone), the recorder keeps the last ones all the time, and the LED glows faint blue (from about 15 seconds after a game starts). Press %s (Settings → Recorder → Hotkeys changes it) in a game or HOME: the LED blinks green twice and those seconds (a few more at times) become a clip; red three times: Replay is not running there. Open this app: the clip turns up in the Gallery like any recording.\nThe recording hotkey works as usual: the replay pauses while a recording runs and while this app is open.\nThe replay writes to the SD card all the time (several GB an hour in a 3D game): the card wears. While it is on it keeps two files on the card, from 2 × 128 MB (15 s) to 2 × 2.5 GB (5 min); a little more must be free to switch it on. After the console has been turned off, Replay is off again; with Launch On Startup it stays as you left it. On Old 3DS, games that need extra memory get fewer frames a second in it.") \
+    X(S_H8_BODY, "Switch Replay on (the panel); Settings → Replay → Replay Length sets how much it keeps, 15 s to 5 min (30 s at first). While a game or another program runs (not in the HOME Menu alone), the recorder keeps the last ones all the time, and the LED glows faint blue (from about 15 seconds after a game starts). Press %s (Settings → Replay → Save a clip changes it) in a game or HOME: the LED blinks green twice and those seconds (a few more at times) become a clip; red three times: Replay is not running there. Open this app: the clip turns up in the Gallery like any recording.\nThe recording hotkey works as usual: the replay pauses while a recording runs and while this app is open.\nThe replay writes to the SD card all the time (several GB an hour in a 3D game): the card wears. While it is on it keeps two files on the card, from 2 × 128 MB (15 s) to 2 × 2.5 GB (5 min); a little more must be free to switch it on. After the console has been turned off, Replay is off again; with Launch On Startup it stays as you left it. On Old 3DS, games that need extra memory get fewer frames a second in it.") \
     X(S_H10, "Applets and pauses") \
     X(S_H10_BODY, "An applet (Internet Browser, Game Notes, Friend List...) needs the memory the recorder holds. When one opens during a recording, the recording is saved first. On Old 3DS it goes on next to a small applet at a lower frame rate; nothing is recorded next to the Internet Browser (it needs nearly all the memory), and on New 3DS nothing next to any applet. When the applet closes, the recording goes on. Replay waits until then.\nThe parts of a recording the recorder paused by itself (an applet, the lid) become one recording again while this app is open: keep it open (the lid may be closed) until \"Joining recordings\" is gone. A pause shows as half a second of the last picture. Recordings you stop yourself stay apart.") \
     X(S_H_SUPPORT, "Support the project") \
@@ -342,7 +342,88 @@
     X(S_MB, "MB") \
     X(S_GB, "GB") \
     X(S_MBS, "MB/s") \
-    X(S_EXIT, "Exit")
+    X(S_EXIT, "Exit") \
+    X(S_HOME_OFF_HINT, "The hotkey does nothing. Switch Recorder on below.") \
+    X(S_HOME_REC, "Recording") \
+    X(S_HOME_STOP, "Stop: %s") \
+    X(S_HOME_REPLAY, "Replay keeps the last %s in games") \
+    X(S_HOME_REPLAY_HINT, "Save a clip: %s · Record: %s") \
+    X(S_HOME_RECENT, "Recent captures") \
+    X(S_HOME_THIS_FILE, "This file") \
+    X(S_HOME_UP_TO, "up to 4 GB") \
+    X(S_HOME_EMPTY_OFF, "Switch Recorder on, then in a game press %s") \
+    X(S_REPLAY_PAUSED, "Paused while a recording runs") \
+    X(S_REPLAY_STARTS, "Starts with Recorder") \
+    X(S_HK_CLIP_ROW, "Save a clip") \
+    X(S_HK_REC_ROW, "Start / stop") \
+    X(S_GAL_ALL, "All") \
+    X(S_HK_ZLZR_PRESET, "Preset") \
+    X(S_HK_ZLZR_SAVED, "Hotkeys: ZL starts and stops a recording, ZR saves a Replay clip. A game that uses ZL or ZR fires them too.") \
+    X(S_HK_HOLD_HINT_Z, "Hold for 1 s to set it · 2–3 buttons, or ZL / ZR alone") \
+    X(S_LED_EV_READY, "Ready") \
+    X(S_LED_EV_REC, "Recording") \
+    X(S_LED_EV_REPLAY, "Replay") \
+    X(S_LED_EV_SAVED, "Saved") \
+    X(S_LED_EV_ERROR, "Error") \
+    X(S_LED_WHEN_READY, "Once, when the recorder has started and is ready (after power-on or opening this app).") \
+    X(S_LED_WHEN_REC, "All the time a recording runs: in games, HOME and applets.") \
+    X(S_LED_WHEN_REPLAY, "While Replay keeps the last seconds of a game.") \
+    X(S_LED_WHEN_SAVED, "Once, when a recording stops or a Replay clip is saved.") \
+    X(S_LED_WHEN_ERROR, "A recording did not start or stopped (often a full SD card): open this app.") \
+    X(S_LED_GLOW, "Glow") \
+    X(S_LED_BLINK2, "Blink 2") \
+    X(S_LED_BLINK3, "Blink 3") \
+    X(S_LED_SLOW, "Slow") \
+    X(S_LED_NORMAL, "Normal") \
+    X(S_LED_FAST, "Fast") \
+    X(S_LED_DEFAULT, "Default") \
+    X(S_LED_SUBTLE, "Subtle") \
+    X(S_LED_CUSTOM, "Custom") \
+    X(S_LED_SUMMARY, "%s · %d of 5 lit") \
+    X(S_LED_LIGHT_FOR, "Light for %s") \
+    X(S_LED_COLOR, "Color") \
+    X(S_LED_PATTERN, "Pattern") \
+    X(S_LED_BRIGHT, "Brightness") \
+    X(S_LED_SPEED, "Speed") \
+    X(S_LED_PREVIEW, "Preview on console") \
+    X(S_LED_RESET, "Reset this") \
+    X(S_LED_NO_LIGHT, "No light") \
+    X(S_LED_PREVIEW_ON, "On the console's LED now.") \
+    X(S_LED_PREVIEW_OFF, "The preview needs the recorder on: switch Recorder on, then try again.") \
+    X(S_LED_ERROR_OFF, "Error light off: a failed recording shows nothing") \
+    X(S_H11, "On a computer") \
+    X(S_H11_BODY, "Turn the console off, take out the SD card and put it in a computer. Recordings are in /3ds/recorder/recordings. Open the page of the code in a browser and drop a .r3d on it: it becomes an MP4 there, nothing is uploaded. Long recordings convert much faster than on the console; you can also choose the size (sharp 2x or 3x), YouTube, editing or Discord, and the buttons pressed.") \
+    X(S_SDT_FIX_BOTTOM, "Set Bottom Screen FPS to 10") \
+    X(S_SDT_FIX_FPS, "Set the frame rate to 20 fps") \
+    X(S_FR_STEP1, "Hold %s while turning the console on") \
+    X(S_FR_STEP2, "In the Luma menu enable \"Enable loading external FIRMs and modules\"") \
+    X(S_FR_STEP3, "Save with %s, then open this app again") \
+    X(S_PH_SD_WEB, "Turn them into MP4 in the browser: bolgarmaxym97.github.io/3ds-recorder") \
+    X(S_PH_COMPUTER, "Or on a computer") \
+    X(S_PH_COMPUTER_BODY, "SD card into a computer, the page turns .r3d into MP4") \
+    X(S_GAL_TOTAL, "%s in all") \
+    X(S_GAL_FASTER, "Long recordings convert much faster on a computer: SD card → bolgarmaxym97.github.io/3ds-recorder") \
+    X(S_HK_REC_TITLE, "Start / stop recording") \
+    X(S_HK_CLIP_TITLE, "Save a Replay clip") \
+    X(S_HK_LISTENING, "Listening… hold the new combination") \
+    X(S_HK_CANT, "This one can't be used") \
+    X(S_HK_WAS, "New · was %s") \
+    X(S_HK_NOT_ALLOWED, "Not allowed") \
+    X(S_HK_RULE_LR, "together: opens the Camera in HOME") \
+    X(S_HK_RULE_ROSA, "or a part of it: the Rosalina menu") \
+    X(S_HK_RULE_MORE, "· only A/B/X/Y · all the other hotkey's buttons") \
+    X(S_REPLAY_PICTURE, "Clips are recorded like recordings: %s (the Recorder page).") \
+    X(S_HOME_REPLAY_OFF, "Replay is off") \
+    X(S_HOME_REPLAY_OFF_HINT, "Switch it on below, then %s saves the last seconds") \
+    X(S_HK_CHANGE, "Change") \
+    X(S_HK_KEYS_BROWSE, "A: change · B: back") \
+    X(S_LED_NOTIF, "Notification LED") \
+    X(S_LED_GRAPH, "Brightness over 2 s") \
+    X(S_G1_SHORT, "In a game, in HOME, anywhere. The whole console is recorded: both screens and sound.") \
+    X(S_G2_SHORT, "The same hotkey stops it. The recording is saved to the SD card.") \
+    X(S_G3_SHORT, "In the Gallery: A plays a recording, Y sends it to a phone through a QR code.") \
+    X(S_G4_SHORT, "Open this app once after turning the console on: the recorder starts and keeps running.") \
+    X(S_REPLAY_NOTE, "Replay: while a game runs, the recorder keeps its last seconds, and the clip hotkey saves them as a clip (it turns up in the Gallery). Off: the clip hotkey does nothing. The LED glows faint blue while it keeps them.")
 
 typedef enum {
 #define X(id, en) id,

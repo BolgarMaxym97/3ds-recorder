@@ -160,6 +160,31 @@ static inline int codec_c420_arm_fits(const uint8_t *src, uint32_t rows, uint32_
 #endif
 /* Decodes into `frame` (cols x rows words, packed column by column). 0, or -1 on a wrong size. */
 int codec_c420_decode(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows);
+/* One block's four pixels, as codec_c420_decode writes them: (c, r), (c, r + 1), (c + 1, r), (c + 1, r + 1). */
+void codec_c420_block(uint32_t w, uint16_t px[4]);
+/*
+ * C420H (codec/source/c420h.c): a C420 frame (cols * rows bytes, as codec_c420_encode wrote it) in
+ * fewer bytes, the same frame back to the bit: every number predicted from its neighbours (MED),
+ * the differences in Huffman codes from fixed tables. Returns the size, or 0 when it would not fit in
+ * `cap` (C420 as it is then). Decoding returns 0, or -1 on a damaged stream.
+ */
+size_t codec_c420h_encode(const uint8_t *c420, uint32_t cols, uint32_t rows, uint8_t *out, size_t cap);
+int codec_c420h_decode(const uint8_t *in, size_t in_size, uint8_t *c420, uint32_t cols, uint32_t rows);
+/* The tables codec_c420_block reads (codec_c420_init first), for a caller that inlines it */
+void codec_c420_init(void);
+extern uint16_t codec_c420_r[96], codec_c420_g[128];
+extern uint8_t codec_c420_b[96];
+#define CODEC_C420_BLOCK(w, px)                                                                                      \
+    do {                                                                                                             \
+        const int32_t co_ = (int32_t)(((w) >> 20) & 63u) - 32, cg_ = (int32_t)((w) >> 26) - 32;                    \
+        const uint32_t A_ = (uint32_t)(2 * co_ - 2 * cg_ + 2 + 128), B_ = (uint32_t)(-2 * co_ - 2 * cg_ + 2 + 128), \
+                       C_ = (uint32_t)(2 * cg_ + 1 + 64);                                                           \
+        uint32_t s_;                                                                                                 \
+        s_ = 4u * ((w) & 31u) + 2u, (px)[0] = (uint16_t)(codec_c420_r[(s_ + A_) >> 2] | codec_c420_g[(s_ + C_) >> 1] | codec_c420_b[(s_ + B_) >> 2]); \
+        s_ = 4u * (((w) >> 5) & 31u), (px)[1] = (uint16_t)(codec_c420_r[(s_ + A_) >> 2] | codec_c420_g[(s_ + C_) >> 1] | codec_c420_b[(s_ + B_) >> 2]); \
+        s_ = 4u * (((w) >> 10) & 31u), (px)[2] = (uint16_t)(codec_c420_r[(s_ + A_) >> 2] | codec_c420_g[(s_ + C_) >> 1] | codec_c420_b[(s_ + B_) >> 2]); \
+        s_ = 4u * (((w) >> 15) & 31u) + 1u, (px)[3] = (uint16_t)(codec_c420_r[(s_ + A_) >> 2] | codec_c420_g[(s_ + C_) >> 1] | codec_c420_b[(s_ + B_) >> 2]); \
+    } while (0)
 /* The same with column c at frame + c * stride words (the player's textures: no copy). */
 int codec_c420_decode_strided(const uint8_t *in, size_t in_size, uint16_t *frame, uint32_t cols, uint32_t rows,
                               uint32_t stride);

@@ -885,6 +885,12 @@ static void thread_main(void *arg)
                     (unsigned long)s->audioFrames, (unsigned long)s->resumedFrom, g_share, s->readMs, s->decodeMs,
                     s->yuvMs, s->pcmMs, s->audioMs, s->checkpointMs, s->produceWaitMs, s->diskMs, s->videoMs, s->writeMs,
                     s->consumeWaitMs);
+            /* what held the producer up: its time minus its work and its waits is the core it did not get */
+            const double work = s->readMs + s->decodeMs + s->yuvMs + s->pcmMs + s->audioMs + s->checkpointMs;
+            app_log("prepare %s: producer %.0f ms: work %.0f, waits %.0f for a free slot + %.0f for the encoder to "
+                    "finish (%lu resume points), rest %.0f (no core for it, or untimed); MP4 writes %lu, slowest %.0f ms",
+                    name, s->producerMs, work, s->produceWaitMs, s->drainMs, (unsigned long)s->checkpoints,
+                    s->producerMs - work - s->produceWaitMs - s->drainMs, (unsigned long)s->diskWrites, s->diskMaxMs);
             set_state(name, PS_READY, 1000);
         } else {
             app_log("prepare %s: %s", name, prep_error(job));

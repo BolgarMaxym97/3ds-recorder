@@ -12,6 +12,7 @@
 #include "player.h"
 #include "sdtest.h"
 #include "prepare.h"
+#include "hotkey_core.h"
 #include "qrcodegen.h"
 #include "server.h"
 #include "stats.h"
@@ -33,12 +34,18 @@ static bool hit(Rect r, const Input *in)
     return in->tapped && in->tap_x >= r.x && in->tap_x < r.x + r.w && in->tap_y >= r.y && in->tap_y < r.y + r.h;
 }
 
-static void focus_ring(Rect r, float radius) { ui_frame(r.x - 1, r.y - 1, r.w + 2, r.h + 2, radius + 1, 1.5f, COL_ACCENT); }
+static void update_led(App *a, const Input *in);
+static void draw_led_top(App *a);
+static void draw_led_bottom(App *a);
+static void open_led(App *a);
+static void focus_ring(Rect r, float radius) { ui_frame(r.x - 1, r.y - 1, r.w + 2, r.h + 2, radius + 1, 1.5f, COL_FOCUS); }
 
-/* Panel tiles (bottom screen, 2 x 2) */
-static const Rect TILE[4] = {{12, 12, 144, 94}, {164, 12, 144, 94}, {12, 114, 144, 94}, {164, 114, 144, 94}};
-/* The first tile holds two switches, one under the other: the recorder, and its replay buffer */
-static const Rect TILE_REC = {12, 12, 144, 46}, TILE_REPLAY = {12, 60, 144, 46};
+/* Home, bottom screen: the two modes as cards (each with a gear to its page), three tiles, the bar
+   of an update to install */
+static const Rect HOME_REC = {10, 10, 300, 52}, HOME_REC_GEAR = {234, 23, 26, 26};
+static const Rect HOME_REPLAY = {10, 68, 300, 52}, HOME_REPLAY_GEAR = {234, 81, 26, 26};
+static const Rect HOME_TILE[3] = {{10, 126, 96, 72}, {112, 126, 96, 72}, {214, 126, 96, 72}};
+static const Rect HOME_FOOT = {10, 212, 300, 20};
 /* Replay: the two files the module keeps for replay_sec (sysmod ReplayBytesFor: replay_sec x 8.5 MB/s in 16 MB
    steps, at least 128 MB, plus a 512 KB header each) and the recorder's reserve: 30 s, 700 MB, as before */
 static const char *replay_len_label(int sec, char *buf, size_t cap);
@@ -56,20 +63,32 @@ static const Rect FR_LATER = {12, 200, 96, 28};
 static const Rect FR_START = {116, 200, 192, 28};
 /* Settings: the groups (SCR_SETTINGS), each one's rows (SCR_SETGROUP), the language list (SCR_LANG) */
 enum { ROW_FPS, ROW_SCREENS, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND, ROW_HOTKEY, ROW_LED, ROW_AUTOSTART, ROW_CONVERT,
-       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_MAIN_SCREEN, ROW_REPLAY_LEN, ROW_INPUTS, ROW_MP4_INPUTS, ROW_SDTEST, ROW_UPDATES, ROW_COUNT };
-enum { GRP_RECORDING, GRP_RECORDER, GRP_APP, GRP_LANG, GRP_COUNT };
-#define GROUP_MAX 7
+       ROW_LID, ROW_STATS, ROW_UNINSTALL, ROW_MAIN_SCREEN, ROW_REPLAY_LEN, ROW_INPUTS, ROW_MP4_INPUTS, ROW_SDTEST, ROW_UPDATES,
+       ROW_REPLAY, ROW_REPLAY_HOTKEY, ROW_COUNT };
+/* Redesign 2.0: a page per mode (the gear on its Home card opens the same page), LED, App, Language */
+enum { GRP_RECORDING, GRP_REPLAY, GRP_LEDS, GRP_APP, GRP_LANG, GRP_COUNT };
+#define GROUP_MAX 9
+#define GROUP_VIEW 7   /* rows on the screen at once; a longer page scrolls with the focus */
 static const int GROUP_ROWS[GRP_LANG][GROUP_MAX] = {
-    [GRP_RECORDING] = {ROW_FPS, ROW_SCREENS, ROW_MAIN_SCREEN, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND},
-    [GRP_RECORDER] = {ROW_HOTKEY, ROW_REPLAY_LEN, ROW_INPUTS, ROW_LED, ROW_AUTOSTART},
+    [GRP_RECORDING] = {ROW_HOTKEY, ROW_FPS, ROW_SCREENS, ROW_MAIN_SCREEN, ROW_BOTTOM_FPS, ROW_QUALITY, ROW_SOUND, ROW_INPUTS,
+                       ROW_AUTOSTART},
+    [GRP_REPLAY] = {ROW_REPLAY, ROW_REPLAY_HOTKEY, ROW_REPLAY_LEN},
+    [GRP_LEDS] = {ROW_LED},
     [GRP_APP] = {ROW_UPDATES, ROW_CONVERT, ROW_MP4_INPUTS, ROW_LID, ROW_STATS, ROW_SDTEST, ROW_UNINSTALL},
 };
-static const int GROUP_N[GRP_LANG] = {6, 5, 7};
-static Rect grp_card(int i) { return (Rect){10, 34 + i * 50.0f, 300, 44}; }   /* down to y 228 */
+static const int GROUP_N[GRP_LANG] = {9, 3, 0, 7};   /* (LED: its own screen, LED Studio) */
+static Rect grp_card(int i) { return (Rect){10, 34 + i * 39.0f, 300, 34}; }   /* down to y 224 */
+/* the first row on the screen of a page longer than GROUP_VIEW: the focus kept in view */
+static int group_top(int n, int focus)
+{
+    const int top = focus - 3;
+    return n <= GROUP_VIEW || top < 0 ? 0 : top > n - GROUP_VIEW ? n - GROUP_VIEW : top;
+}
 /* 6 rows: down to y 210; 7 a little closer: down to y 227 */
 static Rect set_row_n(int i, int n) { return n > 6 ? (Rect){10, 34 + i * 28.0f, 300, 25} : (Rect){10, 34 + i * 30.0f, 300, 26}; }
 static Rect set_row(int i) { return set_row_n(i, 6); }
 static const Rect SET_BACK = {10, 6, 21, 21};
+static const Rect SET_MODE = {278, 7, 32, 18};   /* a mode page's own switch, right of its title */
 /* the language list: first run (a Continue button under it) or from Settings. Two columns, so
    every language is on screen at once (10 today); more rows than fit scroll, with a bar. */
 #define LANG_COLS 2
@@ -91,13 +110,14 @@ static void lang_scroll_to(int lang)
 }
 
 /* Hotkey screen buttons */
+static const Rect HK_PRESET_Z = {196, 5, 112, 18};   /* New 3DS: ZL records, ZR saves a clip, in one tap */
 static const Rect HK_BTN[3] = {{12, 200, 92, 28}, {114, 200, 92, 28}, {216, 200, 92, 28}};
 /* Uninstall dialog */
 static const Rect UN_CHECK = {24, 128, 272, 24};
 static const Rect UN_BTN[2] = {{24, 168, 132, 28}, {164, 168, 132, 28}};
 /* Help topics: 10 fill the list (y 34-238). With more (the support topic) the rows get a little
    tighter so 10 and a half show: the cut row says there is more below. The list scrolls by pixels. */
-#define HELP_TOPICS 10
+#define HELP_TOPICS 11
 #define HELP_SUPPORT HELP_TOPICS   /* "Support the project": only with links (support.c) */
 #define HELP_TOP 34.0f
 #define HELP_VIEW (240.0f - HELP_TOP)
@@ -120,7 +140,6 @@ static int help_count(void) { return HELP_TOPICS + (support_count() > 0); }
    one alone (Mario Kart 7, O3DS 0.10.x, 2026-11-09; 2.1 MB/s before 0.10, when the bottom screen
    paused whenever the card was behind). Menus and 2D games take much less: the estimate is the
    worst case. */
-#define MB_PER_MIN_BOTH_30 320u
 
 /* ------------------------------------------------------------------ state */
 
@@ -260,9 +279,19 @@ static void autostart_tick(App *a)
     }
 }
 
+#ifdef UI_TOUR
+static bool g_tourFake;   /* the tour shows module states Azahar cannot have (no Luma there) */
+static bool g_tourFreeze; /* the tour holds a screen's state as it set it (no buttons are pressed) */
+static RecStatus g_tourSt;
+#endif
+
 static void refresh(App *a, bool files)
 {
     recorder_poll(&a->st);   /* also tells the module the app is on the screen */
+#ifdef UI_TOUR
+    if (g_tourFake)
+        a->st = g_tourSt;
+#endif
     autostart_tick(a);
     if (!a->clipsTold && a->cfg.guideSeen && prepare_clips(NULL) > 0) {
         char msg[256];
@@ -337,7 +366,7 @@ static void toast_tick(App *a)
 static void go(App *a, Screen s, int focus)
 {
     static const char *const names[] = {"panel", "firstrun", "help", "settings", "hotkey", "gallery", "player",
-                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group", "sd test", "update"};
+                                        "download", "uninstall", "uninstalled", "guide", "lang", "settings group", "sd test", "update", "led"};
     if (s != a->screen || !a->frame)
         app_log("screen: %s", (unsigned)s < sizeof(names) / sizeof(names[0]) ? names[s] : "?");
     a->screen = s;
@@ -588,84 +617,26 @@ static void open_languages(App *a, Screen back, int backFocus)
 
 /* ------------------------------------------------------------------ hotkey */
 
-/* Buttons a hotkey may use, in the order config.ini lists them (R+SELECT). */
-static const struct {
-    u32 key;
-    const char *name, *label;
-} HK_KEYS[] = {
-    {KEY_L, "L", "L"}, {KEY_R, "R", "R"}, {KEY_DUP, "UP", "↑"}, {KEY_DDOWN, "DOWN", "↓"},
-    {KEY_DLEFT, "LEFT", "←"}, {KEY_DRIGHT, "RIGHT", "→"}, {KEY_A, "A", "A"}, {KEY_B, "B", "B"},
-    {KEY_X, "X", "X"}, {KEY_Y, "Y", "Y"}, {KEY_SELECT, "SELECT", "SELECT"},
-};
-#define HK_COUNT (int)(sizeof(HK_KEYS) / sizeof(HK_KEYS[0]))
-#define HK_ALLOWED (KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A | KEY_B | KEY_X | KEY_Y | KEY_SELECT)
-#define HK_DEFAULT "R+SELECT"
-#define HK_REPLAY_DEFAULT "X+SELECT"
+/* The rules and config.ini's form are in hotkey_core.c (tests/host/test_hotkey.c); its button bits
+   are the HID ones. ZL / ZR are offered on New 3DS once their input is read (g_zlzr). */
+_Static_assert((u32)HK_A == KEY_A && (u32)HK_B == KEY_B && (u32)HK_X == KEY_X && (u32)HK_Y == KEY_Y &&
+                   (u32)HK_L == KEY_L && (u32)HK_R == KEY_R && (u32)HK_SELECT == KEY_SELECT && (u32)HK_START == KEY_START &&
+                   (u32)HK_UP == KEY_DUP && (u32)HK_DOWN == KEY_DDOWN && (u32)HK_LEFT == KEY_DLEFT &&
+                   (u32)HK_RIGHT == KEY_DRIGHT && (u32)HK_ZL == KEY_ZL && (u32)HK_ZR == KEY_ZR,
+               "hotkey bits are the HID ones");
+static bool g_zlzr;   /* ZL / ZR can be read here (New 3DS, ir:rst): they may be part of a hotkey */
+void app_set_zlzr(bool on) { g_zlzr = on; }
 
-static u32 hk_mask(const char *text)
+static Str hk_problem_text(HkProblem p)
 {
-    u32 m = 0;
-    char buf[48];
-    snprintf(buf, sizeof(buf), "%s", text);
-    for (char *t = strtok(buf, "+"); t; t = strtok(NULL, "+"))
-        for (int i = 0; i < HK_COUNT; i++)
-            if (strcasecmp(t, HK_KEYS[i].name) == 0)
-                m |= HK_KEYS[i].key;
-    return m;
-}
-
-static void hk_text(u32 m, char *buf, size_t cap) /* config form: R+SELECT */
-{
-    size_t o = 0;
-    buf[0] = 0;
-    for (int i = 0; i < HK_COUNT; i++)
-        if (m & HK_KEYS[i].key)
-            o += (size_t)snprintf(buf + o, cap - o, "%s%s", o ? "+" : "", HK_KEYS[i].name);
-}
-
-static void hk_label(u32 m, char *buf, size_t cap) /* for people: R + SELECT */
-{
-    size_t o = 0;
-    buf[0] = 0;
-    for (int i = 0; i < HK_COUNT; i++)
-        if (m & HK_KEYS[i].key)
-            o += (size_t)snprintf(buf + o, cap - o, "%s%s", o ? " + " : "", HK_KEYS[i].label);
-}
-
-static int hk_count(u32 m)
-{
-    int n = 0;
-    for (int i = 0; i < HK_COUNT; i++)
-        n += (m & HK_KEYS[i].key) != 0;
-    return n;
-}
-
-/* S_COUNT if the combination may be used, else the reason it may not. */
-static Str hk_problem(u32 m)
-{
-    if ((m & KEY_L) && (m & KEY_R))
-        return S_HK_ERR_LR;
-    if (!(m & ~(KEY_L | KEY_DDOWN | KEY_SELECT)))
-        return S_HK_ERR_ROSALINA; /* part of Rosalina's L + Down + SELECT */
-    if (!(m & ~(KEY_A | KEY_B | KEY_X | KEY_Y)))
-        return S_HK_ERR_FACE;
-    return S_COUNT;
-}
-
-/* Two hotkeys that would fire together: one holds every button of the other. */
-static bool hk_overlap(u32 a, u32 b)
-{
-    return a && b && ((a & b) == a || (a & b) == b);
-}
-
-/* The replay hotkey's default, or the next one that does not overlap the recording hotkey. */
-static u32 hk_replay_default(u32 rec)
-{
-    static const char *const tries[] = {HK_REPLAY_DEFAULT, "Y+SELECT", "L+X", "R+Y"};
-    for (int i = 0; i < 4; i++)
-        if (!hk_overlap(hk_mask(tries[i]), rec))
-            return hk_mask(tries[i]);
-    return hk_mask(HK_REPLAY_DEFAULT);
+    switch (p) {
+    case HK_ERR_LR: return S_HK_ERR_LR;
+    case HK_ERR_ROSALINA: return S_HK_ERR_ROSALINA;
+    case HK_ERR_FACE: return S_HK_ERR_FACE;
+    case HK_ERR_OTHER: return S_HK_ERR_OTHER;
+    case HK_ERR_COUNT: return S_HK_TOO_MANY;
+    default: return S_HK_OK;
+    }
 }
 
 static float hk_chips_width(u32 m)
@@ -676,7 +647,7 @@ static float hk_chips_width(u32 m)
         if (m & HK_KEYS[i].key) {
             if (!first)
                 w += ui_text_width(9, FONT_REG, "+") + 3;
-            w += ui_text_width(8, FONT_BOLD, HK_KEYS[i].label) + 8 + 3;
+            w += ui_key_chip_width(HK_KEYS[i].label) + 3;
             first = false;
         }
     return w;
@@ -697,6 +668,30 @@ static float hk_chips(float x, float y, u32 m, u32 color)
     return x - x0;
 }
 
+/* A sentence with hotkeys in it ("In a game or HOME press %s"): the text around each %s, and the
+   hotkey's buttons in place of it (m1 for the first %s, m2 for the second). Draws only if `draw`;
+   returns the width. The buttons are 14 high from y; the text sits on their middle. */
+static float hk_line(float x, float y, float px, u32 color, const char *fmt, u32 m1, u32 m2, bool draw)
+{
+    const float x0 = x, ty = y + (14 - px * 1.3f) / 2;
+    char part[160];
+    int n = 0;
+    for (const char *p = fmt; *p;) {
+        const char *s = strstr(p, "%s");
+        const size_t len = s ? (size_t)(s - p) : strlen(p);
+        if (len) {
+            snprintf(part, sizeof(part), "%.*s", (int)(len < sizeof(part) ? len : sizeof(part) - 1), p);
+            x += draw ? ui_text(x, ty, px, FONT_REG, color, part) : ui_text_width(px, FONT_REG, part);
+        }
+        if (!s)
+            break;
+        const u32 m = n++ ? m2 : m1;
+        x += draw ? hk_chips(x, y, m, color) : hk_chips_width(m);
+        p = s + 2;
+    }
+    return x - x0;
+}
+
 /* ------------------------------------------------------------------ settings */
 
 static void apply_setting(App *a, const char *key, const char *value)
@@ -707,6 +702,17 @@ static void apply_setting(App *a, const char *key, const char *value)
     recorder_command(REC_CMD_RELOAD); /* the module reads it now, or after a running recording */
 }
 
+/* several at once: one write of the file, one reload in the module (a LED preset: 5 keys) */
+static void apply_settings(App *a, const char *const *keys, const char *const *values, int n)
+{
+    for (int i = 0; i < n; i++)
+        app_log("setting: %s=%s", keys[i], values[i]);
+    config_set_many(keys, values, n);
+    config_load(&a->cfg);
+    recorder_command(REC_CMD_RELOAD);
+}
+
+static int led_preset_now(const App *a);
 static const char *const FPS_LABEL[3] = {"15", "20", "30 fps"};
 static const int FPS_VALUE[3] = {15, 20, 30};
 
@@ -864,6 +870,7 @@ static void set_mp4_inputs(App *a, bool on)
 }
 
 static void open_sdtest(App *a);
+static void toggle_replay(App *a);
 
 /* ◀ ▶ on Bottom Screen FPS (dir -1 / +1; A goes round) */
 static void step_bottom_fps(App *a, int dir, bool wrap)
@@ -885,12 +892,16 @@ static void step_bottom_fps(App *a, int dir, bool wrap)
     apply_setting(a, "bottom_fps", v);
 }
 
-static void open_hotkey(App *a)
+static int g_hkFrom; /* the page the hotkey screen was opened from: 0 Recorder, 1 Replay */
+
+/* Opens on the two hotkeys: the D-pad picks one (the top screen shows it on the console), A or a
+   tap on its row listens for a new combination, B goes back. */
+static void open_hotkey(App *a, int step)
 {
-    a->hkStep = 0;
+    a->hkStep = g_hkFrom = step;
     a->hkHeld = a->hkCand = 0;
-    a->hkReview = false;
-    a->hkWaitRelease = true; /* the A that opened this screen is still down */
+    a->hkReview = a->hkCapture = false;
+    a->hkWaitRelease = false;
     go(a, SCR_HOTKEY, 0);
 }
 
@@ -944,8 +955,10 @@ static void settings_activate(App *a, int row)
         apply_setting(a, "lid_work", a->cfg.lidWork ? "off" : "on");
     else if (row == ROW_STATS)
         set_stats(a, !a->cfg.stats);
-    else if (row == ROW_HOTKEY)
-        open_hotkey(a);
+    else if (row == ROW_HOTKEY || row == ROW_REPLAY_HOTKEY)
+        open_hotkey(a, row == ROW_REPLAY_HOTKEY);
+    else if (row == ROW_REPLAY)
+        toggle_replay(a);
     else if (row == ROW_UNINSTALL) {
         a->deleteRecordings = false;
         go(a, SCR_UNINSTALL, 1);
@@ -1007,10 +1020,20 @@ static void open_help(App *a, Screen back)
     go(a, SCR_HELP, 0);
 }
 
-/* Panel focus: 0-3 the tiles (2 x 2; 0 is the recorder's switch, the first tile's upper half), 5 the
-   replay switch under it in the same tile (the language is in Settings).
-   While a recording runs the first tile is one button (Stop): 5 counts as 0 then. */
-enum { FOCUS_REPLAY = 5 };
+/* Home focus: 0 the Recorder card (its switch, or Stop while recording), 5 the Replay card (its
+   switch), 6 / 7 their gears, 1-3 Gallery / Help / Settings, 8 the update bar. */
+enum { FOCUS_REPLAY = 5, FOCUS_REC_GEAR, FOCUS_REPLAY_GEAR, FOCUS_FOOT };
+static bool update_shown(void);
+
+/* The gear on a mode's card: that mode's page (Settings → Recorder / Replay). */
+static void open_mode_page(App *a, bool replay)
+{
+    a->setFromHome = true;
+    if (replay)
+        open_group_at(a, GRP_REPLAY, ROW_REPLAY);
+    else
+        open_group_at(a, GRP_RECORDING, ROW_HOTKEY);
+}
 
 static void toggle_replay(App *a)
 {
@@ -1036,25 +1059,53 @@ static void toggle_replay(App *a)
 static void update_panel(App *a, const Input *in)
 {
     const u32 d = in->down;
-    const bool split = !(a->st.running && a->st.state == REC_STATE_RECORDING);   /* the first tile shows both switches */
+    const bool running = a->st.running && a->st.state != REC_STATE_EXITED;
+    const bool recording = running && a->st.state == REC_STATE_RECORDING;
+    const bool foot = update_shown() && !recording; /* the update bar takes the keys' row */
     int f = a->focus;
-    if (f == FOCUS_REPLAY && !split)
+    if ((f == FOCUS_REC_GEAR && recording) || (f == FOCUS_FOOT && !foot))
         f = 0;
-    if (d & KEY_DLEFT)
-        f = f < 4 && f % 2 == 1 ? f - 1 : f;
-    if (d & KEY_DRIGHT)
-        f = f == FOCUS_REPLAY ? 1 : f < 4 && f % 2 == 0 ? f + 1 : f;
     if (d & KEY_DUP)
-        f = f == FOCUS_REPLAY ? 0 : f == 2 && split ? FOCUS_REPLAY : f >= 2 ? f - 2 : f;
+        f = f == FOCUS_REPLAY ? 0 : f == FOCUS_REPLAY_GEAR ? (recording ? 0 : FOCUS_REC_GEAR)
+            : f == 1 || f == 2 ? FOCUS_REPLAY : f == 3 ? FOCUS_REPLAY_GEAR : f == FOCUS_FOOT ? 2 : f;
     if (d & KEY_DDOWN)
-        f = f == 0 && split ? FOCUS_REPLAY : f == FOCUS_REPLAY ? 2 : f < 2 ? f + 2 : f;
+        f = f == 0 ? FOCUS_REPLAY : f == FOCUS_REC_GEAR ? FOCUS_REPLAY_GEAR : f == FOCUS_REPLAY ? 1
+            : f == FOCUS_REPLAY_GEAR ? 3 : f >= 1 && f <= 3 && foot ? FOCUS_FOOT : f;
+    if (d & KEY_DLEFT)
+        f = f == FOCUS_REC_GEAR ? 0 : f == FOCUS_REPLAY_GEAR ? FOCUS_REPLAY : f == 2 || f == 3 ? f - 1 : f;
+    if (d & KEY_DRIGHT)
+        f = f == 0 && !recording ? FOCUS_REC_GEAR : f == FOCUS_REPLAY ? FOCUS_REPLAY_GEAR : f == 1 || f == 2 ? f + 1 : f;
     a->focus = f;
-    if (d & KEY_A) {
-        if (f == FOCUS_REPLAY)
+    int act = -1;
+    if (d & KEY_A)
+        act = f;
+    /* touch: the gears first (they are inside the cards) */
+    if (!recording && hit(HOME_REC_GEAR, in))
+        act = FOCUS_REC_GEAR;
+    else if (hit(HOME_REPLAY_GEAR, in))
+        act = FOCUS_REPLAY_GEAR;
+    else if (hit(HOME_REC, in))
+        act = 0;
+    else if (hit(HOME_REPLAY, in))
+        act = FOCUS_REPLAY;
+    else if (foot && hit(HOME_FOOT, in))
+        act = FOCUS_FOOT;
+    for (int i = 0; i < 3; i++)
+        if (hit(HOME_TILE[i], in))
+            act = i + 1;
+    if (act >= 0 && act != (int)(d & KEY_A ? f : -2))
+        a->focus = act;
+    if (act == FOCUS_REPLAY) {
+        if (!recording) /* the replay pauses while a recording runs */
             toggle_replay(a);
-        else
-            panel_activate(a, f);
-    }
+    } else if (act == FOCUS_REC_GEAR)
+        open_mode_page(a, false);
+    else if (act == FOCUS_REPLAY_GEAR)
+        open_mode_page(a, true);
+    else if (act == FOCUS_FOOT)
+        open_group_at(a, GRP_APP, ROW_UPDATES);
+    else if (act >= 0 && act <= 3)
+        panel_activate(a, act);
     if ((d & KEY_Y) && a->files.newest[0]) { /* the last recording: straight into the player */
         open_gallery(a, a->files.newest);
         a->galAutoPlay = true;
@@ -1063,15 +1114,6 @@ static void update_panel(App *a, const Input *in)
         open_help(a, SCR_PANEL);
     if (d & KEY_START)
         a->quit = true;
-    for (int i = 0; i < 4; i++)
-        if (hit(i == 0 && split ? TILE_REC : TILE[i], in)) {
-            a->focus = i;
-            panel_activate(a, i);
-        }
-    if (split && hit(TILE_REPLAY, in)) {
-        a->focus = FOCUS_REPLAY;
-        toggle_replay(a);
-    }
 }
 
 static void update_firstrun(App *a, const Input *in)
@@ -1238,6 +1280,9 @@ static void update_guide(App *a, const Input *in)
     }
     if ((d & KEY_DLEFT) && a->guidePage > 0)
         a->guidePage--;
+    for (int i = 0; i < GUIDE_PAGES; i++)
+        if (hit((Rect){12, 26 + i * 42.0f, 296, 36}, in))
+            a->guidePage = i;
     if ((d & KEY_B) || hit(GD_SKIP, in))
         guide_done(a);
     if (d & KEY_X)
@@ -1255,8 +1300,12 @@ static void update_settings(App *a, const Input *in)
     for (int i = 0; i < GRP_COUNT; i++)
         if (hit(grp_card(i), in))
             open = a->focus = i;
+    if (open >= 0)
+        a->setFromHome = false;
     if (open == GRP_LANG)
         open_languages(a, SCR_SETTINGS, GRP_LANG);
+    else if (open == GRP_LEDS)
+        open_led(a);
     else if (open >= 0) {
         a->setGroup = open;
         go(a, SCR_SETGROUP, 0);
@@ -1298,12 +1347,15 @@ static void update_setgroup(App *a, const Input *in)
             apply_setting(a, "lid_work", on ? "on" : "off");
         else if (row == ROW_STATS)
             set_stats(a, on);
+        else if (row == ROW_REPLAY && on != a->cfg.replay)
+            toggle_replay(a);
     }
     if (d & KEY_A)
         settings_activate(a, row);
-    for (int i = 0; i < n && in->tapped; i++) {
+    const int top = group_top(n, a->focus), shown = n < GROUP_VIEW ? n : GROUP_VIEW;
+    for (int i = top; i < top + shown && in->tapped; i++) {
         const int r = GROUP_ROWS[a->setGroup][i];
-        const Rect rr = set_row_n(i, n);
+        const Rect rr = set_row_n(i - top, shown);
         if (row_seg(a, r, &g)) {
             Rect opt[3] = {{0}};
             seg_layout(rr, g.labels, g.n, opt);
@@ -1325,17 +1377,25 @@ static void update_setgroup(App *a, const Input *in)
             settings_activate(a, r);
         }
     }
-    if ((d & KEY_B) || hit(SET_BACK, in))
-        go(a, SCR_SETTINGS, a->setGroup);
+    if (hit(SET_MODE, in)) { /* the page's switch: the recorder, or Replay (it has a row too) */
+        if (a->setGroup == GRP_RECORDING && !(a->st.running && a->st.state == REC_STATE_RECORDING))
+            panel_activate(a, 0);
+    }
+    if ((d & KEY_B) || hit(SET_BACK, in)) {
+        if (a->setFromHome) /* back to the card whose gear opened it */
+            go(a, SCR_PANEL, a->setGroup == GRP_REPLAY ? FOCUS_REPLAY_GEAR : FOCUS_REC_GEAR);
+        else
+            go(a, SCR_SETTINGS, a->setGroup);
+    }
 }
 
 /* The hotkey screen's two steps: the recording hotkey, then the replay one. */
-static u32 hk_step_now(const App *a) { return hk_mask(a->hkStep ? a->cfg.replayHotkey : a->cfg.hotkey); }
 
-static Str hk_step_problem(const App *a, u32 m)
+/* the rule a combination breaks for this screen's hotkey (the replay one must not hold the
+   recording one's buttons; the other way round the replay one moves aside, hotkey_next) */
+static HkProblem hk_step_problem(const App *a, u32 m)
 {
-    const Str p = hk_problem(m);
-    return p == S_COUNT && a->hkStep == 1 && hk_overlap(m, hk_mask(a->cfg.hotkey)) ? S_HK_ERR_OTHER : p;
+    return hk_check(m, a->hkStep == 1 ? hk_mask(a->cfg.hotkey) : 0);
 }
 
 static void hotkey_set(App *a, u32 m, bool tell)
@@ -1350,20 +1410,39 @@ static void hotkey_set(App *a, u32 m, bool tell)
     }
 }
 
-/* This step is done (saved or kept): on to the replay hotkey, then back to Settings. */
+/* The hotkey is saved or kept: back to its row. Each hotkey is set on its own page now (Recorder,
+   Replay); a recording hotkey that holds the replay one (or the other way) moves the replay one to
+   its default, as the second step did before. */
 static void hotkey_next(App *a)
 {
-    if (a->hkStep == 0) {
+    const bool replay = a->hkStep == 1;
+    if (!replay && hk_overlap(hk_mask(a->cfg.replayHotkey), hk_mask(a->cfg.hotkey))) {
         a->hkStep = 1;
-        a->hkHeld = a->hkCand = 0;
-        a->hkReview = false;
-        a->hkWaitRelease = true;
-        return;
-    }
-    /* kept as it was, but the recording hotkey chosen a step ago now holds it (or the other way) */
-    if (hk_overlap(hk_step_now(a), hk_mask(a->cfg.hotkey)))
         hotkey_set(a, hk_replay_default(hk_mask(a->cfg.hotkey)), true);
-    open_group_at(a, GRP_RECORDER, ROW_HOTKEY);
+        a->hkStep = 0;
+    }
+    a->hkCapture = a->hkReview = false;
+    a->hkHeld = a->hkCand = 0;
+    a->hkWaitRelease = true; /* the buttons of the combination are still down: not the D-pad's */
+}
+
+static void hotkey_leave(App *a)
+{
+    if (g_hkFrom)
+        open_group_at(a, GRP_REPLAY, ROW_REPLAY_HOTKEY);
+    else
+        open_group_at(a, GRP_RECORDING, ROW_HOTKEY);
+}
+
+static Rect hk_row(int k) { return (Rect){12, 28 + k * 38.0f, 296, 32}; }
+
+static void hotkey_listen(App *a, int step)
+{
+    a->hkStep = step;
+    a->hkCapture = true;
+    a->hkReview = false;
+    a->hkHeld = a->hkCand = 0;
+    a->hkWaitRelease = true; /* the A that started it is still down */
 }
 
 static void hotkey_save(App *a, u32 m)
@@ -1377,8 +1456,47 @@ static void hotkey_save(App *a, u32 m)
    cannot be in a hotkey). Review: A saves, B captures again. The touch buttons always work. */
 static void update_hotkey(App *a, const Input *in)
 {
-    const u32 held = in->held & HK_ALLOWED;
-    if ((in->down & KEY_START) || hit(HK_BTN[1], in)) {   /* keep this one */
+#ifdef UI_TOUR
+    if (g_tourFreeze)
+        return;
+#endif
+    const u32 held = in->held & hk_allowed(g_zlzr);
+    for (int k = 0; k < 2; k++)
+        if (hit(hk_row(k), in) && (!a->hkCapture || k != a->hkStep)) {
+            hotkey_listen(a, k);
+            return;
+        }
+    if (!a->hkCapture) {   /* choosing: the D-pad, A listens, B back */
+        const u32 d = in->down;
+        if (a->hkWaitRelease) {
+            if (!(in->held & hk_allowed(g_zlzr)))
+                a->hkWaitRelease = false;
+            return;
+        }
+        if (d & KEY_DUP)
+            a->hkStep = 0;
+        if (d & KEY_DDOWN)
+            a->hkStep = 1;
+        if ((d & KEY_A) || hit(HK_BTN[2], in)) {
+            hotkey_listen(a, a->hkStep);
+            return;
+        }
+        if ((d & KEY_B) || (d & KEY_START) || hit(HK_BTN[1], in)) {
+            hotkey_leave(a);
+            return;
+        }
+    } else if ((in->down & KEY_START) || hit(HK_BTN[1], in)) {   /* keep this one */
+        hotkey_next(a);
+        return;
+    }
+    if (g_zlzr && hit(HK_PRESET_Z, in)) { /* the preset of issue #37 */
+        const int step = a->hkStep;
+        a->hkStep = 0;
+        hotkey_set(a, HK_ZL, false);
+        a->hkStep = 1;
+        hotkey_set(a, HK_ZR, false);
+        a->hkStep = step;
+        say(a, T(S_HK_ZLZR_SAVED));
         hotkey_next(a);
         return;
     }
@@ -1386,7 +1504,9 @@ static void update_hotkey(App *a, const Input *in)
         hotkey_save(a, a->hkStep ? hk_replay_default(hk_mask(a->cfg.hotkey)) : hk_mask(HK_DEFAULT));
         return;
     }
-    if (hit(HK_BTN[2], in) && a->hkReview && hk_step_problem(a, a->hkCand) == S_COUNT) {
+    if (!a->hkCapture)
+        return;
+    if (hit(HK_BTN[2], in) && a->hkReview && hk_step_problem(a, a->hkCand) == HK_OK) {
         hotkey_save(a, a->hkCand);
         return;
     }
@@ -1396,7 +1516,7 @@ static void update_hotkey(App *a, const Input *in)
         return;
     }
     if (a->hkReview) {
-        if ((in->down & KEY_A) && hk_step_problem(a, a->hkCand) == S_COUNT)
+        if ((in->down & KEY_A) && hk_step_problem(a, a->hkCand) == HK_OK)
             hotkey_save(a, a->hkCand);
         else if (in->down & KEY_B) {
             a->hkReview = false;
@@ -1410,7 +1530,7 @@ static void update_hotkey(App *a, const Input *in)
         a->hkSince = a->frame;
     }
     const int n = hk_count(held);
-    if (n >= 2 && n <= 3 && a->frame - a->hkSince >= 60) {
+    if (n >= ((held & HK_ZLZR) ? 1 : 2) && n <= 3 && a->frame - a->hkSince >= 60) {
         a->hkCand = held;
         a->hkReview = true;
         a->hkWaitRelease = true;
@@ -1420,6 +1540,8 @@ static void update_hotkey(App *a, const Input *in)
 /* ------------------------------------------------------------------ SD card test */
 
 static const Rect SDT_BTN[2] = {{12, 200, 144, 28}, {164, 200, 144, 28}};   /* Back, Start / Test again */
+static const Rect SDT_FIX = {12, 160, 296, 30};   /* what the result suggests (sdtest_fix) */
+static Str sdtest_fix(const App *a);
 static SdTestResult g_sdt;
 
 static void sdtest_hold(bool on)   /* the other readers of the card wait meanwhile */
@@ -1447,9 +1569,16 @@ static void update_sdtest(App *a, const Input *in)
             sdtest_hold(false);
         return;   /* nothing else until the test is done (it writes to the card) */
     }
-    if (d & KEY_DLEFT)
+    const bool fixable = sdtest_fix(a) != S_COUNT;
+    if (a->focus == 2 && !fixable)
+        a->focus = 1;
+    if (d & KEY_DLEFT && a->focus != 2)
         a->focus = 0;
-    if (d & KEY_DRIGHT)
+    if (d & KEY_DRIGHT && a->focus != 2)
+        a->focus = 1;
+    if (d & KEY_DUP && fixable)
+        a->focus = 2;
+    if (d & KEY_DDOWN && a->focus == 2)
         a->focus = 1;
     int act = -1;
     if (d & KEY_A)
@@ -1458,6 +1587,18 @@ static void update_sdtest(App *a, const Input *in)
         act = 0;
     if (hit(SDT_BTN[1], in))
         act = 1;
+    if (fixable && hit(SDT_FIX, in))
+        act = 2;
+    if (act == 2) { /* the suggested setting, then the row it is in */
+        if (sdtest_fix(a) == S_SDT_FIX_BOTTOM) {
+            apply_setting(a, "bottom_fps", "10");
+            open_group_at(a, GRP_RECORDING, ROW_BOTTOM_FPS);
+        } else {
+            apply_setting(a, "fps", "20");
+            open_group_at(a, GRP_RECORDING, ROW_FPS);
+        }
+        return;
+    }
     if (act == 0)
         open_group_at(a, GRP_APP, ROW_SDTEST);
     else if (act == 1) {
@@ -1673,6 +1814,52 @@ static bool update_gallery_confirm(App *a, const Input *in)
     return del;
 }
 
+/* The Gallery's filter (◀ ▶, or a tap on its chips): all, the recordings, the Replay clips. The rows
+   show the items it lets through; a->galSel stays an index into the whole list, a->galTop is a
+   position among the shown ones. Items not read yet count as recordings. */
+enum { GF_ALL, GF_REC, GF_CLIPS, GF_COUNT };
+static int *g_vis, g_visCap;
+static const Rect GAL_FILTER[GF_COUNT] = {{168, 11, 52, 20}, {222, 11, 42, 20}, {266, 11, 42, 20}};
+
+static bool gal_pass(const GalItem *it, int filter)
+{
+    const bool clip = it->info && it->clip;
+    return filter == GF_ALL || (filter == GF_CLIPS) == clip;
+}
+
+/* fills g_vis with the indices the filter shows; returns how many (under gal_lock) */
+static int gal_vis(const GalList *l, int filter)
+{
+    if (l->count > g_visCap) {
+        int *v = realloc(g_vis, (size_t)l->count * sizeof(int));
+        if (!v)
+            return 0;
+        g_vis = v;
+        g_visCap = l->count;
+    }
+    int n = 0;
+    for (int i = 0; i < l->count; i++)
+        if (gal_pass(&l->items[i], filter))
+            g_vis[n++] = i;
+    return n;
+}
+
+static int gal_count(const GalList *l, int filter)
+{
+    int n = 0;
+    for (int i = 0; i < l->count; i++)
+        n += gal_pass(&l->items[i], filter);
+    return n;
+}
+
+static int vis_pos(int nv, int sel)
+{
+    for (int i = 0; i < nv; i++)
+        if (g_vis[i] == sel)
+            return i;
+    return 0;
+}
+
 static void update_gallery(App *a, const Input *in)
 {
     bool ok;
@@ -1717,22 +1904,37 @@ static void update_gallery(App *a, const Input *in)
             snprintf(del, sizeof(del), "%s", it->name);
     } else {
         a->galConfirm = false;
-        int sel = a->galSel;
+        int filter = a->galFilter;
+        if (d & KEY_DLEFT)
+            filter = (filter + GF_COUNT - 1) % GF_COUNT;
+        if (d & KEY_DRIGHT)
+            filter = (filter + 1) % GF_COUNT;
+        for (int f = 0; f < GF_COUNT; f++)
+            if (hit(GAL_FILTER[f], in))
+                filter = f;
+        int nv = gal_vis(l, filter);
+        int pos = vis_pos(nv, a->galSel);
+        if (filter != a->galFilter) { /* the selection stays where it is, if the filter shows it */
+            a->galFilter = filter;
+            a->galTop = 0;
+        }
         if (d & KEY_DUP)
-            sel--;
+            pos--;
         if (d & KEY_DDOWN)
-            sel++;
+            pos++;
         if (d & KEY_L)
-            sel -= GAL_ROWS;
+            pos -= GAL_ROWS;
         if (d & KEY_R)
-            sel += GAL_ROWS;
+            pos += GAL_ROWS;
         bool play = (d & KEY_A) != 0;
-        for (int i = 0; i < GAL_ROWS && a->galTop + i < n; i++)
+        for (int i = 0; i < GAL_ROWS && a->galTop + i < nv; i++)
             if (hit(gal_row(i), in)) {
-                play = play || a->galTop + i == a->galSel; /* a second tap opens it */
-                sel = a->galTop + i;
+                play = play || g_vis[a->galTop + i] == a->galSel; /* a second tap opens it */
+                pos = a->galTop + i;
             }
-        a->galSel = sel < 0 ? 0 : sel >= n ? (n ? n - 1 : 0) : sel;
+        pos = pos < 0 ? 0 : pos >= nv ? (nv ? nv - 1 : 0) : pos;
+        a->galSel = nv ? g_vis[pos] : 0;
+        it = nv ? &l->items[a->galSel] : NULL;
         if (it && it->info && a->galAutoPlay && !a->galOpen[0]) { /* Y on the panel */
             a->galAutoPlay = false;
             play = it->readable;
@@ -1760,11 +1962,12 @@ static void update_gallery(App *a, const Input *in)
             return;
         }
     }
-    if (a->galSel < a->galTop)
-        a->galTop = a->galSel;
-    if (a->galSel >= a->galTop + GAL_ROWS)
-        a->galTop = a->galSel - GAL_ROWS + 1;
-    if (n)
+    const int nv = gal_vis(l, a->galFilter), pos = vis_pos(nv, a->galSel);
+    if (pos < a->galTop)
+        a->galTop = pos;
+    if (pos >= a->galTop + GAL_ROWS)
+        a->galTop = pos - GAL_ROWS + 1;
+    if (n && nv && a->galSel < n)   /* (a filter that shows nothing: no preview of a hidden one) */
         snprintf(want, sizeof(want), "%s", l->items[a->galSel].name);
     gal_unlock();
     /* both take the gallery lock themselves */
@@ -1790,12 +1993,19 @@ static bool g_plInputs;   /* X in the player: the buttons pressed shown (kept fo
 
 /* The buttons pressed in the player (codec/source/inputs.c's corner panel, drawn with the UI's shapes):
    the panel in the top screen's bottom-left corner, a touch as a ring on the bottom screen. */
+/* the overlay as the videos draw it (codec/source/inputs.c): a held button white with a dark
+   letter, one not held outlined with a light one */
 static void pl_button(float x, float y, float w, float h, bool held)
 {
     if (held)
-        ui_rrect(x, y, w, h, h / 2, COL_ACCENT);
+        ui_rrect(x, y, w, h, h / 2, COL_WHITE);
     else
         ui_frame(x, y, w, h, h / 2, 1.2f, COL_SOFT);
+}
+
+static void pl_letter(float cx, float cy, const char *l, bool held)
+{
+    ui_text_center(cx, cy - 4.2f, 6.5f, FONT_BOLD, held ? COL_BG : COL_SOFT, l);
 }
 
 static void draw_inputs_top(const InputState *st)
@@ -1803,31 +2013,36 @@ static void draw_inputs_top(const InputState *st)
     const float x0 = 6, y0 = 240 - 6 - INPUT_PANEL_H;
     const unsigned k = st->keys;
     ui_rrect(x0, y0, INPUT_PANEL_W, INPUT_PANEL_H, 8, RGBA(0x0E, 0x10, 0x14, 0x9E));
-    pl_button(x0 + 6, y0 + 4, 26, 6, k & R3D_KEY_L);
-    pl_button(x0 + 84, y0 + 4, 26, 6, k & R3D_KEY_R);
+    pl_button(x0 + 6, y0 + 3, 26, 8, k & R3D_KEY_L);
+    pl_button(x0 + 84, y0 + 3, 26, 8, k & R3D_KEY_R);
+    pl_letter(x0 + 19, y0 + 7, "L", k & R3D_KEY_L);
+    pl_letter(x0 + 97, y0 + 7, "R", k & R3D_KEY_R);
     ui_frame(x0 + 11, y0 + 17, 16, 16, 8, 1.2f, COL_SOFT);   /* the stick */
-    ui_circle(x0 + 19 + st->cx * 5.0f / 127, y0 + 25 - st->cy * 5.0f / 127, 3.2f, COL_SOFT);
+    ui_circle(x0 + 19 + st->cx * 5.0f / 127, y0 + 25 - st->cy * 5.0f / 127, 3.2f,
+              st->cx * st->cx + st->cy * st->cy > 24 * 24 ? COL_WHITE : COL_SOFT);
     const float dx = x0 + 19, dy = y0 + 47, u = 6;   /* the D-pad */
     ui_rrect(dx - u * 1.5f, dy - u / 2, u * 3, u, 1.5f, COL_SURFACE2);
     ui_rrect(dx - u / 2, dy - u * 1.5f, u, u * 3, 1.5f, COL_SURFACE2);
     if (k & R3D_KEY_UP)
-        ui_rrect(dx - u / 2, dy - u * 1.5f, u, u, 1, COL_ACCENT);
+        ui_rrect(dx - u / 2, dy - u * 1.5f, u, u, 1, COL_WHITE);
     if (k & R3D_KEY_DOWN)
-        ui_rrect(dx - u / 2, dy + u / 2, u, u, 1, COL_ACCENT);
+        ui_rrect(dx - u / 2, dy + u / 2, u, u, 1, COL_WHITE);
     if (k & R3D_KEY_LEFT)
-        ui_rrect(dx - u * 1.5f, dy - u / 2, u, u, 1, COL_ACCENT);
+        ui_rrect(dx - u * 1.5f, dy - u / 2, u, u, 1, COL_WHITE);
     if (k & R3D_KEY_RIGHT)
-        ui_rrect(dx + u / 2, dy - u / 2, u, u, 1, COL_ACCENT);
+        ui_rrect(dx + u / 2, dy - u / 2, u, u, 1, COL_WHITE);
     pl_button(x0 + 45, y0 + 46, 12, 4.4f, k & R3D_KEY_SELECT);
     pl_button(x0 + 59, y0 + 46, 12, 4.4f, k & R3D_KEY_START);
-    const float ax = x0 + 97, ay = y0 + 31, d = 9, r = 4;   /* X top, Y left, A right, B bottom */
-    const struct { float x, y; unsigned key; } abxy[4] = {
-        {ax, ay - d, R3D_KEY_X}, {ax - d, ay, R3D_KEY_Y}, {ax + d, ay, R3D_KEY_A}, {ax, ay + d, R3D_KEY_B}};
+    const float ax = x0 + 97, ay = y0 + 31, d = 9, r = 4.5f;   /* X top, Y left, A right, B bottom */
+    const struct { float x, y; unsigned key; const char *l; } abxy[4] = {
+        {ax, ay - d, R3D_KEY_X, "X"}, {ax - d, ay, R3D_KEY_Y, "Y"}, {ax + d, ay, R3D_KEY_A, "A"}, {ax, ay + d, R3D_KEY_B, "B"}};
     for (int i = 0; i < 4; i++) {
-        if (k & abxy[i].key)
-            ui_circle(abxy[i].x, abxy[i].y, r, COL_ACCENT);
+        const bool held = (k & abxy[i].key) != 0;
+        if (held)
+            ui_circle(abxy[i].x, abxy[i].y, r, COL_WHITE);
         else
             ui_frame(abxy[i].x - r, abxy[i].y - r, 2 * r, 2 * r, r, 1.2f, COL_SOFT);
+        pl_letter(abxy[i].x, abxy[i].y, abxy[i].l, held);
     }
 }
 
@@ -1837,8 +2052,8 @@ static void draw_inputs_bottom(const InputState *st)
         return;
     const float x = st->tx * 2 + 1.0f, y = st->ty + 0.5f;
     ui_frame(x - 8.5f, y - 8.5f, 17, 17, 8.5f, 3, RGBA(0x0E, 0x10, 0x14, 0x8C));
-    ui_frame(x - 7, y - 7, 14, 14, 7, 2, COL_ACCENT);
-    ui_circle(x, y, 2, COL_ACCENT);
+    ui_frame(x - 7, y - 7, 14, 14, 7, 2, COL_WHITE);
+    ui_circle(x, y, 2, COL_WHITE);
 }
 
 static void open_player(App *a, const GalItem *it)
@@ -1991,6 +2206,7 @@ void app_update(App *a, const Input *in)
     case SCR_PHONE: update_phone(a, in); break;
     case SCR_UNINSTALL: update_uninstall(a, in); break;
     case SCR_SDTEST: update_sdtest(a, in); break;
+    case SCR_LED: update_led(a, in); break;
     case SCR_UPDATE: update_update(a, in); break;
     case SCR_UNINSTALLED:
         if ((in->down & (KEY_A | KEY_B | KEY_START)) || in->tapped)
@@ -2013,7 +2229,7 @@ static void stat_card(float x, float y, float w, const char *label, const char *
 static void button(Rect r, const char *label, int style, bool focused) /* 0 secondary, 1 primary, 2 danger, 3 disabled */
 {
     const u32 bg = style == 1 ? COL_TEXT : style == 2 ? COL_DANGER : COL_SURFACE;
-    const u32 fg = style == 1 ? COL_BG : style == 2 ? COL_WHITE : style == 3 ? COL_FAINT : COL_TEXT;
+    const u32 fg = style == 1 || style == 2 ? COL_BG : style == 3 ? COL_FAINT : COL_TEXT;
     ui_rrect(r.x, r.y, r.w, r.h, 7, bg);
     ui_text_center(r.x + r.w / 2, r.y + r.h / 2 - 7, 10, FONT_BOLD, fg, label);
     if (focused)
@@ -2022,10 +2238,13 @@ static void button(Rect r, const char *label, int style, bool focused) /* 0 seco
 
 static void check_row(float y, bool ok, bool bad, const char *label, const char *value)
 {
-    ui_card(14, y, 372, 26, 7, bad ? COL_ERR_BG : COL_SURFACE);
-    ui_icon(ok ? ICON_CHECK : bad ? ICON_CROSS : ICON_INFO, 28, y + 13, 14, ok ? COL_OK : bad ? COL_ERR : COL_INFO);
+    /* done: green; to fix: amber, framed; on its way (will be installed): neutral */
+    ui_card(14, y, 372, 26, 7, bad ? COL_WARN_BG : ok ? COL_OK_BG : COL_SURFACE);
+    if (bad)
+        ui_frame(14, y, 372, 26, 7, 1.2f, COL_WARN_FILL);
+    ui_icon(ok ? ICON_CHECK : bad ? ICON_WARN : ICON_INFO, 28, y + 13, 13, ok ? COL_OK : bad ? COL_WARN_FILL : COL_INFO);
     ui_text(42, y + 6, 10, FONT_REG, COL_TEXT, label);
-    ui_text_right(378, y + 7, 9, FONT_REG, bad ? COL_ERR : COL_MUTED, value);
+    ui_text_right(378, y + 7, 9, FONT_BOLD, bad ? COL_WARN : ok ? COL_OK : COL_MUTED, value);
 }
 
 static void navbar(const char *title)
@@ -2055,10 +2274,21 @@ static void format_name(char *buf, size_t cap, const char *name)
 }
 
 /* the top screen alone still fills the card in 3D; the bottom one alone takes about half of it */
+/* A 3D game's worst case: every frame C420 (a byte a pixel), the sound beside (PCM, 7.7 MB a minute).
+   2D games and menus take much less (XR32 keeps only what changed). */
 static u32 mb_per_min(const App *a)
 {
-    const u32 perMin = MB_PER_MIN_BOTH_30 * (u32)a->cfg.fps / 30u;
-    return a->cfg.screens == SCREENS_BOTTOM ? perMin / 2 : perMin;
+    const u32 fps = (u32)a->cfg.fps, bot = a->cfg.bottomFps > 0 && (u32)a->cfg.bottomFps < fps ? (u32)a->cfg.bottomFps : fps;
+    u64 perSec = 0;
+    if (a->cfg.screens != SCREENS_BOTTOM)
+        perSec += 400u * 240u * fps;
+    if (a->cfg.screens == SCREENS_BOTH)
+        perSec += 320u * 240u * bot;
+    else if (a->cfg.screens == SCREENS_BOTTOM)
+        perSec += 320u * 240u * fps;
+    if (a->cfg.lossless) /* XR32: two bytes a pixel when all of it changes */
+        perSec *= 2u;
+    return (u32)(perSec * 60u / (1024u * 1024u)) + (a->cfg.audio ? 8u : 0u);
 }
 
 static u32 minutes_left(const App *a)
@@ -2070,7 +2300,7 @@ static u32 minutes_left(const App *a)
 /* ------------------------------------------------------------------ top screen */
 
 /* The newest recording's thumbnail, uploaded here (after C3D_FrameBegin) when it changed. */
-static bool draw_last_thumb(const char *newest, float x, float y)
+static bool draw_last_thumb(const char *newest, float x, float y, float scale)
 {
     if (!g_lastTexOk || !g_lastThumb)
         return false;
@@ -2084,18 +2314,20 @@ static bool draw_last_thumb(const char *newest, float x, float y)
     LightLock_Unlock(&g_infoLock);
     if (!ok)
         return false;
-    ui_tex(&g_lastTex, 100, 60, x, y, 1);
-    ui_frame(x, y, 100, 60, 2, 1, COL_FAINT);
+    ui_tex(&g_lastTex, 100, 60, x, y, scale);
+    ui_frame(x, y, 100 * scale, 60 * scale, 2, 1, COL_FAINT);
     return true;
 }
 
 /* "Saving clip 42% · 2 more" while replay clips are made into recordings, else "Joining recordings
    42% · 1 more" while recordings paused by the recorder are joined (prepare.c); false: none. */
-static bool clips_text(char *buf, size_t cap)
+static bool clips_text_pm(char *buf, size_t cap, int *permille, bool *clips)
 {
     int pm = -1;
     int n = prepare_clips(&pm);
     const bool joins = n <= 0;
+    if (clips)
+        *clips = !joins;
     if (joins)
         n = prepare_joins(&pm);
     if (n <= 0)
@@ -2109,94 +2341,161 @@ static bool clips_text(char *buf, size_t cap)
         snprintf(buf, cap, T(S_CLIP_MORE), one, n - 1);
     else
         snprintf(buf, cap, "%s", one);
+    if (permille)
+        *permille = pm;
     return true;
 }
 
+static bool clips_text(char *buf, size_t cap) { return clips_text_pm(buf, cap, NULL, NULL); }
+
+static void format_mb1(char *buf, size_t cap, u32 bytes);
+
+/* Home, top screen (Redesign 2.0): one status (no pill repeating it), the background work as a
+   strip, the chips, then the recent captures (or, while recording, what is recorded). */
 static void draw_panel_top(App *a)
 {
-    char buf[96], v[48], s[48];
-    snprintf(buf, sizeof(buf), "3DS Recorder %s%s%s · %s", APP_VERSION, APP_CHANNEL[0] ? " " : "", APP_CHANNEL,
-             a->new3ds ? "New 3DS" : "Old 3DS"); /* the version: beta reports name it */
-    ui_text(14, 13, 9, FONT_REG, COL_MUTED, buf);
-    const bool recording = a->st.running && a->st.state == REC_STATE_RECORDING;
-    if (!a->st.running || a->st.state == REC_STATE_EXITED)
-        snprintf(buf, sizeof(buf), "%s", T(S_STATE_OFF));
-    else if (recording) {
-        char t[16];
-        snprintf(t, sizeof(t), "%02lu:%02lu", (unsigned long)(a->st.recSeconds / 60), (unsigned long)(a->st.recSeconds % 60));
-        snprintf(buf, sizeof(buf), T(S_STATE_RECORDING), t);
-    } else
-        snprintf(buf, sizeof(buf), "%s",
-                 T(a->st.state == REC_STATE_STARTING ? S_STATE_STARTING
-                   : a->st.state == REC_STATE_SAVING ? S_STATE_SAVING
-                   : a->st.state == REC_STATE_ERROR  ? S_STATE_ERROR
-                                                      : S_STATE_READY));
-    ui_text(14, 25, 17, FONT_BOLD, COL_TEXT, buf);
-    if (recording)
-        ui_pill(386, 16, "REC", COL_ERR, COL_ERR_BG, true);
-    else if (a->st.running)
-        ui_pill(386, 16, T(S_PILL_ON), COL_OK, COL_OK_BG, true);
-    else
-        ui_pill(386, 16, T(S_PILL_OFF), COL_SOFT, COL_SURFACE, false);
+    char buf[160], v[48], s[48];
+    const bool running = a->st.running && a->st.state != REC_STATE_EXITED;
+    const bool recording = running && a->st.state == REC_STATE_RECORDING;
+    const u32 recKey = hk_mask(a->cfg.hotkey), clipKey = hk_mask(a->cfg.replayHotkey);
+    float y;
 
-    const float w = (372 - 3 * 7) / 4.0f, y = 60;
+    /* the status */
+    if (recording) {
+        ui_circle(18, 16, 3.5f, COL_REC);
+        ui_text(26, 10, 9, FONT_BOLD, COL_REC, T(S_HOME_REC));
+        snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)(a->st.recSeconds / 60), (unsigned long)(a->st.recSeconds % 60));
+        ui_text(13, 21, 28, FONT_BOLD, COL_TEXT, buf);
+        const float w = hk_line(0, 0, 9, COL_MUTED, T(S_HOME_STOP), recKey, 0, false);
+        hk_line(386 - w, 30, 9, COL_MUTED, T(S_HOME_STOP), recKey, 0, true);
+        y = 60;
+    } else {
+        /* the card in focus tells its state: Replay's with its gear, the recorder's otherwise */
+        const bool ready = a->st.state == REC_STATE_IDLE || a->st.state == REC_STATE_REPLAY;
+        const bool replayCard = a->focus == FOCUS_REPLAY || a->focus == FOCUS_REPLAY_GEAR;
+        char len[16];
+        replay_len_label(a->cfg.replaySec, len, sizeof(len));
+        if (replayCard) {
+            ui_icon(ICON_REPLAY, 19, 19, 12, a->cfg.replay ? COL_REPLAY : COL_MUTED);
+            if (a->cfg.replay)
+                snprintf(buf, sizeof(buf), T(S_HOME_REPLAY), len);
+            else
+                snprintf(buf, sizeof(buf), "%s", T(S_HOME_REPLAY_OFF));
+        } else if (!running) {
+            ui_circle(19, 19, 3.5f, COL_MUTED);
+            ui_circle(19, 19, 2.2f, COL_BG);
+            snprintf(buf, sizeof(buf), "%s", T(S_STATE_OFF));
+        } else {
+            const bool err = a->st.state == REC_STATE_ERROR;
+            ui_circle(19, 19, 3.5f, err ? COL_ERR : ready ? COL_OK_FILL : COL_WARN_FILL);
+            snprintf(buf, sizeof(buf), "%s",
+                     T(a->st.state == REC_STATE_STARTING ? S_STATE_STARTING
+                       : a->st.state == REC_STATE_SAVING ? S_STATE_SAVING
+                       : err                             ? S_STATE_ERROR
+                                                         : S_STATE_READY));
+        }
+        ui_text_fit(30, 11, 356, 13, FONT_BOLD, COL_TEXT, buf);
+        if (replayCard) {
+            if (!a->cfg.replay)
+                hk_line(14, 34, 9, COL_MUTED, T(S_HOME_REPLAY_OFF_HINT), clipKey, 0, true);
+            else if (!running)
+                ui_text_fit(14, 35, 372, 9, FONT_REG, COL_MUTED, T(S_REPLAY_STARTS));
+            else
+                hk_line(14, 34, 9, COL_MUTED, T(S_HOME_REPLAY_HINT), clipKey, recKey, true);
+        } else if (!running)
+            ui_text_fit(14, 35, 372, 9, FONT_REG, COL_MUTED, T(S_HOME_OFF_HINT));
+        else if (ready)
+            hk_line(14, 34, 9, COL_MUTED, T(S_NO_RECORDINGS_HINT), recKey, 0, true);
+        y = 56;
+    }
+
+    /* the background work: replay clips being saved, paused recordings being joined */
+    int pm = -1;
+    bool clips = false;
+    if (clips_text_pm(buf, sizeof(buf), &pm, &clips)) {
+        ui_rrect(14, y, 372, 22, 6, clips ? COL_REPLAY_BG : COL_SURFACE);
+        ui_text_fit(22, y + 3, 356, 8.5f, FONT_BOLD, COL_TEXT, buf);
+        if (pm >= 0)
+            ui_progress(22, y + 15, 356, 3, pm / 1000.0f, clips ? COL_REPLAY : COL_TEXT, COL_SURFACE2);
+        y += 28;
+    } else if (!recording && update_shown()) { /* a newer version, until a recording starts */
+        ui_card(14, y, 372, 30, 8, COL_SURFACE);
+        ui_rrect(20, y + 4, 22, 22, 6, COL_OK_BG);
+        ui_icon(ICON_UPDATE, 31, y + 15, 13, COL_OK);
+        snprintf(buf, sizeof(buf), T(S_UPD_NEW), update_info()->version);
+        ui_text_fit(50, y + 3, 330, 10, FONT_BOLD, COL_TEXT, buf);
+        format_mb1(v, sizeof(v), update_size());
+        snprintf(buf, sizeof(buf), T(S_UPD_HAVE), APP_VERSION, v);
+        ui_text_fit(50, y + 17, 330, 8, FONT_REG, COL_MUTED, buf);
+        y += 36;
+    }
+
+    /* the chips */
+    const float w = (372 - 3 * 7) / 4.0f;
     format_gb(v, sizeof(v), a->sdFreeMb);
     snprintf(s, sizeof(s), T(S_MINUTES), (unsigned)minutes_left(a));
     if (recording) {
-        char fr[24], sk[32], mb[24], rate[24];
+        char fr[24], sk[32], mb[24], left[24];
         snprintf(fr, sizeof(fr), "%lu", (unsigned long)(a->st.framesTop + a->st.framesBot));
         snprintf(sk, sizeof(sk), T(S_SKIPPED), (unsigned)a->st.dropped);
         snprintf(mb, sizeof(mb), "%lu %s", (unsigned long)(a->st.recKb / 1024), T(S_MB));
+        /* what this file still holds at the rate so far (a file ends at 4 GB, the next one goes on) */
         const u32 kbs = a->st.recSeconds ? a->st.recKb / a->st.recSeconds : 0;
-        snprintf(rate, sizeof(rate), "≈ %lu%c%lu %s", (unsigned long)(kbs / 1024), i18n_decimal(), (unsigned long)(kbs % 1024 * 10 / 1024), T(S_MBS));
-        stat_card(14, y, w, T(S_PROFILE), T(S_PROFILE_STD), "XR32");
-        stat_card(14 + (w + 7), y, w, T(S_FRAMES), fr, sk);
-        stat_card(14 + 2 * (w + 7), y, w, T(S_FILE), mb, rate);
+        const u32 fileKb = 4u * 1024 * 1024, leftKb = a->st.recKb < fileKb ? fileKb - a->st.recKb : 0;
+        snprintf(left, sizeof(left), T(S_MINUTES), (unsigned)(kbs ? leftKb / kbs / 60 : 0));
+        stat_card(14, y, w, T(S_FRAMES), fr, sk);
+        stat_card(14 + (w + 7), y, w, T(S_FILE), mb, NULL);
+        stat_card(14 + 2 * (w + 7), y, w, T(S_HOME_THIS_FILE), left, T(S_HOME_UP_TO));
         stat_card(14 + 3 * (w + 7), y, w, T(S_SD_FREE), v, s);
-        ui_card(14, 120, 372, 106, 8, COL_SURFACE);
-        ui_icon(ICON_INFO, 30, 136, 14, COL_INFO);
-        ui_text(44, 129, 10, FONT_BOLD, COL_TEXT, T(S_WHOLE_CONSOLE));
-        ui_text_wrap(44, 145, 330, 9, FONT_REG, COL_SOFT, T(S_WHOLE_CONSOLE_BODY));
     } else {
         char fps[16];
         snprintf(fps, sizeof(fps), "%d fps", a->cfg.fps);
-        stat_card(14, y, w, T(S_PROFILE), T(S_PROFILE_STD), "XR32");
+        stat_card(14, y, w, T(S_PROFILE), T(S_PROFILE_STD), a->cfg.lossless ? "XR32" : T(S_CODEC_AUTO));
         stat_card(14 + (w + 7), y, w, T(S_FPS), fps, T(S_TARGET));
         stat_card(14 + 2 * (w + 7), y, w, T(S_SCREENS), T(a->cfg.screens == SCREENS_BOTH ? S_BOTH : a->cfg.screens == SCREENS_TOP ? S_TOP : S_BOTTOM),
                   T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
         stat_card(14 + 3 * (w + 7), y, w, T(S_SD_FREE), v, s);
-        ui_card(14, 120, 372, 106, 8, COL_SURFACE);
-        if (a->files.newest[0]) {
-            if (!draw_last_thumb(a->files.newest, 24, 136)) {
-                ui_rrect(24, 136, 100, 60, 5, COL_SURFACE2);
-                ui_icon(ICON_PLAY, 74, 166, 20, COL_FAINT);
-            }
-            ui_text(136, 140, 9, FONT_REG, COL_MUTED, T(S_LAST));
-            format_name(buf, sizeof(buf), a->files.newest);
-            ui_text(136, 154, 11, FONT_BOLD, COL_TEXT, buf);
-            char cnt[40];
-            snprintf(buf, sizeof(buf), "%llu %s · %s", (unsigned long long)(a->files.newestBytes >> 20), T(S_MB),
-                     i18n_recordings(a->files.count, cnt, sizeof(cnt)));
-            ui_text(136, 172, 9, FONT_REG, COL_MUTED, buf);
-            int pm = -1; /* its MP4 for the phone */
-            const PrepareState ps = prepare_state(a->files.newest, &pm);
-            if (ps == PS_READY)
-                ui_text_right(376, 140, 9, FONT_REG, COL_OK, T(S_GAL_PREP_READY));
-            else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0 && a->cfg.convertAuto)) { /* manual: a paused job waits for a Download */
-                snprintf(buf, sizeof(buf), T(S_GAL_PREP_PCT), pm / 10);
-                ui_text_right(376, 140, 9, FONT_REG, ps == PS_WORKING ? COL_SOFT : COL_FAINT, buf);
-            }
-            ui_key_hint(136, 200, "Y", T(S_OPEN));
-        } else {
-            ui_text(28, 150, 11, FONT_BOLD, COL_TEXT, T(S_NO_RECORDINGS));
-            char hk[48], hint[96];
-            hk_label(hk_mask(a->cfg.hotkey), hk, sizeof(hk));
-            snprintf(hint, sizeof(hint), T(S_NO_RECORDINGS_HINT), hk);
-            ui_text(28, 168, 9, FONT_REG, COL_MUTED, hint);
-        }
-        if (clips_text(buf, sizeof(buf)))   /* replay clips on their way to being recordings */
-            ui_text_right(376, 204, 9, FONT_REG, COL_SOFT, buf);
     }
+    y += 56;
+
+    /* the card under them */
+    const float h = 230 - y;
+    ui_card(14, y, 372, h, 8, COL_SURFACE);
+    if (recording) {
+        ui_icon(ICON_REC, 30, y + 16, 12, COL_REC);
+        ui_text(44, y + 9, 10, FONT_BOLD, COL_TEXT, T(S_WHOLE_CONSOLE));
+        ui_text_wrap_lines(44, y + 25, 330, 9, FONT_REG, COL_SOFT, T(S_WHOLE_CONSOLE_BODY), (int)((h - 30) / 11.7f));
+        return;
+    }
+    ui_icon(ICON_CLOCK, 27, y + 13, 10, COL_MUTED);
+    ui_text(36, y + 7, 8, FONT_BOLD, COL_MUTED, T(S_HOME_RECENT));   /* the canvas' eyebrow, kept in sentence case for the languages */
+    if (!a->files.newest[0]) {
+        ui_text(24, y + 26, 11, FONT_BOLD, COL_TEXT, T(S_NO_RECORDINGS));
+        hk_line(24, y + 44, 9, COL_MUTED, T(running ? S_NO_RECORDINGS_HINT : S_HOME_EMPTY_OFF), recKey, 0, true);
+        return;
+    }
+    char cnt[40];
+    snprintf(buf, sizeof(buf), "%s", i18n_recordings(a->files.count, cnt, sizeof(cnt)));
+    ui_text_right(378, y + 7, 8, FONT_REG, COL_MUTED, buf);
+    const float ty = y + 23, th = h - 30 < 60 ? h - 30 : 60, tw = th * 100 / 60;
+    if (!draw_last_thumb(a->files.newest, 24, ty, th / 60)) {
+        ui_rrect(24, ty, tw, th, 5, COL_SURFACE2);
+        ui_icon(ICON_PLAY, 24 + tw / 2, ty + th / 2, 18, COL_FAINT);
+    }
+    const float ix = 24 + tw + 12;
+    format_name(buf, sizeof(buf), a->files.newest);
+    ui_text_fit(ix, ty, 378 - ix, 11, FONT_BOLD, COL_TEXT, buf);
+    snprintf(buf, sizeof(buf), "%llu %s", (unsigned long long)(a->files.newestBytes >> 20), T(S_MB));
+    ui_text(ix, ty + 17, 9, FONT_REG, COL_MUTED, buf);
+    int ppm = -1; /* its MP4 for the phone */
+    const PrepareState ps = prepare_state(a->files.newest, &ppm);
+    if (ps == PS_READY)
+        ui_badge(ix, ty + 32, T(S_GAL_PREP_READY), COL_OK, COL_OK_BG);
+    else if (ps == PS_WORKING || (ps == PS_QUEUED && ppm > 0 && a->cfg.convertAuto)) { /* manual: a paused job waits for a Download */
+        snprintf(buf, sizeof(buf), T(S_GAL_PREP_PCT), ppm / 10);
+        ui_badge(ix, ty + 32, buf, COL_WARN, COL_WARN_BG);
+    }
+    ui_key_hint(378 - ui_key_hint_width("Y", T(S_PLAY)), y + h - 21, "Y", T(S_PLAY));
 }
 
 static void draw_firstrun_top(App *a)
@@ -2219,8 +2518,9 @@ static void draw_firstrun_top(App *a)
     check_row(182, a->sdFreeMb > 256, a->sdFreeMb <= 256, T(S_FR_SD), val);
 }
 
-static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8, S_H9, S_H10};
-static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY, S_H9_BODY, S_H10_BODY};
+static const Str HELP_TITLE[HELP_TOPICS] = {S_H1, S_H2, S_H3, S_H4, S_H5, S_H6, S_H7, S_H8, S_H9, S_H10, S_H11};
+static const Str HELP_BODY[HELP_TOPICS] = {S_H1_BODY, S_H2_BODY, S_H3_BODY, S_H4_BODY, S_H5_BODY, S_H6_BODY, S_H7_BODY, S_H8_BODY, S_H9_BODY, S_H10_BODY, S_H11_BODY};
+#define HELP_COMPUTER 10   /* "On a computer": the converter's address as a code to scan */
 
 /* The author's Telegram channel (news, questions), opposite "Y How to use". */
 static void help_channel(void)
@@ -2280,6 +2580,32 @@ static void draw_support_top(void)
     }
 }
 
+/* The converter for a computer (web/, GitHub Pages): a .r3d from the SD card into an MP4 in the
+   browser. Shown as a code to scan where a recording leaves the console without Wi-Fi. */
+#define CONVERTER_URL "https://bolgarmaxym97.github.io/3ds-recorder/"
+
+/* A QR code of `url` in a white box `box` wide (made once for each address, kept for the next). */
+static void draw_url_qr(const char *url, float x, float y, float box)
+{
+    static char made[96];
+    static u8 qr[qrcodegen_BUFFER_LEN_FOR_VERSION(5)];
+    static int ok;
+    if (strcmp(made, url) != 0) {
+        u8 tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(5)];
+        snprintf(made, sizeof(made), "%s", url);
+        ok = qrcodegen_encodeText(url, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 5, qrcodegen_Mask_AUTO, true) ? 1 : -1;
+    }
+    if (ok < 0)
+        return;
+    ui_rrect(x, y, box, box, 8, COL_WHITE);
+    const int n = qrcodegen_getSize(qr);
+    const float mod = (float)(int)((box - 10) / n), qx = x + (box - mod * n) / 2, qy = y + (box - mod * n) / 2;
+    for (int yy = 0; yy < n; yy++)
+        for (int xx = 0; xx < n; xx++)
+            if (qrcodegen_getModule(qr, xx, yy))
+                ui_rect(qx + xx * mod, qy + yy * mod, mod, mod, COL_BG);
+}
+
 static void draw_help_top(App *a)
 {
     char buf[48];
@@ -2294,7 +2620,12 @@ static void draw_help_top(App *a)
     }
     ui_text(14, 25, 15, FONT_BOLD, COL_TEXT, T(HELP_TITLE[a->helpTopic]));
     if (a->helpTopic == 1) { /* the LED: coloured lamps next to the lines */
-        static const u32 lamp[5] = {COL_LED_BLUE, COL_ACCENT, COL_LED_BLUE_FAINT, COL_LED_GREEN, COL_ACCENT};
+        /* the lamps in the colours LED Studio has (1.7's by default); an event switched off: empty */
+        u32 lamp[5];
+        for (int i = 0; i < 5; i++) {
+            const LedEvent *o = &a->cfg.ledEv[i];
+            lamp[i] = o->on ? RGBA(o->r, o->g, o->b, 0xFF) : COL_SURFACE2;
+        }
         const char *p = T(S_H2_BODY);
         float y = 50;
         for (int i = 0; i < 6 && *p; i++) {
@@ -2312,6 +2643,15 @@ static void draw_help_top(App *a)
             y += ui_text_wrap(36, y, 350, 10, FONT_REG, COL_SOFT, line) + 6;
             p = e ? e + 1 : p + n;
         }
+        ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
+        help_channel();
+        return;
+    }
+    if (a->helpTopic == HELP_COMPUTER) {
+        ui_text_wrap_lines(14, 54, 262, 10, FONT_REG, COL_SOFT, T(S_H11_BODY), 12);
+        draw_url_qr(CONVERTER_URL, 290, 54, 96);
+        ui_text_center(338, 156, 8, FONT_REG, COL_MUTED, "bolgarmaxym97.github.io");
+        ui_text_center(338, 167, 8, FONT_REG, COL_MUTED, "/3ds-recorder");
         ui_key_hint(14, 218, "Y", T(S_GUIDE_OPEN));
         help_channel();
         return;
@@ -2380,48 +2720,105 @@ static void draw_lang_bottom(App *a)
 }
 
 static const Str GUIDE_TITLE[GUIDE_PAGES] = {S_G1_TITLE, S_G2_TITLE, S_G3_TITLE, S_G4_TITLE};
-static const Str GUIDE_BODY[GUIDE_PAGES] = {S_G1_BODY, S_G2_BODY, S_G3_BODY, S_G4_BODY};
 
-static void draw_guide_top(App *a)
+static u32 led_now(const LedEvent *e, u32 frame);
+static const Str LED_EV_NAME[LED_EV_COUNT] = {S_LED_EV_READY, S_LED_EV_REC, S_LED_EV_REPLAY, S_LED_EV_SAVED, S_LED_EV_ERROR};
+static const Str GUIDE_SHORT[GUIDE_PAGES] = {S_G1_SHORT, S_G2_SHORT, S_G3_SHORT, S_G4_SHORT};
+
+/* a small game picture (the top screen of the console), for the guide's pages */
+static void guide_game(float x, float y, float w, float h)
 {
-    char buf[64], hk[48], body[1024];
-    const int pg = a->guidePage;
-    snprintf(buf, sizeof(buf), T(S_GUIDE_OF), pg + 1, GUIDE_PAGES);
-    ui_text(14, 13, 9, FONT_REG, COL_MUTED, buf);
-    ui_text(14, 25, 17, FONT_BOLD, COL_TEXT, T(GUIDE_TITLE[pg]));
-    const u32 m = hk_mask(a->cfg.hotkey);
-    hk_label(m, hk, sizeof(hk));
-    snprintf(body, sizeof(body), T(GUIDE_BODY[pg]), hk);
-    ui_text_wrap(14, 58, 372, 11, FONT_REG, COL_SOFT, body);
-    /* the picture of the page: what to press, what the LED does */
-    ui_card(14, 160, 372, 66, 10, COL_SURFACE);
-    if (pg == 0 || pg == 1) {
-        const float w = hk_chips_width(m);
-        hk_chips(110 - w / 2, 184, m, COL_TEXT);
-        ui_icon(ICON_NEXT, 200, 193, 14, COL_FAINT);
-        ui_circle(290, 193, 12, pg == 0 ? COL_ACCENT : COL_LED_GREEN);
-        ui_text(308, 186, 10, FONT_BOLD, COL_SOFT, pg == 0 ? "REC" : "×2");
-    } else if (pg == 2) {
-        float x = 40;
-        x += ui_key_hint(x, 186, "A", T(S_PLAY)) + 24;
-        ui_key_hint(x, 186, "Y", T(S_PH_HINT));
-    } else {
-        ui_circle(110, 193, 12, COL_LED_BLUE);
-        ui_icon(ICON_NEXT, 200, 193, 14, COL_FAINT);
-        ui_icon(ICON_CHECK, 290, 193, 20, COL_OK);
-    }
+    ui_rrect(x, y, w, h, 6, COL_BG);
+    ui_rrect(x + 4, y + 4, w - 8, h - 8, 4, COL_SURFACE2);
+    const float gh = h * 0.2f, gy = y + h - 4 - gh, r = h * 0.28f; /* the ground, hills behind it */
+    ui_circle(x + w * 0.3f, gy + gh - r, r, COL_TRACK);
+    ui_circle(x + w * 0.72f, gy + gh - r * 0.8f, r * 0.8f, COL_TRACK);
+    ui_rect(x + 4, gy, w - 8, gh, RGBA(0x2F, 0x5D, 0x3A, 0xFF));
+    ui_rrect(x + w * 0.45f, gy - h * 0.15f, h * 0.13f, h * 0.15f, 2, COL_ACCENT);
+    ui_circle(x + w - h * 0.24f, y + h * 0.2f, h * 0.075f, RGBA(0xFF, 0xD2, 0x7A, 0xFF));
 }
 
+static void guide_pill(float x, float y, u32 bg, u32 fg, const char *label, bool dot)
+{
+    const float w = ui_text_width(8, FONT_BOLD, label) + (dot ? 20 : 12);
+    ui_rrect(x, y, w, 15, 7, bg);
+    if (dot)
+        ui_circle(x + 8, y + 7.5f, 3, fg);
+    ui_text(x + (dot ? 14 : 6), y + 2.5f, 8, FONT_BOLD, fg, label);
+}
+
+/* How to use: a picture, the title and one sentence; the whole texts are in Help */
+static void draw_guide_top(App *a)
+{
+    char buf[64];
+    const int pg = a->guidePage;
+    snprintf(buf, sizeof(buf), T(S_GUIDE_OF), pg + 1, GUIDE_PAGES);
+    ui_text_fit(14, 12, 372, 8, FONT_BOLD, COL_DIM, buf);
+    ui_card(14, 28, 372, 132, 10, COL_SURFACE);
+    const u32 m = hk_mask(a->cfg.hotkey);
+    /* the picture */
+    if (pg == 3) { /* HOME Menu: its icons */
+        ui_rrect(30, 40, 180, 108, 6, COL_BG);
+        for (int i = 0; i < 6; i++)
+            ui_rrect(44 + (i % 3) * 52.0f, 56 + (i / 3) * 42.0f, 44, 34, 6, i == 0 ? COL_SURFACE2 : COL_TRACK);
+    } else if (pg == 2) { /* the Gallery: recordings */
+        ui_rrect(30, 40, 180, 108, 6, COL_BG);
+        for (int i = 0; i < 4; i++) {
+            const float tx = 40 + (i % 2) * 82.0f, ty = 48 + (i / 2) * 48.0f;
+            guide_game(tx, ty, 78, 44);
+        }
+        ui_frame(38, 46, 82, 48, 6, 1.5f, COL_FOCUS);
+    } else {
+        guide_game(30, 40, 180, 108);
+        if (pg == 0)
+            guide_pill(40, 48, COL_REC_BG, COL_REC, "REC", true);
+        else {
+            ui_rrect(40, 48, 30, 15, 7, COL_OK_BG);
+            ui_icon(ICON_CHECK, 55, 55.5f, 10, COL_OK);
+        }
+    }
+    /* what to press, and the LED */
+    const float cx = 298;
+    if (pg == 2) {
+        ui_key_hint(236, 62, "A", T(S_PLAY));
+        ui_key_hint(236, 92, "Y", T(S_PH_HINT));
+    } else {
+        if (pg < 2) {
+            const float w = hk_chips_width(m);
+            hk_chips(cx - w / 2, 50, m, COL_TEXT);
+        }
+        const int ev = pg == 0 ? LED_EV_REC : pg == 1 ? LED_EV_SAVED : LED_EV_READY;
+        const LedEvent *e = &a->cfg.ledEv[ev];
+        ui_circle(cx, 98, 17, COL_BG);
+        ui_circle(cx, 98, 11, e->on ? led_now(e, a->frame) : COL_SURFACE2);
+        snprintf(buf, sizeof(buf), "LED · %s", T(LED_EV_NAME[ev]));
+        ui_text_center(cx, 122, 8, FONT_BOLD, COL_MUTED, buf);
+    }
+    /* the title and one sentence */
+    ui_text_fit(14, 170, 372, 15, FONT_BOLD, COL_TEXT, T(GUIDE_TITLE[pg]));
+    ui_text_wrap_lines(14, 194, 372, 9.5f, FONT_REG, COL_SOFT, T(GUIDE_SHORT[pg]), 3);
+}
+
+/* the four pages as a list: done, this one, the ones left */
 static void draw_guide_bottom(App *a)
 {
     const int pg = a->guidePage;
-    ui_card(12, 12, 296, 170, 10, COL_SURFACE);
-    ui_circle(160, 70, 28, COL_SURFACE2);
-    const char n[2] = {(char)('1' + pg), 0};
-    ui_text_center(160, 56, 22, FONT_BOLD, COL_TEXT, n);
-    ui_text_center(160, 112, 12, FONT_BOLD, COL_TEXT, T(GUIDE_TITLE[pg]));
-    for (int i = 0; i < GUIDE_PAGES; i++) /* page dots */
-        ui_circle(160 + (i - (GUIDE_PAGES - 1) / 2.0f) * 14, 150, i == pg ? 4 : 3, i == pg ? COL_ACCENT : COL_SURFACE2);
+    ui_text(14, 10, 8, FONT_BOLD, COL_DIM, T(S_GUIDE_OPEN));
+    for (int i = 0; i < GUIDE_PAGES; i++) {
+        const Rect r = {12, 26 + i * 42.0f, 296, 36};
+        ui_card(r.x, r.y, r.w, r.h, 8, i == pg ? COL_SURFACE2 : COL_SURFACE);
+        if (i < pg) {
+            ui_circle(r.x + 20, r.y + 18, 10, COL_OK_BG);
+            ui_icon(ICON_CHECK, r.x + 20, r.y + 18, 11, COL_OK);
+        } else {
+            const char n[2] = {(char)('1' + i), 0};
+            ui_circle(r.x + 20, r.y + 18, 10, i == pg ? COL_TEXT : COL_TRACK);
+            ui_text_center(r.x + 20, r.y + 11.5f, 9, FONT_BOLD, i == pg ? COL_BG : COL_MUTED, n);
+        }
+        ui_text_fit(r.x + 38, r.y + 11, r.w - 46, 10, i == pg ? FONT_BOLD : FONT_REG, i <= pg ? COL_TEXT : COL_MUTED, T(GUIDE_TITLE[i]));
+        if (i == pg)
+            ui_frame(r.x, r.y, r.w, r.h, 8, 1.2f, COL_FOCUS);
+    }
     button(GD_SKIP, T(S_GUIDE_SKIP), 0, false);
     button(GD_NEXT, T(pg + 1 < GUIDE_PAGES ? S_GUIDE_NEXT : S_GUIDE_DONE), 1, true);
 }
@@ -2473,10 +2870,24 @@ static void draw_settings_top(App *a)
         snprintf(note, sizeof(note), "%s", T(S_SDTEST_NOTE));
     else if (row == ROW_UPDATES)
         snprintf(note, sizeof(note), "%s", T(S_UPD_NOTE));
+    else if (row == ROW_HOTKEY || row == ROW_REPLAY_HOTKEY)
+        snprintf(note, sizeof(note), "%s", T(S_HK_RULES));
+    else if (row == ROW_REPLAY)
+        snprintf(note, sizeof(note), "%s", T(S_REPLAY_NOTE));
+    else if (row == ROW_LED)
+        snprintf(note, sizeof(note), "%s", T(S_H2_BODY));
     else
         snprintf(note, sizeof(note), T(S_SETTINGS_NOTE), (unsigned)(perMin ? 4096 / perMin : 0));
     /* right under the stat cards (the toast takes the bottom of the screen); a note too long for that
        goes in their place: they are about the recording, the note about the row in focus */
+    if (row == ROW_CONVERT) { /* the converter on a computer, as a code to scan */
+        ui_card(132, 40, 254, 192, 8, COL_SURFACE);
+        ui_text_wrap_lines(142, 47, 134, 9, FONT_REG, COL_SOFT, note, 14);
+        draw_url_qr(CONVERTER_URL, 286, 48, 92);
+        ui_text_center(332, 146, 8, FONT_REG, COL_MUTED, "bolgarmaxym97.github.io");
+        ui_text_center(332, 157, 8, FONT_REG, COL_MUTED, "/3ds-recorder");
+        return;
+    }
     const float h = ui_text_wrap_height(234, 9, FONT_REG, note) + 14;
     const bool tall = h > SCREEN_H - 8 - 154;
     if (!tall) {
@@ -2491,49 +2902,126 @@ static void draw_settings_top(App *a)
     ui_text_wrap_lines(142, y + 7, 234, 9, FONT_REG, COL_SOFT, note, lines);
 }
 
+/* A 3DS, its lower half from the front, the buttons in `lit` drawn in `color` (New 3DS: ZL / ZR,
+   the C-stick and START / SELECT on the right). 260 x 132 at (x, y). */
+static void draw_console(float x, float y, bool n3ds, u32 lit, u32 color)
+{
+    const u32 body = COL_SURFACE, part = COL_SURFACE2, line = COL_TRACK, ink = COL_BG;
+    #define LIT(k) ((lit & (k)) ? color : part)
+    /* shoulders behind the body */
+    ui_rrect(x + 14, y, 40, 16, 6, LIT(HK_L));
+    ui_rrect(x + 206, y, 40, 16, 6, LIT(HK_R));
+    ui_text_center(x + 34, y + 1, 8, FONT_BOLD, (lit & HK_L) ? ink : COL_MUTED, "L");
+    ui_text_center(x + 226, y + 1, 8, FONT_BOLD, (lit & HK_R) ? ink : COL_MUTED, "R");
+    if (n3ds) {
+        ui_rrect(x + 58, y + 2, 26, 12, 4, LIT(HK_ZL));
+        ui_rrect(x + 176, y + 2, 26, 12, 4, LIT(HK_ZR));
+        ui_text_center(x + 71, y + 3, 7, FONT_BOLD, (lit & HK_ZL) ? ink : COL_MUTED, "ZL");
+        ui_text_center(x + 189, y + 3, 7, FONT_BOLD, (lit & HK_ZR) ? ink : COL_MUTED, "ZR");
+    }
+    ui_rrect(x + 9, y + 9, 242, 124, 14, line);
+    ui_rrect(x + 10, y + 10, 240, 122, 13, body);
+    ui_rrect(x + 79, y + 20, 102, 80, 3, line);
+    ui_rrect(x + 80, y + 21, 100, 78, 2, COL_BG);
+    /* Circle Pad, D-pad */
+    ui_circle(x + 45, y + 42, 14, line);
+    ui_circle(x + 45, y + 42, 12.5f, part);
+    ui_rect(x + 39, y + 72, 12, 30, part);
+    ui_rect(x + 30, y + 81, 30, 12, part);
+    if (lit & HK_UP)
+        ui_rect(x + 39, y + 72, 12, 10, color);
+    if (lit & HK_DOWN)
+        ui_rect(x + 39, y + 92, 12, 10, color);
+    if (lit & HK_LEFT)
+        ui_rect(x + 30, y + 81, 10, 12, color);
+    if (lit & HK_RIGHT)
+        ui_rect(x + 50, y + 81, 10, 12, color);
+    /* A B X Y (a little smaller on New 3DS, the C-stick above them) */
+    const float bx = x + 215, by = y + 50, d = n3ds ? 14 : 15, r = n3ds ? 7 : 8;
+    const struct { u32 k; float dx, dy; const char *l; } F[4] = {
+        {HK_X, 0, -1, "X"}, {HK_A, 1, 0, "A"}, {HK_B, 0, 1, "B"}, {HK_Y, -1, 0, "Y"}};
+    for (int i = 0; i < 4; i++) {
+        ui_circle(bx + F[i].dx * d, by + F[i].dy * d, r, LIT(F[i].k));
+        ui_text_center(bx + F[i].dx * d, by + F[i].dy * d - 5, 8, FONT_BOLD, (lit & F[i].k) ? ink : COL_MUTED, F[i].l);
+    }
+    if (n3ds) {
+        ui_circle(x + 197, y + 26, 4, part);
+        ui_circle(x + 222, y + 88, 4.5f, LIT(HK_START));
+        ui_circle(x + 222, y + 103, 4.5f, LIT(HK_SELECT));
+        ui_text(x + 230, y + 98, 7, FONT_BOLD, (lit & HK_SELECT) ? color : COL_MUTED, "SELECT");
+        ui_rrect(x + 118, y + 108, 24, 8, 4, part);
+    } else {
+        ui_rrect(x + 88, y + 108, 24, 8, 4, LIT(HK_SELECT));
+        ui_rrect(x + 118, y + 108, 24, 8, 4, part);
+        ui_rrect(x + 148, y + 108, 24, 8, 4, part);
+        ui_text_center(x + 100, y + 118, 7, FONT_BOLD, (lit & HK_SELECT) ? color : COL_MUTED, "SELECT");
+        ui_text_center(x + 130, y + 118, 7, FONT_REG, COL_FAINT, "HOME");
+        ui_text_center(x + 160, y + 118, 7, FONT_REG, COL_FAINT, "START");
+    }
+    #undef LIT
+}
+
 static void draw_hotkey_top(App *a)
 {
-    const u32 m = a->hkReview ? a->hkCand : a->hkHeld;
-    ui_text_center(200, 40, 15, FONT_BOLD, COL_TEXT, T(a->hkReview ? S_HK_REVIEW_TITLE : S_HK_HOLD_TITLE));
+    const bool replay = a->hkStep == 1, cap = a->hkCapture;
+    const u32 m = !cap ? hk_mask(replay ? a->cfg.replayHotkey : a->cfg.hotkey) : a->hkReview ? a->hkCand : a->hkHeld;
+    const HkProblem problem = a->hkReview ? hk_step_problem(a, a->hkCand) : HK_OK;
+    const bool bad = a->hkReview && problem != HK_OK;
+    const u32 color = bad ? COL_WARN_FILL : replay ? COL_REPLAY : COL_REC;
+    draw_console(70, 8, a->new3ds, m, color);
+    /* the combination: the mode, its name, then the buttons in their shapes ("?" for one more) */
+    const char *title = T(replay ? S_HK_CLIP_TITLE : S_HK_REC_TITLE);
     const char *labels[3] = {NULL, NULL, NULL};
     int n = 0;
     for (int i = 0; i < HK_COUNT && n < 3; i++)
         if (m & HK_KEYS[i].key)
             labels[n++] = HK_KEYS[i].label;
-    float wbox[3], total = 0;
-    for (int i = 0; i < 3; i++) {
-        const float tw = labels[i] ? ui_text_width(17, FONT_BOLD, labels[i]) + 20 : 0;
-        wbox[i] = tw > 44 ? tw : 44;
-        total += wbox[i] + (i ? 20 : 0);
-    }
-    float x = 200 - total / 2;
-    for (int i = 0; i < 3; i++) {
-        if (i) {
-            ui_text_center(x + 10, 92, 17, FONT_BOLD, COL_MUTED, "+");
-            x += 20;
+    const BtnStyle st = bad ? BTN_WARN : replay ? BTN_REPLAY : BTN_REC;
+    float w = 18 + 6 + ui_text_width(10, FONT_BOLD, title) + 8;
+    const int shown = n < 3 && cap && !a->hkReview ? n + 1 : n;
+    for (int i = 0; i < shown; i++)
+        w += (i ? 12 : 0) + (labels[i] ? ui_btn_width(labels[i]) : 14);
+    float x = 200 - w / 2;
+    const float y = 152;
+    ui_rrect(x, y, 18, 14, 4, replay ? COL_REPLAY : COL_REC);
+    ui_icon(replay ? ICON_REPLAY : ICON_REC, x + 9, y + 7, 10, COL_BG);
+    x += 24;
+    x += ui_text(x, y + 1, 10, FONT_BOLD, COL_TEXT, title) + 8;
+    for (int i = 0; i < shown; i++) {
+        if (i)
+            x += ui_text(x + 2, y + 1, 10, FONT_BOLD, COL_MUTED, "+") + 4;
+        if (labels[i])
+            x += ui_btn(x, y, labels[i], st);
+        else {
+            ui_frame(x, y, 14, 14, 7, 1, COL_FAINT);
+            x += 14;
         }
-        if (labels[i]) {
-            ui_rrect(x, 80, wbox[i], 44, 9, COL_SURFACE2);
-            ui_frame(x, 80, wbox[i], 44, 9, 1.5f, COL_ACCENT);
-            ui_text_center(x + wbox[i] / 2, 90, 17, FONT_BOLD, COL_TEXT, labels[i]);
-        } else {
-            ui_frame(x, 80, wbox[i], 44, 9, 1.2f, COL_FAINT);
-            ui_text_center(x + wbox[i] / 2, 90, 17, FONT_BOLD, COL_FAINT, "?");
-        }
-        x += wbox[i];
     }
-    if (!a->hkReview && hk_count(a->hkHeld) > 3)
-        ui_text_center(200, 134, 9, FONT_BOLD, COL_WARN, T(S_HK_TOO_MANY));
-    float frac = a->hkReview ? 1 : 0;
-    if (!a->hkReview && hk_count(a->hkHeld) >= 2 && hk_count(a->hkHeld) <= 3)
-        frac = (a->frame - a->hkSince) / 60.0f;
-    if (frac > 1)
-        frac = 1;
-    ui_rrect(95, 152, 210, 5, 2.5f, COL_SURFACE2);
-    if (frac > 0)
-        ui_rrect(95, 152, 210 * frac, 5, 2.5f, COL_ACCENT);
-    if (!a->hkReview)
-        ui_text_center(200, 164, 9, FONT_REG, COL_MUTED, T(S_HK_HOLD_HINT));
+    /* choosing: how to change it; holding: the bar fills in 1 s; then what the rules say */
+    if (!cap)
+        ui_text_center(200, 182, 9, FONT_REG, COL_MUTED, T(S_HK_KEYS_BROWSE));
+    else if (!a->hkReview) {
+        const int cnt = hk_count(a->hkHeld);
+        float frac = cnt >= ((a->hkHeld & HK_ZLZR) ? 1 : 2) && cnt <= 3 ? (a->frame - a->hkSince) / 60.0f : 0;
+        ui_progress(110, 178, 180, 4, frac > 1 ? 1 : frac, COL_TEXT, COL_SURFACE2);
+        ui_text_center(200, 188, 8.5f, FONT_REG, cnt > 3 ? COL_WARN : COL_MUTED,
+                       T(cnt > 3 ? S_HK_TOO_MANY : g_zlzr ? S_HK_HOLD_HINT_Z : S_HK_HOLD_HINT));
+    } else {
+        const char *msg = T(hk_problem_text(problem));
+        const float mw = ui_text_width(9, FONT_BOLD, msg) + 30, mx = 200 - (mw > 372 ? 372 : mw) / 2;
+        ui_rrect(mx, 176, mw > 372 ? 372 : mw, 22, 6, bad ? COL_WARN_BG : COL_OK_BG);
+        ui_icon(bad ? ICON_BLOCK : ICON_CHECK, mx + 12, 187, 11, bad ? COL_WARN_FILL : COL_OK);
+        ui_text_fit(mx + 22, 181, 344, 9, FONT_BOLD, bad ? COL_WARN : COL_OK, msg);
+    }
+}
+
+/* what an uninstall does to one thing: a red cross when it goes, a green check when it stays */
+static void removal_row(float y, bool goes, const char *label, const char *value)
+{
+    ui_card(14, y, 372, 26, 7, goes ? COL_SURFACE : COL_OK_BG);
+    ui_icon(goes ? ICON_CROSS : ICON_CHECK, 28, y + 13, 12, goes ? COL_ERR : COL_OK);
+    ui_text(42, y + 6, 10, FONT_REG, COL_TEXT, label);
+    ui_text_right(378, y + 7, 9, goes ? FONT_REG : FONT_BOLD, goes ? COL_MUTED : COL_OK, value);
 }
 
 static void draw_uninstall_top(App *a)
@@ -2541,13 +3029,12 @@ static void draw_uninstall_top(App *a)
     char cnt[64], n[32], gb[24];
     ui_text(14, 13, 9, FONT_REG, COL_MUTED, T(S_UN_EYEBROW));
     ui_text(14, 25, 17, FONT_BOLD, COL_TEXT, T(S_UN_TITLE));
-    check_row(60, false, true, T(S_UN_MODULE), T(S_UN_MODULE_SUB));
-    check_row(91, false, true, T(S_UN_SETTINGS), "config.ini, recorder.log");
-    check_row(122, false, true, T(S_UN_APP), envIsHomebrew() ? "3ds-recorder.3dsx" : T(S_UN_APP_CIA));
+    removal_row(60, true, T(S_UN_MODULE), T(S_UN_MODULE_SUB));
+    removal_row(91, true, T(S_UN_SETTINGS), "config.ini, recorder.log");
+    removal_row(122, true, T(S_UN_APP), envIsHomebrew() ? "3ds-recorder.3dsx" : T(S_UN_APP_CIA));
     format_gb(gb, sizeof(gb), (u32)(a->files.bytes >> 20));
     snprintf(cnt, sizeof(cnt), "%s · %s", i18n_recordings(a->files.count, n, sizeof(n)), gb);
-    check_row(153, !a->deleteRecordings, a->deleteRecordings, T(S_UN_RECORDINGS),
-              a->deleteRecordings ? cnt : T(S_UN_RECORDINGS_KEEP));
+    removal_row(153, a->deleteRecordings, T(S_UN_RECORDINGS), a->deleteRecordings ? cnt : T(S_UN_RECORDINGS_KEEP));
 }
 
 static void draw_sdtest_top(App *a)
@@ -2582,12 +3069,20 @@ static void draw_sdtest_top(App *a)
     const u32 col = grade == 2 ? COL_OK : grade == 1 ? COL_WARN : COL_ERR;
     const u32 bg = grade == 2 ? COL_OK_BG : grade == 1 ? COL_WARN_BG : COL_ERR_BG;
     const char *verdict = T(grade == 2 ? S_SDT_GOOD : grade == 1 ? S_SDT_OK : S_SDT_SLOW);
+    /* a scale of three zones (slow · enough with fewer bottom frames · both screens at 30 fps), the
+       card's speed marked on it; 12 MB/s at the right end */
+    const float sx = 14, sw = 372, sy = 100, k = sw / 12288.0f;
+    ui_rrect(sx, sy, 4096 * k, 8, 4, COL_ERR_BG);
+    ui_rect(sx + 4096 * k, sy, 2048 * k, 8, COL_WARN_BG);
+    ui_rrect(sx + 6144 * k, sy, sw - 6144 * k, 8, 4, COL_OK_BG);
+    const float mx = sx + (r->kbPerSec > 12288 ? 12288 : r->kbPerSec) * k;
+    ui_rrect(mx - 2, sy - 4, 4, 16, 2, COL_TEXT);
     const float th = ui_text_wrap_height(330, 10, FONT_REG, verdict), ch = th + 20;
-    ui_card(14, 104, 372, ch, 8, bg);
-    ui_icon(grade == 2 ? ICON_CHECK : ICON_WARN, 30, 104 + ch / 2, 14, col);
-    ui_text_wrap(46, 114, 330, 10, FONT_REG, col, verdict);
+    ui_card(14, 122, 372, ch, 8, bg);
+    ui_icon(grade == 2 ? ICON_CHECK : ICON_WARN, 30, 122 + ch / 2, 14, grade == 1 ? COL_WARN_FILL : col);
+    ui_text_wrap(46, 132, 330, 10, FONT_REG, col, verdict);
     snprintf(buf, sizeof(buf), T(S_SDT_SLOWEST), (unsigned)r->slowestMs);
-    ui_text(14, 104 + ch + 12, 9, FONT_REG, COL_MUTED, buf);
+    ui_text(14, 122 + ch + 10, 9, FONT_REG, COL_MUTED, buf);
 }
 
 /* "8.4 MB" */
@@ -2685,7 +3180,7 @@ static void draw_update_top(App *a)
     ui_text(14, 74, 10, FONT_BOLD, COL_TEXT, T(S_UPD_WHATS_NEW));
     float y = 94;
     for (int i = 0; i < n && y < SCREEN_H - 20; i++) {
-        ui_circle(19, y + 7, 2, COL_ACCENT);
+        ui_circle(19, y + 7, 2, COL_OK_FILL);
         const int left = (int)((SCREEN_H - 8 - y) / (9.5f * 1.3f));
         y += ui_text_wrap_lines(28, y, 358, 9.5f, FONT_REG, COL_SOFT, lines[i], left < 1 ? 1 : left) + 5;
     }
@@ -2780,8 +3275,17 @@ static void draw_gallery_top(App *a)
         ui_text_center(87, 54, 9, FONT_REG, COL_MUTED, T(S_UNREADABLE));
 
     const float x = 176, w = (388 - x - 6) / 2;
-    snprintf(buf, sizeof(buf), T(S_GAL_NTH), a->galSel + 1, l->count);
-    ui_text(x, 13, 9, FONT_REG, COL_MUTED, buf);
+    {   /* "Recording 2 of 6 · 445 MB in all" (the filter's), or the clips being saved */
+        const int nv = gal_vis(l, a->galFilter);
+        char nth[64], tot[48];
+        snprintf(nth, sizeof(nth), T(S_GAL_NTH), vis_pos(nv, a->galSel) + 1, nv);
+        format_gb(v, sizeof(v), (u32)(l->bytes >> 20));
+        snprintf(tot, sizeof(tot), T(S_GAL_TOTAL), v);
+        char line[192];
+        if (!clips_text(line, sizeof(line)))
+            snprintf(line, sizeof(line), "%s · %s", nth, tot);
+        ui_text_fit(x, 13, 388 - x, 9, FONT_REG, COL_MUTED, line);
+    }
     format_name(buf, sizeof(buf), it->name);
     ui_text(x, 26, 13, FONT_BOLD, COL_TEXT, buf);
     ui_text(x, 45, 8, FONT_REG, COL_FAINT, it->name);
@@ -2804,8 +3308,13 @@ static void draw_gallery_top(App *a)
         ui_text(x, 176, 9, FONT_REG, COL_SOFT, buf);
         if (!it->ended) { /* cut off (power, a crash): hard to miss */
             ui_card(x, 188, 212, 25, 6, COL_WARN_BG);
-            ui_icon(ICON_WARN, x + 12, 200.5f, 12, COL_WARN);
+            ui_icon(ICON_WARN, x + 12, 200.5f, 12, COL_WARN_FILL);
             ui_text_wrap(x + 24, 191, 184, 8.5f, FONT_BOLD, COL_WARN, T(S_NOT_CLOSED));
+        } else if (it->durationMs > 10 * 60 * 1000 || (!a->cfg.convertAuto && prepare_state(it->name, NULL) != PS_READY)) {
+            /* a long one, or one left as .r3d: the converter on a computer is quicker */
+            ui_card(x, 188, 212, 25, 6, COL_INFO_BG);
+            ui_icon(ICON_INFO, x + 12, 200.5f, 11, COL_INFO);
+            ui_text_wrap_lines(x + 24, 190, 184, 8, FONT_REG, COL_INFO, T(S_GAL_FASTER), 2);
         }
     } else if (it->info) {
         stat_card(x, 62, w, T(S_SIZE), v, NULL);
@@ -2861,22 +3370,48 @@ static void draw_player_top(App *a)
     }
 }
 
+/* one step of the way to the phone: a number (a check when done, ! when it went wrong), its name,
+   what it is at on the right */
+static void phone_step(float x, float y, float w, int n, int state, const char *label, const char *value)
+{
+    /* state: 0 waiting, 1 now, 2 done, 3 failed (the console's MP4: the phone gets the .r3d) */
+    ui_rrect(x, y, w, 24, 6, state == 1 ? COL_SURFACE2 : COL_SURFACE);
+    const u32 dot = state == 2 ? COL_OK_FILL : state == 3 ? COL_WARN_FILL : state == 1 ? COL_TEXT : COL_SURFACE2;
+    ui_circle(x + 13, y + 12, 7.5f, dot);
+    if (state == 2)
+        ui_icon(ICON_CHECK, x + 13, y + 12, 10, COL_BG);
+    else {
+        char num[4];
+        snprintf(num, sizeof(num), state == 3 ? "!" : "%d", n);
+        ui_text_center(x + 13, y + 6.5f, 8, FONT_BOLD, state ? COL_BG : COL_MUTED, num);
+    }
+    ui_text_fit(x + 26, y + 6, w - 32 - (value ? ui_text_width(8.5f, FONT_BOLD, value) : 0), 9, FONT_BOLD,
+                state ? COL_TEXT : COL_MUTED, label);
+    if (value)
+        ui_text_right(x + w - 7, y + 6.5f, 8.5f, FONT_BOLD, state == 1 ? COL_TEXT : COL_MUTED, value);
+}
+
 static void draw_phone_top(App *a)
 {
-    (void)a;
     ServerStats ss;
     server_stats(&ss);
-    if (ss.state != SRV_RUNNING) {
+    if (ss.state != SRV_RUNNING) { /* no Wi-Fi: say so, and offer the computer's way */
         const bool wifi = ss.state == SRV_NO_WIFI;
-        ui_icon(ICON_WARN, 30, 34, 22, COL_WARN);
-        ui_text(48, 24, 15, FONT_BOLD, COL_TEXT, T(wifi ? S_PH_NO_WIFI : S_PH_FAILED));
-        ui_text_wrap(16, 56, 368, 10, FONT_REG, COL_SOFT, T(wifi ? S_PH_NO_WIFI_BODY : S_PH_FAILED_BODY));
-        ui_text_wrap(16, 140, 368, 9, FONT_REG, COL_MUTED, T(S_PH_SD));
-        ui_key_hint(16, 216, "A", T(S_PH_RETRY));
+        ui_rrect(14, 18, 34, 34, 10, COL_SURFACE2);
+        ui_icon(ICON_WARN, 31, 35, 18, COL_WARN_FILL);
+        ui_text_wrap_lines(14, 60, 246, 15, FONT_BOLD, COL_TEXT, T(wifi ? S_PH_NO_WIFI : S_PH_FAILED), 2);
+        ui_text_wrap_lines(14, 100, 246, 9.5f, FONT_REG, COL_SOFT, T(wifi ? S_PH_NO_WIFI_BODY : S_PH_FAILED_BODY), 7);
+        ui_rect(276, 18, 1, 200, COL_SURFACE2);
+        ui_text_center(336, 20, 8, FONT_BOLD, COL_DIM, T(S_PH_COMPUTER));
+        draw_url_qr(CONVERTER_URL, 290, 36, 92);
+        ui_text_center(336, 134, 8, FONT_REG, COL_MUTED, "bolgarmaxym97.github.io");
+        ui_text_center(336, 145, 8, FONT_REG, COL_MUTED, "/3ds-recorder");
+        ui_text_wrap_lines(286, 162, 100, 8, FONT_REG, COL_DIM, T(S_PH_COMPUTER_BODY), 5);
+        ui_key_hint(14, 216, "A", T(S_PH_RETRY));
         return;
     }
     /* the code: white card, dark modules, quiet zone of 2 modules */
-    const float box = 172, bx = 14, by = 34;
+    const float box = 160, bx = 14, by = 40;
     ui_rrect(bx, by, box, box, 10, COL_WHITE);
     if (g_qrOk) {
         const int n = qrcodegen_getSize(g_qr);
@@ -2886,11 +3421,26 @@ static void draw_phone_top(App *a)
                 if (qrcodegen_getModule(g_qr, x, y))
                     ui_rect(q + x * m, qy + y * m, m, m, COL_BG);
     }
-    const float x = 200, w = 188;
-    ui_text(x, 34, 9, FONT_REG, COL_MUTED, T(S_PH_EYEBROW));
-    const float h = ui_text_wrap_height(w, 13, FONT_BOLD, T(S_PH_TITLE));
-    ui_text_wrap(x, 48, w, 13, FONT_BOLD, COL_TEXT, T(S_PH_TITLE));
-    ui_text_wrap(x, 48 + h + 8, w, 9, FONT_REG, COL_SOFT, T(S_PH_BODY));
+    const float x = 188, w = 198;
+    ui_text_fit(x, 16, w, 8, FONT_BOLD, COL_DIM, T(S_PH_EYEBROW));
+    const float h = ui_text_wrap_lines(x, 28, w, 12, FONT_BOLD, COL_TEXT, T(S_PH_TITLE), 2);
+    /* the three steps: the console's MP4, the phone, the sending */
+    int pm = -1;
+    const PrepareState ps = prepare_state(a->phoneName, &pm);
+    const bool preparing = ps == PS_NONE || ps == PS_QUEUED || ps == PS_WORKING;
+    const bool live = ss.connections > 0 || (u32)osGetTime() - ss.lastActivityMs < 5000;
+    const bool sending = ss.file[0] && ss.fileSize, all = sending && ss.fileDone >= ss.fileSize;
+    char v1[16] = "", v3[16] = "";
+    if (preparing)
+        snprintf(v1, sizeof(v1), "%d%%", pm > 0 ? pm / 10 : 0);
+    if (sending && !all)
+        snprintf(v3, sizeof(v3), "%d%%", (int)((ss.fileDone > ss.fileSize ? ss.fileSize : ss.fileDone) * 100 / ss.fileSize));
+    float y = 28 + h + 8;
+    phone_step(x, y, w, 1, preparing ? 1 : ps == PS_FAILED ? 3 : 2, T(ps == PS_FAILED ? S_GAL_PREP_FAILED : S_PH_PREPARING),
+               v1[0] ? v1 : NULL);
+    phone_step(x, y + 28, w, 2, live ? 2 : preparing ? 0 : 1, T(live ? S_PH_CONNECTED : S_PH_WAITING), NULL);
+    phone_step(x, y + 56, w, 3, all ? 2 : sending ? 1 : 0, T(all ? S_PH_READY : S_PH_SENDING), v3[0] ? v3 : NULL);
+    ui_text_wrap_lines(x, y + 88, w, 8.5f, FONT_REG, COL_MUTED, T(preparing ? S_PH_PREP_BODY : S_PH_BODY), 4);
 }
 
 static void draw_toast(App *a)
@@ -2920,6 +3470,7 @@ void app_draw_top(App *a)
     case SCR_PHONE: draw_phone_top(a); break;
     case SCR_UNINSTALL: draw_uninstall_top(a); break;
     case SCR_SDTEST: draw_sdtest_top(a); break;
+    case SCR_LED: draw_led_top(a); break;
     case SCR_UPDATE: draw_update_top(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_top(a); break;
     }
@@ -2928,81 +3479,170 @@ void app_draw_top(App *a)
 
 /* ------------------------------------------------------------------ bottom screen */
 
+/* Home, bottom screen (Redesign 2.0): the two modes as cards (switch, hotkey, ⚙ to its page),
+   then Gallery / Help / Settings, then the keys and the version (or an update to install). */
+static void mode_card(Rect r, Rect gear, bool focused, bool gearFocused, u32 tint, u32 tintBg, Icon icon,
+                      const char *title, const char *tag, bool on, u32 toggleColor, bool showToggle, bool dim)
+{
+    ui_card(r.x, r.y, r.w, r.h, 10, COL_SURFACE);
+    const u32 ink = dim ? COL_MUTED : COL_TEXT;
+    ui_rrect(r.x + 8, r.y + 12, 28, 28, 7, on ? tintBg : COL_SURFACE2);
+    ui_icon(icon, r.x + 22, r.y + 26, 14, on ? tint : COL_MUTED);
+    const float tw = ui_text(r.x + 44, r.y + 9, 11, FONT_BOLD, ink, title);
+    if (tag)
+        ui_text(r.x + 44 + tw + 6, r.y + 11, 8, FONT_BOLD, COL_MUTED, tag);
+    ui_rrect(gear.x, gear.y, gear.w, gear.h, 7, COL_SURFACE2);
+    ui_icon(ICON_GEAR, gear.x + gear.w / 2, gear.y + gear.h / 2, 14, COL_SOFT);
+    if (showToggle)
+        ui_toggle_c(r.x + r.w - 42, r.y + 17, on, toggleColor);
+    if (focused)
+        focus_ring(r, 10);
+    if (gearFocused)
+        focus_ring(gear, 7);
+}
+
 static void draw_panel_bottom(App *a)
 {
-    char buf[48];
-    const bool recording = a->st.running && a->st.state == REC_STATE_RECORDING;
-    /* tile 0: recorder on / off, or stop recording */
-    Rect t = TILE[0];
+    char buf[96], tag[24];
+    const bool running = a->st.running && a->st.state != REC_STATE_EXITED;
+    const bool recording = running && a->st.state == REC_STATE_RECORDING;
+    const int f = a->focus;
+
+    /* Recorder, or the Stop button while recording */
+    const Rect rc = HOME_REC;
     if (recording) {
-        ui_card(t.x, t.y, t.w, t.h, 10, COL_ERR_BG);
-        ui_text_wrap(t.x + 10, t.y + 10, 110, 11, FONT_BOLD, COL_ERR, T(S_TILE_STOP));
-        ui_circle(t.x + t.w - 16, t.y + 16, 4, COL_ACCENT);
-        ui_text_wrap_lines(t.x + 10, t.y + t.h - 32, t.w - 20, 9, FONT_REG, COL_MUTED, T(S_TILE_STOP_SUB), 2);
+        ui_card(rc.x, rc.y, rc.w, rc.h, 10, COL_REC_BG);
+        ui_rrect(rc.x + 8, rc.y + 12, 28, 28, 7, COL_REC);
+        ui_icon(ICON_STOP, rc.x + 22, rc.y + 26, 14, COL_BG);
+        ui_text_fit(rc.x + 44, rc.y + 9, rc.w - 110, 11, FONT_BOLD, COL_TEXT, T(S_TILE_STOP));
+        ui_text_fit(rc.x + 44, rc.y + 29, rc.w - 110, 8.5f, FONT_REG, COL_ERR, T(S_TILE_STOP_SUB));
+        snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)(a->st.recSeconds / 60), (unsigned long)(a->st.recSeconds % 60));
+        ui_text_right(rc.x + rc.w - 12, rc.y + 17, 13, FONT_BOLD, COL_ERR, buf);
+        if (f == 0 || f == FOCUS_REC_GEAR)
+            focus_ring(rc, 10);
     } else {
-        /* two switches in one card: the recorder, and under a hairline its replay buffer */
-        ui_card(t.x, t.y, t.w, t.h, 10, COL_SURFACE);
-        ui_text(t.x + 10, t.y + 9, 11, FONT_BOLD, COL_TEXT, T(S_TILE_RECORDER));
-        ui_toggle(t.x + t.w - 42, t.y + 8, a->st.running);
-        ui_text(t.x + 10, t.y + 27, 9, FONT_REG, COL_MUTED,
-                T(a->st.running ? S_TILE_RECORDER_ON_SHORT : S_TILE_RECORDER_OFF_SHORT));
-        ui_rect(t.x + 10, t.y + 46.5f, t.w - 20, 1, COL_SURFACE2);
-        const Rect r = TILE_REPLAY;
+        snprintf(tag, sizeof(tag), "%d fps", a->cfg.fps);
+        mode_card(rc, HOME_REC_GEAR, f == 0, f == FOCUS_REC_GEAR, COL_REC, COL_REC_BG, ICON_REC, T(S_TILE_RECORDER), tag,
+                  running, COL_REC, true, false);
+        if (running)
+            hk_chips(rc.x + 44, rc.y + 27, hk_mask(a->cfg.hotkey), COL_MUTED);
+        else
+            ui_text_fit(rc.x + 44, rc.y + 29, rc.w - 130, 8.5f, FONT_REG, COL_MUTED, T(S_TILE_RECORDER_OFF_SHORT));
+    }
+
+    /* Replay */
+    const Rect rr = HOME_REPLAY;
+    char len[16];
+    replay_len_label(a->cfg.replaySec, len, sizeof(len));
+    mode_card(rr, HOME_REPLAY_GEAR, f == FOCUS_REPLAY, f == FOCUS_REPLAY_GEAR, COL_REPLAY, COL_REPLAY_BG, ICON_REPLAY,
+              T(S_GAL_CLIP), len, a->cfg.replay, COL_REPLAY, true, recording);
+    const u32 clipKey = hk_mask(a->cfg.replayHotkey);
+    if (recording)
+        ui_text_fit(rr.x + 44, rr.y + 29, rr.w - 130, 8.5f, FONT_REG, COL_MUTED, T(S_REPLAY_PAUSED));
+    else if (!a->cfg.replay) {
         char hk[48];
-        hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
-        char len[16], title[48], off[64];
-        replay_len_label(a->cfg.replaySec, len, sizeof(len));
-        snprintf(title, sizeof(title), T(S_REPLAY), len);
-        snprintf(off, sizeof(off), T(S_TILE_REPLAY_OFF), hk);   /* the clip key does nothing while it is off (31 presses so in the field logs, 2026-11-23) */
-        snprintf(buf, sizeof(buf), T(S_TILE_REPLAY_ON), hk);
-        ui_text(r.x + 10, r.y + 9, 11, FONT_BOLD, COL_TEXT, title);
-        ui_toggle(r.x + r.w - 42, r.y + 8, a->cfg.replay);
-        ui_text_fit(r.x + 10, r.y + 27, r.w - 20, 9, FONT_REG, COL_MUTED, a->cfg.replay ? buf : off);
-    }
-    static const Icon icon[4] = {ICON_CHECK, ICON_GRID, ICON_INFO, ICON_SLIDERS};
-    const Str title[4] = {S_TILE_RECORDER, S_TILE_GALLERY, S_TILE_HELP, S_TILE_SETTINGS};
-    for (int i = 1; i < 4; i++) {
-        t = TILE[i];
+        hk_label(clipKey, hk, sizeof(hk));
+        snprintf(buf, sizeof(buf), T(S_TILE_REPLAY_OFF), hk); /* the clip key does nothing while it is off */
+        ui_text_fit(rr.x + 44, rr.y + 29, rr.w - 130, 8.5f, FONT_REG, COL_MUTED, buf);
+    } else if (!running)
+        ui_text_fit(rr.x + 44, rr.y + 29, rr.w - 130, 8.5f, FONT_REG, COL_MUTED, T(S_REPLAY_STARTS));
+    else
+        hk_chips(rr.x + 44, rr.y + 27, clipKey, COL_MUTED);
+
+    /* Gallery, Help, Settings */
+    static const Icon icon[3] = {ICON_GRID, ICON_HELP, ICON_SLIDERS};
+    const Str title[3] = {S_TILE_GALLERY, S_TILE_HELP, S_TILE_SETTINGS};
+    for (int i = 0; i < 3; i++) {
+        const Rect t = HOME_TILE[i];
         ui_card(t.x, t.y, t.w, t.h, 10, COL_SURFACE);
-        if (i == 2) { /* help: "?" in a circle, the same size as the icons */
-            ui_circle(t.x + 20, t.y + 21, 10, COL_SURFACE2);
-            ui_text_center(t.x + 20, t.y + 13.5f, 11, FONT_BOLD, COL_TEXT, "?");
-        } else
-            ui_icon(icon[i], t.x + 20, t.y + 21, 20, COL_TEXT);
-        ui_text(t.x + 10, t.y + t.h - 34, 11, FONT_BOLD, COL_TEXT, T(title[i]));
-        if (i == 3 && update_shown()) {   /* a newer version: a dot, and it in place of the subtitle */
-            ui_circle(t.x + t.w - 16, t.y + 16, 4, COL_ACCENT);
-            snprintf(buf, sizeof(buf), T(S_UPD_TILE), update_info()->version);
-            ui_text_fit(t.x + 10, t.y + t.h - 18, t.w - 20, 9, FONT_BOLD, COL_ACCENT, buf);
-            continue;
-        }
-        const char *sub = i == 1   ? (a->files.count ? i18n_recordings(a->files.count, buf, sizeof(buf)) : T(S_NO_RECORDINGS))
-                          : i == 2 ? T(S_TILE_HELP_SUB)
+        ui_icon(icon[i], t.x + 15, t.y + 15, 15, COL_TEXT);
+        ui_text_fit(t.x + 8, t.y + t.h - 27, t.w - 14, 9.5f, FONT_BOLD, COL_TEXT, T(title[i]));
+        const char *sub = i == 0 ? (a->files.count ? i18n_recordings(a->files.count, buf, sizeof(buf)) : T(S_NO_RECORDINGS))
+                          : i == 1 ? T(S_TILE_HELP_SUB)
                                    : T(S_TILE_SETTINGS_SUB);
-        ui_text(t.x + 10, t.y + t.h - 18, 9, FONT_REG, COL_MUTED, sub);
+        u32 subColor = COL_MUTED;
+        if (i == 2 && update_shown()) { /* a newer version: a dot, and it in place of the subtitle */
+            ui_circle(t.x + t.w - 11, t.y + 11, 3.5f, COL_OK);
+            snprintf(buf, sizeof(buf), T(S_UPD_TILE), update_info()->version);
+            sub = buf;
+            subColor = COL_OK;
+        }
+        ui_text_fit(t.x + 8, t.y + t.h - 14, t.w - 14, 8, FONT_REG, subColor, sub);
+        if (f == i + 1)
+            focus_ring(t, 10);
     }
-    if (!recording && (a->focus == 0 || a->focus == FOCUS_REPLAY))
-        focus_ring(a->focus == 0 ? TILE_REC : TILE_REPLAY, 10);
-    else if (a->focus < 4 || a->focus == FOCUS_REPLAY)
-        focus_ring(TILE[a->focus < 4 ? a->focus : 0], 10);
-    /* hint row: the hotkey */
-    const float x = 12 + ui_text(12, 217, 9, FONT_REG, COL_MUTED, T(S_START_STOP)) + 5;
-    hk_chips(x, 216, hk_mask(a->cfg.hotkey), COL_MUTED);
+
+    /* the keys and the version, or an update to install */
+    if (update_shown() && !recording) {
+        const Rect u = HOME_FOOT;
+        ui_rrect(u.x, u.y, u.w, u.h, 6, COL_OK_BG);
+        snprintf(buf, sizeof(buf), T(S_UPD_TILE), update_info()->version);
+        ui_text_fit(u.x + 8, u.y + 4, u.w - 110, 8.5f, FONT_BOLD, COL_OK, buf);
+        snprintf(buf, sizeof(buf), "%s · %s", APP_VERSION, a->new3ds ? "New 3DS" : "Old 3DS");
+        ui_text_right(u.x + u.w - 8, u.y + 4.5f, 8, FONT_REG, COL_MUTED, buf);
+        if (f == FOCUS_FOOT)
+            focus_ring(u, 6);
+        return;
+    }
+    const float ky = 218;
+    ui_key_hint(12, ky, "SELECT", T(S_TILE_HELP));
+    const float ew = ui_key_hint_width("START", T(S_EXIT));
+    ui_key_hint(308 - ew, ky, "START", T(S_EXIT));
+    snprintf(buf, sizeof(buf), "%s%s%s · %s", APP_VERSION, APP_CHANNEL[0] ? " " : "", APP_CHANNEL,
+             a->new3ds ? "New 3DS" : "Old 3DS"); /* the version: beta reports name it */
+    ui_text_center(160, ky + 3, 8, FONT_REG, COL_DIM, buf);
+}
+
+/* A sentence with one button in it ("Hold %s while turning the console on"); returns its height. */
+static float btn_line(float x, float y, float w, float px, u32 color, const char *fmt, const char *key)
+{
+    const char *s = strstr(fmt, "%s");
+    char part[200];
+    if (!s) /* (a language that left the button out) */
+        return ui_text_wrap(x, y, w, px, FONT_REG, color, fmt);
+    snprintf(part, sizeof(part), "%.*s", (int)(s - fmt), fmt);
+    const float ty = y + (14 - px * 1.3f) / 2;
+    float cx = x + ui_text(x, ty, px, FONT_REG, color, part);
+    cx += ui_btn(cx + 1, y, key, BTN_NORMAL) + 3;
+    ui_text_wrap_lines(cx, ty, x + w - cx, px, FONT_REG, color, s + 2, 2);
+    return 14;
 }
 
 static void draw_firstrun_bottom(App *a)
 {
-    if (!a->lumaModules) {
-        ui_text(12, 12, 11, FONT_BOLD, COL_TEXT, T(S_FR_LUMA_TITLE));
-        ui_text_wrap(12, 32, 296, 10, FONT_REG, COL_SOFT, T(S_FR_LUMA_BODY));
+    if (!a->lumaModules) { /* the Luma option, step by step */
+        ui_text(12, 10, 11, FONT_BOLD, COL_TEXT, T(S_FR_LUMA_TITLE));
+        static const Str STEP[3] = {S_FR_STEP1, S_FR_STEP2, S_FR_STEP3};
+        static const char *const KEY[3] = {"SELECT", NULL, "START"};
+        for (int i = 0; i < 3; i++) {
+            const float y = 32 + i * 34.0f;
+            ui_card(12, y, 296, 30, 7, COL_SURFACE);
+            ui_circle(26, y + 15, 7.5f, COL_TEXT);
+            char num[4];
+            snprintf(num, sizeof(num), "%d", i + 1);
+            ui_text_center(26, y + 9.5f, 8, FONT_BOLD, COL_BG, num);
+            if (KEY[i])
+                btn_line(40, y + 8, 262, 9, COL_SOFT, T(STEP[i]), KEY[i]);
+            else
+                ui_text_wrap_lines(40, y + (ui_text_wrap_height(262, 9, FONT_REG, T(STEP[i])) > 13 ? 3 : 9), 262, 9,
+                                   FONT_REG, COL_SOFT, T(STEP[i]), 2);
+        }
+        float hx = 12;
+        hx += ui_key_hint(hx, 176, "X", T(S_LANGUAGE)) + 12;
+        hx += ui_key_hint(hx, 176, "B", T(S_LATER)) + 12;
+        ui_key_hint(hx, 176, "START", T(S_EXIT));
         button(FR_LATER, T(S_LATER), 0, a->focus == 0);
         button(FR_START, T(S_START), 3, false);
         return;
     }
     ui_text(12, 12, 11, FONT_BOLD, COL_TEXT, T(S_FR_START_TITLE));
     const float h = ui_text_wrap(12, 32, 296, 10, FONT_REG, COL_SOFT, T(S_FR_START_BODY));
-    ui_circle(20, 32 + h + 14, 5, COL_LED_BLUE);
-    ui_text(32, 32 + h + 7, 9, FONT_REG, COL_MUTED, T(S_FR_LED));
+    ui_card(12, 32 + h + 4, 296, 24, 7, COL_SURFACE);
+    ui_circle(25, 32 + h + 16, 5, COL_LED_BLUE);
+    ui_text(36, 32 + h + 9.5f, 9, FONT_REG, COL_MUTED, T(S_FR_LED));
+    float hx = 12;
+    hx += ui_key_hint(hx, 176, "X", T(S_LANGUAGE)) + 12;
+    ui_key_hint(hx, 176, "START", T(S_EXIT));
     button(FR_LATER, T(S_LATER), 0, a->focus == 0);
     button(FR_START, T(S_START), 1, a->focus == 1);
 }
@@ -3042,7 +3682,7 @@ static void settings_header(const char *title)
     ui_text(38, 8, 11, FONT_BOLD, COL_TEXT, title);
 }
 
-static const Str GROUP_NAME[GRP_COUNT] = {S_GRP_RECORDING, S_GRP_RECORDER, S_GRP_APP, S_LANGUAGE};
+static const Str GROUP_NAME[GRP_COUNT] = {S_TILE_RECORDER, S_GAL_CLIP, S_LED, S_GRP_APP, S_LANGUAGE};
 
 static const char *group_name(int group)
 {
@@ -3053,19 +3693,28 @@ static const char *group_name(int group)
 static void group_summary(const App *a, int grp, char *buf, size_t cap)
 {
     static const Str SCREENS[3] = {S_BOTH, S_TOP, S_BOTTOM};
-    static const Str LED[3] = {S_LED_OFF, S_LED_SOLID, S_LED_PULSE};
     char hk[48];
     switch (grp) {
     case GRP_RECORDING:
-        snprintf(buf, cap, "%d fps · %s · %s · %s", a->cfg.fps, T(SCREENS[a->cfg.screens]),
-                 T(a->cfg.lossless ? S_Q_LOSSLESS : S_Q_AUTO), T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
-        break;
-    case GRP_RECORDER: {
-        char len[16], rp[48];
         hk_label(hk_mask(a->cfg.hotkey), hk, sizeof(hk));
-        snprintf(rp, sizeof(rp), T(S_REPLAY), replay_len_label(a->cfg.replaySec, len, sizeof(len)));
-        snprintf(buf, cap, "%s · %s · %s %s%s%s", hk, rp, T(S_LED), T(LED[a->cfg.led]), a->cfg.autostart ? " · " : "",
-                 a->cfg.autostart ? T(S_AUTOSTART) : "");
+        snprintf(buf, cap, "%d fps · %s · %s · %s · %s%s%s", a->cfg.fps, T(SCREENS[a->cfg.screens]),
+                 T(a->cfg.lossless ? S_Q_LOSSLESS : S_Q_AUTO), T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF), hk,
+                 a->cfg.autostart ? " · " : "", a->cfg.autostart ? T(S_AUTOSTART) : "");
+        break;
+    case GRP_REPLAY: {
+        char len[16];
+        hk_label(hk_mask(a->cfg.replayHotkey), hk, sizeof(hk));
+        snprintf(buf, cap, "%s · %s · %s", T(a->cfg.replay ? S_FR_ON : S_FR_OFF),
+                 replay_len_label(a->cfg.replaySec, len, sizeof(len)), hk);
+        break;
+    }
+    case GRP_LEDS: { /* the preset, or "Custom" */
+        static const Str PRESET[3] = {S_LED_DEFAULT, S_LED_SUBTLE, S_LED_OFF};
+        int lit = 0;
+        for (int i = 0; i < LED_EV_COUNT; i++)
+            lit += a->cfg.ledEv[i].on;
+        const int k = led_preset_now(a);
+        snprintf(buf, cap, T(S_LED_SUMMARY), T(k >= 0 ? PRESET[k] : S_LED_CUSTOM), lit);
         break;
     }
     case GRP_APP:
@@ -3080,22 +3729,25 @@ static void draw_settings_bottom(App *a)
 {
     char sum[128];
     settings_header(T(S_SETTINGS));
+    static const Icon ICON[GRP_LANG] = {ICON_REC, ICON_REPLAY, ICON_LED, ICON_PHONE};
+    const u32 tint[GRP_LANG] = {COL_REC, COL_REPLAY, COL_TEXT, COL_TEXT}, tintBg[GRP_LANG] = {COL_REC_BG, COL_REPLAY_BG, COL_SURFACE2, COL_SURFACE2};
     for (int i = 0; i < GRP_COUNT; i++) {
         const Rect c = grp_card(i);
         ui_card(c.x, c.y, c.w, c.h, 8, COL_SURFACE);
-        float x = c.x + 12;
-        if (i == GRP_LANG) {
-            ui_flag_sized(x, c.y + (c.h - 26 * 13 / 21.0f) / 2, 26, a->cfg.lang);
-            x += 38;
-        }
-        ui_text(x, c.y + 7, 10.5f, FONT_BOLD, COL_TEXT, group_name(i));
+        const float x = c.x + 36;
+        ui_rrect(c.x + 8, c.y + 7, 20, 20, 6, i == GRP_LANG ? COL_SURFACE2 : tintBg[i]);
+        if (i == GRP_LANG)
+            ui_flag_sized(c.x + 10, c.y + 17 - 16 * 13 / 21.0f / 2, 16, a->cfg.lang);
+        else
+            ui_icon(ICON[i], c.x + 18, c.y + 17, 12, tint[i]);
+        ui_text(x, c.y + 3, 10, FONT_BOLD, COL_TEXT, group_name(i));
         group_summary(a, i, sum, sizeof(sum));
         if (i == GRP_APP && update_shown()) {   /* an update waits in here */
             snprintf(sum, sizeof(sum), T(S_UPD_TILE), update_info()->version);
-            ui_circle(x + 3, c.y + 30, 3, COL_ACCENT);
-            ui_text(x + 10, c.y + 25, 9, FONT_BOLD, COL_ACCENT, sum);
+            ui_circle(x + 3, c.y + 23.5f, 3, COL_OK_FILL);
+            ui_text_fit(x + 10, c.y + 18, c.w - 66, 8.5f, FONT_BOLD, COL_OK, sum);
         } else
-            ui_text(x, c.y + 25, 9, FONT_REG, COL_MUTED, sum);
+            ui_text_fit(x, c.y + 18, c.w - 56, 8.5f, FONT_REG, COL_MUTED, sum);
         ui_icon(ICON_NEXT, c.x + c.w - 12, c.y + c.h / 2, 11, COL_MUTED);
         if (a->focus == i)
             focus_ring(c, 8);
@@ -3106,15 +3758,27 @@ static void draw_setgroup_bottom(App *a)
 {
     static const Str NAME[ROW_COUNT] = {
         [ROW_FPS] = S_FPS,           [ROW_SCREENS] = S_SCREENS, [ROW_BOTTOM_FPS] = S_BOTTOM_FPS, [ROW_QUALITY] = S_QUALITY,
-        [ROW_SOUND] = S_SOUND,       [ROW_HOTKEY] = S_HOTKEY,   [ROW_LED] = S_LED,               [ROW_AUTOSTART] = S_AUTOSTART,
+        [ROW_SOUND] = S_SOUND,       [ROW_HOTKEY] = S_HK_REC_ROW,   [ROW_LED] = S_LED,               [ROW_AUTOSTART] = S_AUTOSTART,
         [ROW_CONVERT] = S_CONVERT,   [ROW_LID] = S_LID_WORK,    [ROW_STATS] = S_STATS,           [ROW_UNINSTALL] = S_UNINSTALL_ROW,
         [ROW_MAIN_SCREEN] = S_MAIN_SCREEN, [ROW_REPLAY_LEN] = S_REPLAY_LEN, [ROW_INPUTS] = S_INPUTS,
         [ROW_MP4_INPUTS] = S_MP4_INPUTS,   [ROW_SDTEST] = S_SDTEST, [ROW_UPDATES] = S_UPDATES,
+        [ROW_REPLAY] = S_GAL_CLIP,         [ROW_REPLAY_HOTKEY] = S_HK_CLIP_ROW,
     };
     settings_header(group_name(a->setGroup));
-    for (int i = 0; i < GROUP_N[a->setGroup]; i++) {
+    /* the page's mode on the right of the title: its switch (Recorder: the module, Replay) */
+    if (a->setGroup == GRP_RECORDING) /* (Replay's switch is its first row) */
+        ui_toggle_c(SET_MODE.x, SET_MODE.y, a->st.running && a->st.state != REC_STATE_EXITED, COL_REC);
+    const int n = GROUP_N[a->setGroup], top = group_top(n, a->focus), shown = n < GROUP_VIEW ? n : GROUP_VIEW;
+    /* a switch's colour: the page's role (red recording, teal Replay), green elsewhere */
+    const u32 onColor = a->setGroup == GRP_RECORDING ? COL_REC : a->setGroup == GRP_REPLAY ? COL_REPLAY : COL_OK_FILL;
+    if (n > GROUP_VIEW) { /* a scroll bar on the right */
+        const float h = GROUP_VIEW * 28.0f - 3, thumb = h * GROUP_VIEW / n;
+        ui_rrect(313, 34, 3, h, 1.5f, COL_SURFACE);
+        ui_rrect(313, 34 + (h - thumb) * top / (n - GROUP_VIEW), 3, thumb, 1.5f, COL_SOFT);
+    }
+    for (int i = top; i < top + shown; i++) {
         const int r = GROUP_ROWS[a->setGroup][i];
-        const Rect row = set_row_n(i, GROUP_N[a->setGroup]);
+        const Rect row = set_row_n(i - top, shown);
         const bool off = (r == ROW_BOTTOM_FPS || r == ROW_MAIN_SCREEN) && !bottom_fps_on(a);
         if (r != ROW_UNINSTALL)
             ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
@@ -3128,9 +3792,9 @@ static void draw_setgroup_bottom(App *a)
             for (int k = 0; k < g.n; k++) {
                 const bool sel = k == g.sel;
                 if (sel)
-                    ui_rrect(opt[k].x, opt[k].y, opt[k].w, opt[k].h, 3, off ? COL_SURFACE2 : COL_ACCENT);
+                    ui_rrect(opt[k].x, opt[k].y, opt[k].w, opt[k].h, 3, off ? COL_SURFACE2 : COL_TEXT);
                 ui_text_center(opt[k].x + opt[k].w / 2, opt[k].y + 4, 9, FONT_BOLD,
-                               off ? COL_FAINT : sel ? COL_WHITE : COL_SOFT, g.labels[k]);
+                               off ? COL_FAINT : sel ? COL_BG : COL_MUTED, g.labels[k]);
             }
         } else if (r == ROW_BOTTOM_FPS || r == ROW_REPLAY_LEN) {
             char v[16];
@@ -3141,62 +3805,118 @@ static void draw_setgroup_bottom(App *a)
             ui_icon(ICON_BACK, rx - ui_text_width(9.5f, FONT_BOLD, label) - 10, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 11, row.y + row.h / 2, 9, off ? COL_FAINT : COL_MUTED);
         } else if (r == ROW_SOUND || r == ROW_AUTOSTART || r == ROW_LID || r == ROW_STATS || r == ROW_INPUTS ||
-                   r == ROW_MP4_INPUTS)
-            ui_toggle(row.x + row.w - 38, row.y + 4,
-                      r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart
+                   r == ROW_MP4_INPUTS || r == ROW_REPLAY)
+            ui_toggle_c(row.x + row.w - 38, row.y + (row.h - 18) / 2,
+                        r == ROW_SOUND ? a->cfg.audio : r == ROW_AUTOSTART ? a->cfg.autostart
                                                      : r == ROW_LID      ? a->cfg.lidWork
                                                      : r == ROW_INPUTS   ? a->cfg.inputs
                                                      : r == ROW_MP4_INPUTS ? a->cfg.mp4Inputs
-                                                                         : a->cfg.stats);
-        else if (r == ROW_HOTKEY) {
-            /* the recording hotkey, then the replay one */
-            const u32 m = hk_mask(a->cfg.hotkey), m2 = hk_mask(a->cfg.replayHotkey);
-            const float sep = ui_text_width(9, FONT_REG, "·") + 8;
-            float x = row.x + row.w - 20 - hk_chips_width(m) - sep - hk_chips_width(m2);
-            x += hk_chips(x, row.y + 6, m, COL_MUTED) + 1;
-            x += ui_text(x, row.y + 7, 9, FONT_REG, COL_FAINT, "·") + 4;
-            hk_chips(x, row.y + 6, m2, COL_MUTED);
+                                                     : r == ROW_REPLAY   ? a->cfg.replay
+                                                                         : a->cfg.stats,
+                        onColor);
+        else if (r == ROW_HOTKEY || r == ROW_REPLAY_HOTKEY) {
+            const u32 m = hk_mask(r == ROW_HOTKEY ? a->cfg.hotkey : a->cfg.replayHotkey);
+            hk_chips(row.x + row.w - 20 - hk_chips_width(m), row.y + (row.h - 14) / 2, m, COL_MUTED);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else if (r == ROW_UPDATES) {
-            /* the version there is: the new one in red with a dot, else this one */
+            /* the version there is: the new one in green with a dot, else this one */
             const bool fresh = update_shown();
             const char *v = fresh ? update_info()->version : APP_VERSION;
-            const float vw = ui_text_right(row.x + row.w - 20, row.y + 7, 9.5f, FONT_BOLD, fresh ? COL_ACCENT : COL_MUTED, v);
+            const float vw = ui_text_right(row.x + row.w - 20, row.y + 7, 9.5f, FONT_BOLD, fresh ? COL_OK : COL_MUTED, v);
             if (fresh)
-                ui_circle(row.x + row.w - 28 - vw, row.y + row.h / 2, 3, COL_ACCENT);
+                ui_circle(row.x + row.w - 28 - vw, row.y + row.h / 2, 3, COL_OK_FILL);
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         } else
             ui_icon(ICON_NEXT, row.x + row.w - 9, row.y + row.h / 2, 10, COL_MUTED);
         if (i == a->focus)
             focus_ring(row, 6);
     }
+    if (a->setGroup == GRP_REPLAY) { /* a clip is recorded as the Recorder page says */
+        static const Str SCREENS[3] = {S_BOTH, S_TOP, S_BOTTOM};
+        char pic[64], line[160];
+        snprintf(pic, sizeof(pic), "%d fps · %s · %s", a->cfg.fps, T(SCREENS[a->cfg.screens]),
+                 T(a->cfg.audio ? S_SOUND_ON : S_SOUND_OFF));
+        snprintf(line, sizeof(line), T(S_REPLAY_PICTURE), pic);
+        const Rect last = set_row_n(n, n);
+        ui_card(10, last.y + 4, 300, 34, 6, COL_SURFACE);
+        ui_text_wrap_lines(19, last.y + 9, 282, 8.5f, FONT_REG, COL_MUTED, line, 2);
+    }
 }
 
 static void draw_hotkey_bottom(App *a)
 {
-    char now[64];
-    ui_text(12, 10, 11, FONT_BOLD, COL_TEXT, T(a->hkStep ? S_HK_SCREEN2 : S_HK_SCREEN));
-    ui_card(12, 32, 296, 24, 7, COL_SURFACE);
-    ui_text(22, 37, 9.5f, FONT_REG, COL_SOFT, T(S_HK_NOW));
-    hk_label(hk_step_now(a), now, sizeof(now));
-    ui_text_right(298, 37, 9.5f, FONT_BOLD, COL_TEXT, now);
-    const bool review = a->hkReview;
-    const Str problem = review ? hk_step_problem(a, a->hkCand) : S_COUNT;
-    float y = 64;
-    if (review) {
-        const bool ok = problem == S_COUNT;
-        const char *msg = T(ok ? S_HK_OK : problem);
-        const float h = ui_text_wrap_height(250, 9.5f, FONT_REG, msg) + 14;
-        ui_rrect(12, y, 296, h, 7, ok ? COL_OK_BG : COL_ERR_BG);
-        ui_icon(ok ? ICON_CHECK : ICON_WARN, 27, y + 13, 13, ok ? COL_OK : COL_ERR);
-        ui_text_wrap(42, y + 7, 256, 9.5f, FONT_REG, ok ? COL_TEXT : COL_ERR, msg);
-        y += h + 8;
+    const bool review = a->hkReview, replayStep = a->hkStep == 1, cap = a->hkCapture;
+    const HkProblem problem = review ? hk_step_problem(a, a->hkCand) : HK_OK;
+    ui_text(12, 8, 11, FONT_BOLD, COL_TEXT, T(S_HOTKEY));
+    if (g_zlzr) { /* the ZL / ZR preset, a tap (every button is the capture's) */
+        const Rect z = HK_PRESET_Z;
+        ui_rrect(z.x, z.y, z.w, z.h, 6, COL_SURFACE2);
+        float zx = z.x + 5;
+        zx += ui_btn(zx, z.y + 2, "ZL", BTN_REC) + 2;
+        zx += ui_btn(zx, z.y + 2, "ZR", BTN_REPLAY) + 4;
+        ui_text_fit(zx, z.y + 4, z.x + z.w - zx - 4, 8, FONT_BOLD, COL_SOFT, T(S_HK_ZLZR_PRESET));
+    } else
+        ui_text_right(308, 10, 8, FONT_BOLD, COL_DIM, a->new3ds ? "New 3DS" : "Old 3DS");
+    /* the two hotkeys; the one being set in a frame, with what it is doing */
+    for (int k = 0; k < 2; k++) {
+        const bool rep = k == 1, active = rep == replayStep;
+        const Rect r = hk_row(k);
+        ui_card(r.x, r.y, r.w, r.h, 8, active && cap ? (rep ? COL_REPLAY_BG : COL_REC_BG) : COL_SURFACE);
+        ui_rrect(r.x + 7, r.y + 7, 18, 18, 5, rep ? COL_REPLAY_BG : COL_REC_BG);
+        ui_icon(rep ? ICON_REPLAY : ICON_REC, r.x + 16, r.y + 16, 10, rep ? COL_REPLAY : COL_REC);
+        const u32 now = hk_mask(rep ? a->cfg.replayHotkey : a->cfg.hotkey);
+        const char *title = T(rep ? S_HK_CLIP_TITLE : S_HK_REC_TITLE);
+        if (active && cap) {
+            char sub[96], was[48];
+            hk_label(now, was, sizeof(was));
+            if (!review)
+                snprintf(sub, sizeof(sub), "%s", T(S_HK_LISTENING));
+            else if (problem != HK_OK)
+                snprintf(sub, sizeof(sub), "%s", T(S_HK_CANT));
+            else
+                snprintf(sub, sizeof(sub), T(S_HK_WAS), was);
+            ui_text_fit(r.x + 32, r.y + 4, 160, 9, FONT_BOLD, COL_TEXT, title);
+            ui_text_fit(r.x + 32, r.y + 17, 170, 8, FONT_REG, review && problem != HK_OK ? COL_WARN : rep ? COL_REPLAY_SOFT : COL_ERR, sub);
+            const u32 shownKeys = review ? a->hkCand : now;
+            hk_chips(r.x + r.w - 8 - hk_chips_width(shownKeys), r.y + 9, shownKeys, COL_MUTED);
+            focus_ring(r, 8);
+        } else {
+            ui_text_fit(r.x + 32, r.y + 10, 170, 9, FONT_BOLD, COL_TEXT, title);
+            hk_chips(r.x + r.w - 8 - hk_chips_width(now), r.y + 9, now, COL_MUTED);
+            if (active)
+                focus_ring(r, 8);
+        }
     }
-    ui_text_wrap(12, y, 296, 9, FONT_REG, COL_MUTED, T(S_HK_RULES));
-    ui_text(12, 182, 9, FONT_REG, COL_MUTED, T(!review ? S_HK_KEYS_CAPTURE : problem == S_COUNT ? S_HK_KEYS_REVIEW : S_HK_KEYS_RETRY));
+    /* the rules, the one this combination breaks lit */
+    const int hitLine = !review ? -1 : problem == HK_ERR_LR ? 0 : problem == HK_ERR_ROSALINA ? 1
+                        : problem == HK_ERR_FACE || problem == HK_ERR_OTHER ? 2 : -1;
+    ui_rrect(12, 106, 296, 70, 8, COL_SURFACE);
+    ui_icon(ICON_BLOCK, 23, 115, 10, COL_SOFT);
+    ui_text(32, 109, 8, FONT_BOLD, COL_SOFT, T(S_HK_NOT_ALLOWED));
+    for (int i = 0; i < 3; i++) {
+        const float ly = 124 + i * 16.0f;
+        if (i == hitLine)
+            ui_rrect(16, ly - 1, 288, 16, 4, COL_WARN_BG);
+        float x = 21;
+        const u32 c = i == hitLine ? COL_WARN : COL_MUTED;
+        if (i == 0)
+            x += hk_chips(x, ly, HK_L | HK_R, c);
+        else if (i == 1)
+            x += hk_chips(x, ly, HK_L | HK_DOWN | HK_SELECT, c);
+        else
+            x += ui_btn(x, ly, "START", BTN_NORMAL);
+        ui_text_fit(x + 5, ly + 1.5f, 300 - x - 5, 8.5f, FONT_REG, c, T(i == 0 ? S_HK_RULE_LR : i == 1 ? S_HK_RULE_ROSA : S_HK_RULE_MORE));
+    }
+    ui_text_fit(12, 182, 296, 8.5f, FONT_REG, COL_MUTED,
+                T(!cap ? S_HK_KEYS_BROWSE : !review ? S_HK_KEYS_CAPTURE : problem == HK_OK ? S_HK_KEYS_REVIEW : S_HK_KEYS_RETRY));
     button(HK_BTN[0], T(S_RESET), 0, false);
+    if (!cap) {
+        button(HK_BTN[1], T(S_BACK), 0, false);
+        button(HK_BTN[2], T(S_HK_CHANGE), 1, false);
+        return;
+    }
     button(HK_BTN[1], T(S_HK_KEEP), 0, false);
-    button(HK_BTN[2], T(S_SAVE), review && problem == S_COUNT ? 1 : 3, false);
+    button(HK_BTN[2], T(S_SAVE), review && problem == HK_OK ? 1 : 3, false);
 }
 
 static void draw_uninstall_bottom(App *a)
@@ -3230,15 +3950,32 @@ static void draw_sd_card(float cx, float cy, u32 col)
         ui_rrect(x + 6 + i * 7, y + 6, 4, 10, 1, COL_BG);           /* the contacts */
 }
 
+/* what the result suggests changing, S_COUNT for nothing: a card enough with fewer bottom frames
+   gets Bottom Screen FPS 10; a slow one 20 fps */
+static Str sdtest_fix(const App *a)
+{
+    if (g_sdt.state != SDT_DONE)
+        return S_COUNT;
+    const int grade = sdtest_grade(g_sdt.kbPerSec);
+    if (grade == 1 && a->cfg.screens == SCREENS_BOTH && (!a->cfg.bottomFps || a->cfg.bottomFps > 10))
+        return S_SDT_FIX_BOTTOM;
+    if (grade == 0 && a->cfg.fps > 20)
+        return S_SDT_FIX_FPS;
+    return S_COUNT;
+}
+
 static void draw_sdtest_bottom(App *a)
 {
-    draw_sd_card(160, 90, g_sdt.state == SDT_RUNNING ? COL_ACCENT : COL_SURFACE2);
+    draw_sd_card(160, 80, g_sdt.state == SDT_RUNNING ? COL_TEXT : COL_SURFACE2);
     if (g_sdt.state == SDT_RUNNING) {
         ui_spinner(160, 160, 10, COL_MUTED);
         return;
     }
+    const Str fix = sdtest_fix(a);
+    if (fix != S_COUNT)
+        button(SDT_FIX, T(fix), 1, a->focus == 2);
     button(SDT_BTN[0], T(g_sdt.state == SDT_IDLE ? S_CANCEL : S_BACK), 0, a->focus == 0);
-    button(SDT_BTN[1], T(g_sdt.state == SDT_IDLE ? S_START : S_SDT_AGAIN), 1, a->focus == 1);
+    button(SDT_BTN[1], T(g_sdt.state == SDT_IDLE ? S_START : S_SDT_AGAIN), fix != S_COUNT ? 0 : 1, a->focus == 1);
 }
 
 static void draw_update_bottom(App *a)
@@ -3248,7 +3985,7 @@ static void draw_update_bottom(App *a)
     const Rect row = set_row(0);
     ui_card(row.x, row.y, row.w, row.h, 6, COL_SURFACE);
     ui_text(row.x + 9, row.y + 7, 9.5f, FONT_BOLD, COL_TEXT, T(S_UPD_AUTO));
-    ui_toggle(row.x + row.w - 38, row.y + 4, a->cfg.updates);
+    ui_toggle_c(row.x + row.w - 38, row.y + 4, a->cfg.updates, COL_OK_FILL);
     if (a->focus == UF_AUTO)
         focus_ring(row, 6);
 
@@ -3261,7 +3998,7 @@ static void draw_update_bottom(App *a)
             snprintf(buf, sizeof(buf), "%s", T(S_UPD_INSTALLING));
         ui_text(12, 82, 11, FONT_BOLD, COL_TEXT, buf);
         ui_rrect(12, 104, 296, 8, 4, COL_SURFACE2);
-        ui_rrect(12, 104, p == UPD_INSTALLING ? 296 : 296 * f, 8, 4, COL_ACCENT);
+        ui_rrect(12, 104, p == UPD_INSTALLING ? 296 : 296 * f, 8, 4, COL_OK_FILL);
         ui_text_wrap(12, 124, 296, 9, FONT_REG, COL_MUTED, T(S_UPD_KEEP_ON));
         if (p == UPD_INSTALLING)
             ui_spinner(160, 172, 9, COL_FAINT);
@@ -3302,16 +4039,38 @@ static void draw_gallery_bottom(App *a)
     gal_lock();
     const GalList *l = gal_list();
     navbar(T(S_TILE_GALLERY));
-    if (l->loaded) {
-        format_gb(gb, sizeof(gb), (u32)(l->bytes >> 20));
-        char cnt[40];
-        if (!clips_text(buf, sizeof(buf)))   /* while clips are being saved: that, instead of the totals */
-            snprintf(buf, sizeof(buf), "%s · %s", i18n_recordings(l->count, cnt, sizeof(cnt)), gb);
-        ui_text_right(308, 15, 9, FONT_REG, COL_MUTED, buf);
+    if (l->loaded) { /* the filter: All n · ● recordings · ↺ clips */
+        ui_rrect(GAL_FILTER[0].x - 2, GAL_FILTER[0].y - 2, GAL_FILTER[2].x + GAL_FILTER[2].w - GAL_FILTER[0].x + 4,
+                 GAL_FILTER[0].h + 4, 7, COL_SURFACE);
+        for (int f = 0; f < GF_COUNT; f++) {
+            const Rect c = GAL_FILTER[f];
+            const bool on = f == a->galFilter;
+            const u32 ink = on ? COL_BG : COL_MUTED;
+            if (on)
+                ui_rrect(c.x, c.y, c.w, c.h, 5, COL_TEXT);
+            char num[12];
+            snprintf(num, sizeof(num), "%d", gal_count(l, f));
+            snprintf(buf, sizeof(buf), "%s", num);
+            if (f == GF_ALL) {
+                char all[64];
+                snprintf(all, sizeof(all), "%s %s", T(S_GAL_ALL), num);
+                ui_text_center(c.x + c.w / 2, c.y + 4, 8.5f, FONT_BOLD, ink, all);
+            } else {
+                const float tw = ui_text_width(8.5f, FONT_BOLD, buf), x0 = c.x + (c.w - tw - 12) / 2;
+                if (f == GF_REC)
+                    ui_circle(x0 + 4, c.y + c.h / 2, 3, on ? COL_BG : COL_REC);
+                else
+                    ui_icon(ICON_REPLAY, x0 + 4, c.y + c.h / 2, 9, on ? COL_BG : COL_REPLAY);
+                ui_text(x0 + 12, c.y + 4, 8.5f, FONT_BOLD, ink, buf);
+            }
+        }
     } else
         ui_spinner(296, 21, 7, COL_FAINT);
-    for (int i = 0; i < GAL_ROWS && a->galTop + i < l->count; i++) {
-        const int idx = a->galTop + i;
+    const int nv = gal_vis(l, a->galFilter);
+    if (l->loaded && !nv)
+        ui_text_center(160, 110, 10, FONT_REG, COL_MUTED, T(S_NO_RECORDINGS));
+    for (int i = 0; i < GAL_ROWS && a->galTop + i < nv; i++) {
+        const int idx = g_vis[a->galTop + i];
         const GalItem *it = &l->items[idx];
         const Rect r = gal_row(i);
         ui_card(r.x, r.y, r.w, r.h, 7, idx == a->galSel ? COL_SURFACE2 : COL_SURFACE);
@@ -3342,7 +4101,7 @@ static void draw_gallery_bottom(App *a)
             snprintf(st, sizeof(st), "%s", T(S_GAL_PREP_FAILED)), stCol = COL_FAINT;
         else if (ps == PS_WORKING || (ps == PS_QUEUED && pm > 0 && a->cfg.convertAuto)) { /* manual: a paused job waits for a Download */
             snprintf(st, sizeof(st), T(S_GAL_PREP_PCT), pm / 10);
-            stCol = ps == PS_WORKING ? COL_SOFT : COL_FAINT;
+            stCol = ps == PS_WORKING ? COL_WARN : COL_FAINT;
         }
         const float right = r.x + r.w - 8, stW = st[0] ? ui_text_width(9, FONT_REG, st) + 6 : 0;
         if (st[0])
@@ -3352,8 +4111,8 @@ static void draw_gallery_bottom(App *a)
         if (it->info && it->readable && it->clip && !cut) {
             /* a replay clip: a tag in the replay LED's blue instead of the profile's name */
             const float tw = ui_text_width(8, FONT_BOLD, T(S_GAL_CLIP));
-            ui_rrect(r.x + 62, r.y + 19.5f, tw + 10, 13, 4, COL_TAG_BG);
-            ui_text(r.x + 67, r.y + 21, 8, FONT_BOLD, COL_LED_BLUE, T(S_GAL_CLIP));
+            ui_rrect(r.x + 62, r.y + 19.5f, tw + 10, 13, 4, COL_REPLAY_BG);
+            ui_text(r.x + 67, r.y + 21, 8, FONT_BOLD, COL_REPLAY_SOFT, T(S_GAL_CLIP));
             ui_text_fit(r.x + 62 + tw + 15, r.y + 20, right - stW - (r.x + 62 + tw + 15), 9, FONT_REG, COL_MUTED, gb);
         } else {
             const float lx = r.x + (cut ? 76 : 62);
@@ -3418,7 +4177,7 @@ static void draw_player_bottom(App *a)
     /* the hints, centred (X: the buttons, when the recording kept them) */
     const bool keys = player_has_inputs();
     float hw = ui_key_hint_width("←→", T(S_PL_SEEK)) + ui_key_hint_width("A", T(S_PL_PAUSE)) +
-               ui_key_hint_width("B", T(S_PL_BACK)) + 20;
+               ui_key_hint_width("Y", T(S_SOUND)) + ui_key_hint_width("B", T(S_PL_BACK)) + 30;
     if (keys)
         hw += ui_key_hint_width("X", T(S_PL_INPUTS)) + 10;
     float hx = (BOTTOM_W - hw) / 2;
@@ -3426,6 +4185,7 @@ static void draw_player_bottom(App *a)
     hx += ui_key_hint(hx, 222, "A", T(S_PL_PAUSE)) + 10;
     if (keys)
         hx += ui_key_hint(hx, 222, "X", T(S_PL_INPUTS)) + 10;
+    hx += ui_key_hint(hx, 222, "Y", T(S_SOUND)) + 10;   /* (Y: the sound on / off, as the speaker button) */
     ui_key_hint(hx, 222, "B", T(S_PL_BACK));
 }
 
@@ -3435,12 +4195,15 @@ static void draw_phone_bottom(App *a)
     server_stats(&ss);
     navbar(T(S_TILE_PHONE));
     if (ss.state != SRV_RUNNING) {
-        ui_text_wrap(16, 60, 288, 10, FONT_REG, COL_SOFT, T(S_PH_SD));
+        char sd[640];
+        snprintf(sd, sizeof(sd), "%s %s", T(S_PH_SD), T(S_PH_SD_WEB));
+        ui_card(12, 44, 296, ui_text_wrap_height(266, 9, FONT_REG, sd) + 14, 8, COL_SURFACE);
+        ui_icon(ICON_SD, 24, 57, 12, COL_MUTED);
+        ui_text_wrap(34, 51, 266, 9, FONT_REG, COL_SOFT, sd);
         return;
     }
     const bool live = ss.connections > 0 || (u32)osGetTime() - ss.lastActivityMs < 5000;
-    ui_pill(308, 12, T(live ? S_PH_CONNECTED : S_PH_WAITING), live ? COL_OK : COL_SOFT, live ? COL_OK_BG : COL_SURFACE,
-            live);
+    (void)live;
     char buf[96], t[48];
     ui_card(12, 40, 296, 62, 8, COL_SURFACE);
     format_short(t, sizeof(t), a->phoneName);
@@ -3451,7 +4214,7 @@ static void draw_phone_bottom(App *a)
         ui_text_right(298, 49, 9, FONT_REG, COL_MUTED, T(S_PH_PREPARING));
         const float frac = pm > 0 ? pm / 1000.0f : 0;
         ui_rrect(22, 68, 276, 5, 2.5f, COL_SURFACE2);
-        ui_rrect(22, 68, 276 * frac, 5, 2.5f, COL_ACCENT);
+        ui_rrect(22, 68, 276 * frac, 5, 2.5f, COL_WARN_FILL);
         snprintf(buf, sizeof(buf), "%d%%", pm > 0 ? pm / 10 : 0);
         ui_text(22, 80, 9, FONT_REG, COL_MUTED, buf);
         const u64 now = osGetTime();
@@ -3470,7 +4233,7 @@ static void draw_phone_bottom(App *a)
         const u64 done = ss.fileDone > ss.fileSize ? ss.fileSize : ss.fileDone;
         const float frac = (float)done / ss.fileSize;
         ui_rrect(22, 68, 276, 5, 2.5f, COL_SURFACE2);
-        ui_rrect(22, 68, 276 * frac, 5, 2.5f, all ? COL_OK : COL_ACCENT);
+        ui_rrect(22, 68, 276 * frac, 5, 2.5f, all ? COL_OK_FILL : COL_TEXT);
         snprintf(buf, sizeof(buf), "%.1f / %.1f %s", done / 1048576.0, ss.fileSize / 1048576.0, T(S_MB));
         for (char *c = buf; *c; c++) /* the language's decimal separator */
             if (*c == '.')
@@ -3492,10 +4255,428 @@ static void draw_phone_bottom(App *a)
     ui_card(12, y, 296, h1, 7, preparing ? COL_INFO_BG : COL_WARN_BG);
     ui_text_wrap(22, y + 6, 276, 9, FONT_REG, preparing ? COL_TEXT : COL_WARN, note);
     y += h1 + 6;
-    const float h2 = ui_text_wrap_height(270, 9, FONT_REG, T(S_PH_SD)) + 12;
-    ui_card(12, y, 296, h2, 7, COL_INFO_BG);
-    ui_text_wrap(22, y + 6, 276, 9, FONT_REG, COL_TEXT, T(S_PH_SD));
-    button(PH_STOP, T(S_PH_STOP), 2, false);
+    /* without Wi-Fi: the SD card, and the converter in a browser */
+    char sd[640];
+    snprintf(sd, sizeof(sd), "%s %s", T(S_PH_SD), T(S_PH_SD_WEB));
+    float h2 = ui_text_wrap_height(266, 8.5f, FONT_REG, sd) + 12;
+    if (y + h2 > PH_STOP.y - 4) { /* a long language: the converter's address alone, it always shows */
+        snprintf(sd, sizeof(sd), "%s", T(S_PH_SD_WEB));
+        h2 = ui_text_wrap_height(266, 8.5f, FONT_REG, sd) + 12;
+    }
+    if (y + h2 <= PH_STOP.y - 4) {
+        ui_card(12, y, 296, h2, 7, COL_SURFACE);
+        ui_icon(ICON_SD, 24, y + 12, 12, COL_MUTED);
+        ui_text_wrap(34, y + 6, 266, 8.5f, FONT_REG, COL_SOFT, sd);
+    }
+    button(PH_STOP, T(S_PH_STOP), 0, false);
+}
+
+/* ------------------------------------------------------------------ LED Studio (ledcfg.h) */
+
+/* Each event's light: on / off, colour, pattern, brightness, speed (the breath only), as led_*
+   keys the module reads (REC_CMD_RELOAD). Without them it lights as 1.7 did from led=. */
+static void button(Rect r, const char *label, int style, bool focused);
+
+enum { LF_PRESET, LF_EVENT, LF_ON, LF_COLOR, LF_PATTERN, LF_BRIGHT, LF_SPEED, LF_COUNT };
+static const Rect LED_ROW[LF_COUNT] = {
+    {0, 0, 0, 0}, {10, 30, 300, 28}, {10, 62, 300, 22}, {10, 88, 300, 24}, {10, 116, 300, 22}, {10, 142, 300, 20}, {10, 166, 300, 20},
+};
+static const Rect LED_BTN[2] = {{10, 200, 196, 28}, {212, 200, 98, 28}};   /* Preview on console, Reset this */
+static const u32 LED_SWATCH[9] = {0xFF0000, 0xFF8000, 0xFFD000, 0x00FF00, 0x00E0FF, 0x0000FF, 0xA040FF, 0xFF40C0, 0xFFFFFF};
+static const Str LED_EV_WHEN[LED_EV_COUNT] = {S_LED_WHEN_READY, S_LED_WHEN_REC, S_LED_WHEN_REPLAY, S_LED_WHEN_SAVED, S_LED_WHEN_ERROR};
+static const Str LED_PAT_NAME[LED_PAT_COUNT] = {S_LED_SOLID, S_LED_PULSE, S_LED_GLOW, S_LED_BLINK2, S_LED_BLINK3};
+static const Str LED_SPEED_NAME[3] = {S_LED_SLOW, S_LED_NORMAL, S_LED_FAST};
+
+/* the presets: 1.7's lights, the same dimmer (a slow faint breath while recording), all off */
+static void led_preset(int k, LedEvent ev[LED_EV_COUNT])
+{
+    ledcfg_defaults(ev, 2);
+    if (k == 1) {
+        ev[LED_EV_READY].bright = 2;
+        ev[LED_EV_REC].bright = 1;
+        ev[LED_EV_REC].speed = LED_SPEED_SLOW;
+        ev[LED_EV_SAVED].bright = 2;
+        ev[LED_EV_ERROR].bright = 3;
+    } else if (k == 2)
+        for (int i = 0; i < LED_EV_COUNT; i++)
+            ev[i].on = false;
+}
+
+/* the presets' segments, right-aligned in the header, as wide as their names */
+static const Str LED_PRESET_NAME[3] = {S_LED_DEFAULT, S_LED_SUBTLE, S_LED_OFF};
+static Rect led_preset_rect(int k)
+{
+    float x = 308;
+    Rect r = {0};
+    for (int i = 2; i >= k; i--) {
+        const float w = ui_text_width(9, FONT_BOLD, T(LED_PRESET_NAME[i])) + 14;
+        x -= w;
+        r = (Rect){x, 6, w, 20};
+    }
+    return r;
+}
+
+static int led_preset_now(const App *a)
+{
+    for (int k = 0; k < 3; k++) {
+        LedEvent ev[LED_EV_COUNT];
+        led_preset(k, ev);
+        if (!memcmp(ev, a->cfg.ledEv, sizeof(ev)))
+            return k;
+    }
+    return -1;
+}
+
+static void led_write(App *a, int ev, const LedEvent *e)
+{
+    char v[48];
+    ledcfg_format(e, v, sizeof(v));
+    apply_setting(a, LEDCFG_KEY[ev], v);
+}
+
+static void led_apply_preset(App *a, int k)
+{
+    LedEvent ev[LED_EV_COUNT];
+    led_preset(k, ev);
+    static char v[LED_EV_COUNT][48];
+    const char *keys[LED_EV_COUNT], *vals[LED_EV_COUNT];
+    int n = 0;
+    for (int i = 0; i < LED_EV_COUNT; i++)
+        if (memcmp(&ev[i], &a->cfg.ledEv[i], sizeof(LedEvent))) {
+            ledcfg_format(&ev[i], v[n], sizeof(v[n]));
+            keys[n] = LEDCFG_KEY[i], vals[n] = v[n];
+            n++;
+        }
+    if (n)
+        apply_settings(a, keys, vals, n);
+}
+
+/* the patterns this event can have (ledcfg_pattern_ok), in the order shown */
+static int led_patterns(int ev, int out[LED_PAT_COUNT])
+{
+    static const int ORDER[LED_PAT_COUNT] = {LED_PAT_SOLID, LED_PAT_BREATHE, LED_PAT_GLOW, LED_PAT_BLINK2, LED_PAT_BLINK3};
+    int n = 0;
+    for (int i = 0; i < LED_PAT_COUNT; i++)
+        if (ledcfg_pattern_ok(ev, ORDER[i]))
+            out[n++] = ORDER[i];
+    return n;
+}
+
+static int led_swatch_index(const LedEvent *e)
+{
+    const u32 c = (u32)e->r << 16 | (u32)e->g << 8 | e->b;
+    for (int i = 0; i < 9; i++)
+        if (LED_SWATCH[i] == c)
+            return i;
+    return -1;
+}
+
+static Rect led_swatch_rect(int i) { return (Rect){82 + i * 25.0f, LED_ROW[LF_COLOR].y + 3, 18, 18}; }
+
+static void led_preview(App *a)
+{
+    if (!(a->st.running && a->st.state != REC_STATE_EXITED)) {
+        say(a, T(S_LED_PREVIEW_OFF));
+        return;
+    }
+    if (a->st.state == REC_STATE_RECORDING) {
+        say(a, T(S_SDT_BUSY));
+        return;
+    }
+    recorder_command(REC_CMD_LED_PREVIEW + (u32)a->ledEvent);
+    say(a, T(S_LED_PREVIEW_ON));
+}
+
+/* ◀ ▶ (dir) or A (dir 0: the next one, round) on a row */
+static void led_change(App *a, int row, int dir)
+{
+    const int evi = a->ledEvent;
+    LedEvent e = a->cfg.ledEv[evi];
+    const int step = dir ? dir : 1;
+    switch (row) {
+    case LF_PRESET: {
+        const int k = led_preset_now(a);
+        led_apply_preset(a, ((k < 0 ? 0 : k) + step + 3) % 3);
+        return;
+    }
+    case LF_EVENT:
+        a->ledEvent = (evi + step + LED_EV_COUNT) % LED_EV_COUNT;
+        return;
+    case LF_ON:
+        e.on = dir ? dir > 0 : !e.on;
+        break;
+    case LF_COLOR: {
+        const int i = led_swatch_index(&e), j = ((i < 0 ? 0 : i) + step + 9) % 9;
+        e.r = (u8)(LED_SWATCH[j] >> 16), e.g = (u8)(LED_SWATCH[j] >> 8), e.b = (u8)LED_SWATCH[j];
+        e.on = true;
+        break;
+    }
+    case LF_PATTERN: {
+        int p[LED_PAT_COUNT], cur = 0;
+        const int n = led_patterns(evi, p);
+        for (int i = 0; i < n; i++)
+            if (p[i] == e.pattern)
+                cur = i;
+        e.pattern = (u8)p[(cur + step + n) % n];
+        break;
+    }
+    case LF_BRIGHT:
+        e.bright = (u8)(dir ? (e.bright + dir < 1 ? 1 : e.bright + dir > 5 ? 5 : e.bright + dir) : e.bright % 5 + 1);
+        break;
+    case LF_SPEED:
+        if (e.pattern != LED_PAT_BREATHE)
+            return;
+        e.speed = (u8)((e.speed + step + 3) % 3);
+        break;
+    }
+    if (memcmp(&e, &a->cfg.ledEv[evi], sizeof(e)))
+        led_write(a, evi, &e);
+}
+
+static void open_led(App *a)
+{
+    a->ledEvent = LED_EV_REC;
+    go(a, SCR_LED, LF_EVENT);
+}
+
+static void update_led(App *a, const Input *in)
+{
+    const u32 d = in->down;
+    int f = a->focus;
+    if (d & KEY_DUP && f > 0)
+        f--;
+    if (d & KEY_DDOWN && f < LF_COUNT - 1)
+        f++;
+    a->focus = f;
+    if (d & KEY_DLEFT)
+        led_change(a, f, -1);
+    if (d & KEY_DRIGHT)
+        led_change(a, f, 1);
+    if (d & KEY_A)
+        led_preview(a);
+    if (d & KEY_Y) { /* this event as 1.7 lit it */
+        LedEvent ev[LED_EV_COUNT];
+        led_preset(0, ev);
+        led_write(a, a->ledEvent, &ev[a->ledEvent]);
+    }
+    /* touch */
+    for (int k = 0; k < 3; k++)
+        if (hit(led_preset_rect(k), in)) {
+            a->focus = LF_PRESET;
+            led_apply_preset(a, k);
+        }
+    for (int i = 0; i < LED_EV_COUNT; i++)
+        if (hit((Rect){10 + i * 60.0f, LED_ROW[LF_EVENT].y, 58, 28}, in))
+            a->ledEvent = i, a->focus = LF_EVENT;
+    if (hit(LED_ROW[LF_ON], in))
+        a->focus = LF_ON, led_change(a, LF_ON, 0);
+    for (int i = 0; i < 9; i++)
+        if (hit(led_swatch_rect(i), in)) {
+            LedEvent e = a->cfg.ledEv[a->ledEvent];
+            e.r = (u8)(LED_SWATCH[i] >> 16), e.g = (u8)(LED_SWATCH[i] >> 8), e.b = (u8)LED_SWATCH[i];
+            e.on = true;
+            a->focus = LF_COLOR;
+            led_write(a, a->ledEvent, &e);
+        }
+    if (hit(LED_ROW[LF_PATTERN], in))
+        a->focus = LF_PATTERN, led_change(a, LF_PATTERN, 0);
+    if (hit(LED_ROW[LF_BRIGHT], in))
+        a->focus = LF_BRIGHT, led_change(a, LF_BRIGHT, 0);
+    if (hit(LED_ROW[LF_SPEED], in))
+        a->focus = LF_SPEED, led_change(a, LF_SPEED, 0);
+    if (hit(LED_BTN[0], in))
+        led_preview(a);
+    if (hit(LED_BTN[1], in)) {
+        LedEvent ev[LED_EV_COUNT];
+        led_preset(0, ev);
+        led_write(a, a->ledEvent, &ev[a->ledEvent]);
+    }
+    if ((d & KEY_B) || hit(SET_BACK, in))
+        go(a, SCR_SETTINGS, GRP_LEDS);
+}
+
+static u32 led_rgb(u32 c) { return RGBA(c >> 16 & 0xFF, c >> 8 & 0xFF, c & 0xFF, 0xFF); }
+
+/* how much of the colour the light gives at t (0-1 of its 2 s loop), with its brightness */
+static float led_level(const LedEvent *e, float t)
+{
+    if (!e->on)
+        return 0;
+    float k = 1;
+    if (e->pattern == LED_PAT_BREATHE) {
+        const float per = e->speed == LED_SPEED_SLOW ? 2 : e->speed == LED_SPEED_FAST ? 0.5f : 1;
+        const float u = fmodf(t / per, 1);
+        k = 0.15f + 0.85f * (u < 0.5f ? u * 2 : 2 - u * 2);
+    } else if (e->pattern == LED_PAT_BLINK2)
+        k = t < 0.3f || (t > 0.45f && t < 0.75f) ? 1 : 0.06f;
+    else if (e->pattern == LED_PAT_BLINK3)
+        k = t < 0.15f || (t > 0.25f && t < 0.4f) || (t > 0.5f && t < 0.65f) ? 1 : 0.06f;
+    else if (e->pattern == LED_PAT_GLOW)
+        k = t < 0.75f ? 1 : 0.06f;
+    return k * (0.35f + 0.65f * LEDCFG_LEVEL[e->bright] / 255.0f);
+}
+
+/* the event's light as it looks now (its pattern played on the frame counter) */
+static u32 led_now(const LedEvent *e, u32 frame)
+{
+    if (!e->on)
+        return COL_SURFACE2;
+    const float k = led_level(e, (frame % 120) / 120.0f);
+    return RGBA((u32)(e->r * k), (u32)(e->g * k), (u32)(e->b * k), 0xFF);
+}
+
+static void led_chip(float *x, float y, const char *label)
+{
+    const float w = ui_text_width(8, FONT_BOLD, label) + 12;
+    ui_rrect(*x, y, w, 15, 5, COL_SURFACE2);
+    ui_text(*x + 6, y + 2.5f, 8, FONT_BOLD, COL_TEXT, label);
+    *x += w + 4;
+}
+
+static void draw_led_top(App *a)
+{
+    const LedEvent *e = &a->cfg.ledEv[a->ledEvent];
+    const u32 col = led_rgb((u32)e->r << 16 | (u32)e->g << 8 | e->b);
+    /* the console open, from the front: the LED on the right of the hinge; then the LED large */
+    ui_card(10, 10, 150, 220, 12, COL_SURFACE);
+    ui_rrect(39, 26, 92, 60, 6, COL_SURFACE2);          /* the lid, its screen */
+    ui_rrect(46, 32, 78, 47, 2, COL_BG);
+    ui_rrect(35, 86, 100, 7, 3, COL_TRACK);             /* the hinge */
+    ui_circle(127, 89.5f, 4.5f, COL_BG);
+    ui_circle(127, 89.5f, 3, led_now(e, a->frame));
+    ui_rrect(37, 93, 96, 62, 6, COL_SURFACE2);          /* the lower half */
+    ui_rrect(60, 99, 50, 38, 2, COL_BG);
+    ui_circle(48, 107, 5, COL_TRACK);                    /* Circle Pad, D-pad, A B X Y */
+    ui_rect(46, 121, 4, 12, COL_TRACK);
+    ui_rect(42, 125, 12, 4, COL_TRACK);
+    ui_circle(122, 104, 2.5f, COL_TRACK);
+    ui_circle(117, 109, 2.5f, COL_TRACK);
+    ui_circle(127, 109, 2.5f, COL_TRACK);
+    ui_circle(122, 114, 2.5f, COL_TRACK);
+    ui_rrect(70, 144, 30, 4, 2, COL_TRACK);             /* SELECT HOME START */
+    ui_circle(85, 182, 20, COL_BG);
+    ui_circle(85, 182, 13, led_now(e, a->frame));
+    ui_text_center(85, 208, 8, FONT_REG, COL_DIM, T(S_LED_NOTIF));
+    /* the event: name, when it lights, its brightness over the loop, its settings */
+    const float x = 172, w = 218;
+    ui_text_fit(x, 12, w, 8, FONT_BOLD, COL_DIM, T(S_LED));
+    ui_text_fit(x, 23, w, 15, FONT_BOLD, COL_TEXT, T(LED_EV_NAME[a->ledEvent]));
+    ui_text_wrap_lines(x, 44, w, 8.5f, FONT_REG, COL_MUTED, T(LED_EV_WHEN[a->ledEvent]), 3);
+    ui_rrect(x, 84, w, 54, 8, COL_SURFACE);
+    ui_text_fit(x + 7, 89, w - 14, 8, FONT_BOLD, COL_DIM, T(S_LED_GRAPH));
+    const float bw = (w - 14 - 23 * 2) / 24.0f;
+    for (int i = 0; i < 24; i++) {
+        const float k = led_level(e, (i + 0.5f) / 24), h = k > 0.03f ? 30 * k : 1.5f;
+        ui_rrect(x + 7 + i * (bw + 2), 132 - h, bw, h, 1, k > 0.03f ? col : COL_TRACK);
+    }
+    char buf[48];
+    float cx = x;
+    if (!e->on)
+        led_chip(&cx, 144, T(S_LED_NO_LIGHT));
+    else {
+        led_chip(&cx, 144, T(LED_PAT_NAME[e->pattern]));
+        snprintf(buf, sizeof(buf), "%d / 5", e->bright);
+        led_chip(&cx, 144, buf);
+        if (e->pattern == LED_PAT_BREATHE)
+            led_chip(&cx, 144, T(LED_SPEED_NAME[e->speed]));
+    }
+    if (!a->cfg.ledEv[LED_EV_ERROR].on) { /* nothing would tell a recording did not start */
+        ui_rrect(x, 166, w, 30, 7, COL_WARN_BG);
+        ui_text_wrap_lines(x + 7, 169, w - 14, 8, FONT_BOLD, COL_WARN, T(S_LED_ERROR_OFF), 2);
+    }
+}
+
+static void led_row(Rect r, bool focus, const char *label)
+{
+    ui_card(r.x, r.y, r.w, r.h, 6, COL_SURFACE);
+    ui_text(r.x + 8, r.y + (r.h - 11) / 2, 8.5f, FONT_BOLD, COL_TEXT, label);
+    if (focus)
+        focus_ring(r, 6);
+}
+
+/* a row's choices as a segmented control from x to the row's right */
+static void led_seg(Rect r, float x, const char *const *labels, int n, int sel, bool dim)
+{
+    const float w = (r.x + r.w - 3 - x) / n;
+    ui_rrect(x - 1, r.y + 2, w * n + 2, r.h - 4, 5, COL_BG);
+    for (int i = 0; i < n; i++) {
+        if (i == sel)
+            ui_rrect(x + i * w, r.y + 3, w, r.h - 6, 4, dim ? COL_SURFACE2 : COL_TEXT);
+        ui_text_center(x + i * w + w / 2, r.y + (r.h - 10) / 2, 8, FONT_BOLD, i == sel && !dim ? COL_BG : dim ? COL_FAINT : COL_MUTED,
+                       labels[i]);
+    }
+}
+
+static void draw_led_bottom(App *a)
+{
+    const int evi = a->ledEvent;
+    const LedEvent *e = &a->cfg.ledEv[evi];
+    const int f = a->focus;
+    settings_header(T(S_LED));
+    /* presets */
+    const int pk = led_preset_now(a);
+    const Rect p0 = led_preset_rect(0), p2 = led_preset_rect(2);
+    const float pw = p2.x + p2.w - p0.x + 4;
+    ui_rrect(p0.x - 2, p0.y - 2, pw, p0.h + 4, 7, COL_SURFACE);
+    for (int k = 0; k < 3; k++) {
+        const Rect r = led_preset_rect(k);
+        if (k == pk)
+            ui_rrect(r.x, r.y, r.w, r.h, 5, COL_TEXT);
+        ui_text_center(r.x + r.w / 2, r.y + 4, 9, FONT_BOLD, k == pk ? COL_BG : COL_TEXT, T(LED_PRESET_NAME[k]));
+    }
+    ui_text_right(p0.x - 7, p0.y + 5, 8, FONT_BOLD, COL_DIM, T(S_HK_ZLZR_PRESET));
+    if (f == LF_PRESET)
+        ui_focus(p0.x - 2, p0.y - 2, pw, p0.h + 4, 7);
+    /* the five events */
+    for (int i = 0; i < LED_EV_COUNT; i++) {
+        const Rect r = {10 + i * 60.0f, LED_ROW[LF_EVENT].y, 58, 28};
+        const LedEvent *o = &a->cfg.ledEv[i];
+        ui_rrect(r.x, r.y, r.w, r.h, 6, i == evi ? COL_SURFACE2 : COL_SURFACE);
+        ui_circle(r.x + r.w / 2, r.y + 8, 3.5f, o->on ? led_rgb((u32)o->r << 16 | (u32)o->g << 8 | o->b) : COL_TRACK);
+        ui_text_fit(r.x + 3, r.y + 14, r.w - 6, 8, FONT_BOLD, i == evi ? COL_TEXT : COL_MUTED, T(LED_EV_NAME[i]));
+        if (i == evi)
+            ui_frame(r.x, r.y, r.w, r.h, 6, 1.2f, f == LF_EVENT ? COL_FOCUS : COL_TRACK);
+    }
+    /* light on / off */
+    char buf[96];
+    snprintf(buf, sizeof(buf), T(S_LED_LIGHT_FOR), T(LED_EV_NAME[evi]));
+    led_row(LED_ROW[LF_ON], f == LF_ON, buf);
+    ui_toggle_c(LED_ROW[LF_ON].x + LED_ROW[LF_ON].w - 38, LED_ROW[LF_ON].y + 2, e->on, COL_OK_FILL);
+    /* colour */
+    led_row(LED_ROW[LF_COLOR], f == LF_COLOR, T(S_LED_COLOR));
+    const int si = led_swatch_index(e);
+    for (int i = 0; i < 9; i++) {
+        const Rect s = led_swatch_rect(i);
+        if (i == si)
+            ui_circle(s.x + 9, s.y + 9, 9.5f, COL_TEXT);
+        ui_circle(s.x + 9, s.y + 9, i == si ? 7.5f : 8, led_rgb(LED_SWATCH[i]));
+    }
+    /* pattern */
+    led_row(LED_ROW[LF_PATTERN], f == LF_PATTERN, T(S_LED_PATTERN));
+    int pat[LED_PAT_COUNT], sel = 0;
+    const int np = led_patterns(evi, pat);
+    const char *pl[LED_PAT_COUNT];
+    for (int i = 0; i < np; i++) {
+        pl[i] = T(LED_PAT_NAME[pat[i]]);
+        if (pat[i] == e->pattern)
+            sel = i;
+    }
+    led_seg(LED_ROW[LF_PATTERN], 82, pl, np, sel, !e->on);
+    /* brightness */
+    led_row(LED_ROW[LF_BRIGHT], f == LF_BRIGHT, T(S_LED_BRIGHT));
+    for (int i = 0; i < 5; i++)
+        ui_rrect(82 + i * 38.0f, LED_ROW[LF_BRIGHT].y + 6, 34, 8, 3,
+                 i < e->bright ? (e->on ? led_rgb((u32)e->r << 16 | (u32)e->g << 8 | e->b) : COL_MUTED) : COL_TRACK);
+    snprintf(buf, sizeof(buf), "%d / 5", e->bright);
+    ui_text_right(LED_ROW[LF_BRIGHT].x + LED_ROW[LF_BRIGHT].w - 8, LED_ROW[LF_BRIGHT].y + 4.5f, 8, FONT_BOLD, COL_MUTED, buf);
+    /* speed (the breath only) */
+    led_row(LED_ROW[LF_SPEED], f == LF_SPEED, T(S_LED_SPEED));
+    const char *sl[3] = {T(LED_SPEED_NAME[0]), T(LED_SPEED_NAME[1]), T(LED_SPEED_NAME[2])};
+    led_seg(LED_ROW[LF_SPEED], 82, sl, 3, e->speed, !e->on || e->pattern != LED_PAT_BREATHE);
+    button(LED_BTN[0], T(S_LED_PREVIEW), 1, false);
+    ui_btn(LED_BTN[0].x + 8, LED_BTN[0].y + 7, "A", BTN_MUTED);
+    button(LED_BTN[1], T(S_LED_RESET), 0, false);
+    ui_btn(LED_BTN[1].x + 6, LED_BTN[1].y + 7, "Y", BTN_MUTED);
 }
 
 void app_draw_bottom(App *a)
@@ -3515,6 +4696,7 @@ void app_draw_bottom(App *a)
     case SCR_PHONE: draw_phone_bottom(a); break;
     case SCR_UNINSTALL: draw_uninstall_bottom(a); break;
     case SCR_SDTEST: draw_sdtest_bottom(a); break;
+    case SCR_LED: draw_led_bottom(a); break;
     case SCR_UPDATE: draw_update_bottom(a); break;
     case SCR_UNINSTALLED: draw_uninstalled_bottom(a); break;
     }
@@ -3557,9 +4739,9 @@ static const struct { const char *name; UpdPhase phase; UpdCheck check; UpdError
 };
 #define TS_UPD_N ((int)(sizeof(TOUR_UPD) / sizeof(*TOUR_UPD)))
 enum {
-    TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_PANEL_REPLAY, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
-    TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS + 1, TS_HOTKEY2, TS_GALLERY, TS_GAL_DELETE,
-    TS_PLAYER, TS_SDTEST, TS_UPDATE = TS_SDTEST + TS_SDT_N, TS_UNINSTALL = TS_UPDATE + TS_UPD_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
+    TS_LANG_FIRST, TS_GUIDE, TS_PANEL = TS_GUIDE + GUIDE_PAGES, TS_PANEL_REPLAY, TS_PANEL_READY, TS_PANEL_REC, TS_FIRSTRUN, TS_SETTINGS, TS_GROUP,
+    TS_LANG = TS_GROUP + TOUR_ROWS, TS_HELP, TS_HOTKEY = TS_HELP + HELP_TOPICS + 1, TS_HOTKEY2, TS_HK_HOLD, TS_HK_BAD, TS_HK_OK, TS_GALLERY, TS_GAL_DELETE,
+    TS_PLAYER, TS_PHONE, TS_LED, TS_LED_EV, TS_SDTEST, TS_UPDATE = TS_SDTEST + TS_SDT_N, TS_UNINSTALL = TS_UPDATE + TS_UPD_N, TS_UNINSTALLED, TS_UN_PARTIAL, TS_MSG,
     TS_PER_LANG = TS_MSG + TOUR_N_MSG
 };
 
@@ -3577,6 +4759,8 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
     a->msgNext[0] = 0;
     a->galConfirm = false;
     update_tour(UPD_NONE, UPD_CHK_NOT, UPD_ERR_NONE);
+    g_tourFake = false;
+    g_tourFreeze = false;
     int wait = 3;
     if (step == TS_LANG_FIRST) {
         a->langFirst = true;
@@ -3587,13 +4771,22 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         a->guidePage = step - TS_GUIDE;
         go(a, SCR_GUIDE, 0);
         snprintf(name, cap, "guide-%d", a->guidePage + 1);
-    } else if (step == TS_PANEL || step == TS_PANEL_REPLAY) {
-        if (step == TS_PANEL_REPLAY) {   /* Replay on, 2 min */
-            a->cfg.replay = true;
-            a->cfg.replaySec = 120;
+    } else if (step >= TS_PANEL && step <= TS_PANEL_REC) {
+        a->cfg.replay = step == TS_PANEL_REPLAY;   /* Replay on, 2 min */
+        a->cfg.replaySec = step == TS_PANEL_REPLAY ? 120 : 30;
+        if (step != TS_PANEL) {   /* the module running (Azahar has none): ready, or recording for 1:23 */
+            memset(&g_tourSt, 0, sizeof(g_tourSt));
+            g_tourSt.running = g_tourSt.readable = true;
+            g_tourSt.state = step == TS_PANEL_REC ? REC_STATE_RECORDING : REC_STATE_IDLE;
+            g_tourSt.recSeconds = 83;
+            g_tourSt.framesTop = g_tourSt.framesBot = 1245;
+            g_tourSt.recKb = 96 * 1024;
+            g_tourFake = true;
+            a->st = g_tourSt;   /* now: the module's status is read every 20 frames */
         }
         go(a, SCR_PANEL, step == TS_PANEL_REPLAY ? FOCUS_REPLAY : 0);
-        snprintf(name, cap, step == TS_PANEL ? "panel" : "panel-replay");
+        static const char *const N[] = {"panel", "panel-replay", "panel-ready", "panel-recording"};
+        snprintf(name, cap, "%s", N[step - TS_PANEL]);
     } else if (step == TS_FIRSTRUN) {
         go(a, SCR_FIRSTRUN, 0);
         snprintf(name, cap, "firstrun");
@@ -3620,9 +4813,22 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         a->back = SCR_PANEL;
         go(a, SCR_HELP, 0);
         snprintf(name, cap, "help-%02d", a->helpTopic + 1);
+    } else if (step >= TS_HK_HOLD && step <= TS_HK_OK) {   /* R + SELECT held half a second, L + R, X + SELECT */
+        open_hotkey(a, step == TS_HK_OK);
+        hotkey_listen(a, step == TS_HK_OK);
+        a->hkWaitRelease = false;
+        g_tourFreeze = true;
+        if (step == TS_HK_HOLD) {
+            a->hkHeld = HK_R | HK_SELECT;
+            a->hkSince = a->frame - 36;
+        } else {
+            a->hkReview = true;
+            a->hkCand = step == TS_HK_BAD ? HK_L | HK_R : HK_X | HK_SELECT;
+        }
+        static const char *const N[3] = {"hotkey-hold", "hotkey-not-allowed", "hotkey-ok"};
+        snprintf(name, cap, "%s", N[step - TS_HK_HOLD]);
     } else if (step == TS_HOTKEY || step == TS_HOTKEY2) {
-        open_hotkey(a);
-        a->hkStep = step == TS_HOTKEY2;
+        open_hotkey(a, step == TS_HOTKEY2);
         snprintf(name, cap, step == TS_HOTKEY ? "hotkey" : "hotkey-2");
     } else if (step == TS_GALLERY) {
         open_gallery(a, NULL);
@@ -3651,6 +4857,23 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
         }
         wait = 150;
         snprintf(name, cap, "player-buttons");
+    } else if (step == TS_LED || step == TS_LED_EV) {   /* LED Studio: Recording, then Saved */
+        if (a->screen == SCR_PHONE)
+            close_phone(a);
+        open_led(a);
+        if (step == TS_LED_EV) {
+            a->ledEvent = LED_EV_SAVED;
+            a->focus = LF_COLOR;
+        }
+        wait = 20;
+        snprintf(name, cap, step == TS_LED ? "led" : "led-saved");
+    } else if (step == TS_PHONE) {   /* the Download screen (Azahar: no Wi-Fi, or the code when it has one) */
+        if (a->screen == SCR_PLAYER)
+            close_player(a);
+        if (a->files.newest[0])
+            open_phone(a, a->files.newest);
+        wait = 120;
+        snprintf(name, cap, "phone");
     } else if (step >= TS_UPDATE && step < TS_UNINSTALL) {
         const int k = step - TS_UPDATE;
         update_tour(TOUR_UPD[k].phase, TOUR_UPD[k].check, TOUR_UPD[k].error);
@@ -3663,6 +4886,8 @@ int app_tour(App *a, int lang, int step, char *name, size_t cap)
     } else if (step < TS_UNINSTALL) {
         if (a->screen == SCR_PLAYER)
             close_player(a);
+        if (a->screen == SCR_PHONE)
+            close_phone(a);
         const int k = step - TS_SDTEST;
         memset(&g_sdt, 0, sizeof(g_sdt));
         g_sdt.state = k == TS_SDT_IDLE ? SDT_IDLE : k == TS_SDT_RUN ? SDT_RUNNING : k == TS_SDT_FAILED ? SDT_FAILED : SDT_DONE;

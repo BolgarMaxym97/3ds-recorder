@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -O2 -DBENCH_HOST \
            -I../../libbench/include -I../benchplugin/Sources -I../../codec/include
-TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs test_srvtoken test_update test_support
+TESTS   := test_bench test_convert test_codec test_audio test_huff test_fused test_unwrap test_autostart test_front test_plgring test_appletguard test_join test_stats test_textbreak test_i18n test_inputs test_srvtoken test_update test_support test_hotkey test_ledcfg test_c420h
 
 .PHONY: test clean
 
@@ -69,3 +69,12 @@ test_update: test_update.c ../../app/source/update_core.c ../../app/source/updat
 
 test_support: test_support.c ../../app/source/support_core.c ../../app/source/support_core.h
 	$(CC) $(CFLAGS) -I../../app/source -o $@ test_support.c ../../app/source/support_core.c
+
+test_hotkey: test_hotkey.c ../../app/source/hotkey_core.c ../../app/source/hotkey_core.h
+	$(CC) $(CFLAGS) -I../../app/source -o $@ test_hotkey.c ../../app/source/hotkey_core.c
+
+test_ledcfg: test_ledcfg.c ../../codec/include/ledcfg.h
+	$(CC) $(CFLAGS) -o $@ test_ledcfg.c
+
+test_c420h: test_c420h.c ../../codec/source/c420h.c ../../codec/source/codec.c ../../codec/include/codec.h
+	$(CC) $(CFLAGS) -o $@ test_c420h.c ../../codec/source/c420h.c ../../codec/source/codec.c

@@ -206,6 +206,10 @@ int main(int argc, char **argv)
     static App app;
     const bool ready = top && bottom && ui_init();
     app_init(&app, self);
+    /* ZL / ZR (New 3DS) come from ir:rst: for the hotkey editor (issue #37) */
+    const bool zlzr = app.new3ds && R_SUCCEEDED(irrstInit());
+    app_set_zlzr(app.new3ds);   /* (without ir:rst here the editor still has them: the ZL / ZR preset by touch) */
+    u32 zPrev = 0;
     lid_init();
     static aptHookCookie aptCookie;
     aptHook(&aptCookie, apt_log, NULL);
@@ -230,6 +234,13 @@ int main(int argc, char **argv)
         g_aptAway = false;
         hidScanInput();
         Input in = {.down = hidKeysDown(), .held = hidKeysHeld()};
+        if (zlzr) {
+            irrstScanInput();
+            const u32 z = irrstKeysHeld() & (KEY_ZL | KEY_ZR);
+            in.held |= z;
+            in.down |= z & ~zPrev;
+            zPrev = z;
+        }
         if (hidKeysHeld() & KEY_TOUCH) {
             touchPosition now;
             hidTouchRead(&now);
@@ -310,6 +321,8 @@ int main(int argc, char **argv)
 
     lid_exit();
     app_exit(&app);
+    if (zlzr)
+        irrstExit();
     ui_exit();
     C2D_Fini();
     C3D_Fini();

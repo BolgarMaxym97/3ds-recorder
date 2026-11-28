@@ -69,13 +69,18 @@ typedef struct {
     float sw;                  /* stroke width, inside the edge */
 } Shape;
 
+/* Redesign 2.0 (the app's canvas): a held button filled white with its letter dark (readable on any
+   game, and not the app's red, which means "recording"); one not held outlined, its letter light;
+   the strips a dark controller panel. */
 static const float SOFT[4] = {0xC3 / 255.f, 0xC9 / 255.f, 0xD0 / 255.f, 0.92f};
-static const float ACCENT[4] = {0xFF / 255.f, 0x4D / 255.f, 0x4F / 255.f, 1.f};
+static const float PRESS[4] = {1.f, 1.f, 1.f, 1.f};
+static const float INK[4] = {0x14 / 255.f, 0x16 / 255.f, 0x1A / 255.f, 1.f};
+static const float PANEL[4] = {0x17 / 255.f, 0x1A / 255.f, 0x20 / 255.f, 1.f};
 static const float DARK[4] = {0x0E / 255.f, 0x10 / 255.f, 0x14 / 255.f, 0.62f};
 static const float HALO[4] = {0x0E / 255.f, 0x10 / 255.f, 0x14 / 255.f, 0.55f};
 static const float NONE[4] = {0, 0, 0, 0};
 
-#define MAX_SHAPES 32
+#define MAX_SHAPES 128
 typedef struct {
     Shape s[MAX_SHAPES];
     int n;
@@ -95,20 +100,50 @@ static void put(Shapes *o, uint8_t kind, float cx, float cy, float hx, float hy,
 /* a button: outlined, filled when held */
 static void button(Shapes *o, float cx, float cy, float hx, float hy, float r, int held, float sw)
 {
-    put(o, SH_BOX, cx, cy, hx, hy, r, held ? ACCENT : NONE, held ? ACCENT : SOFT, sw);
+    put(o, SH_BOX, cx, cy, hx, hy, r, held ? PRESS : NONE, held ? PRESS : SOFT, sw);
+}
+
+/* A letter on a button, 5 x 7 cells of `s` centred on (cx, cy): each row's runs of cells as boxes,
+   drawn by the same distance code as everything else (web/inputs.js the same). */
+static const uint8_t GLYPH[6][7] = {
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},   /* A */
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E},   /* B */
+    {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11},   /* X */
+    {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04},   /* Y */
+    {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F},   /* L */
+    {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11},   /* R */
+};
+enum { G_A, G_B, G_X, G_Y, G_L, G_R };
+
+static void letter(Shapes *o, int g, float cx, float cy, float s, int held)
+{
+    for (int row = 0; row < 7; row++)
+        for (int c = 0; c < 5;) {
+            if (!(GLYPH[g][row] >> (4 - c) & 1)) {
+                c++;
+                continue;
+            }
+            int e = c;
+            while (e < 5 && (GLYPH[g][row] >> (4 - e) & 1))
+                e++;
+            /* (+0.5: at 1x the cells fall on whole pixels, the letter sharp) */
+            put(o, SH_BOX, cx + 0.5f + ((c + e) * 0.5f - 2.5f) * s, cy + 0.5f + (row - 3.f) * s, (e - c) * s * 0.5f, s * 0.5f, 0.f,
+                held ? INK : SOFT, NONE, 0);
+            c = e;
+        }
 }
 
 static void dpad(Shapes *o, float cx, float cy, float u, unsigned keys, float sw)
 {
     const float h = u * 0.5f;
     if (keys & R3D_KEY_UP)
-        put(o, SH_BOX, cx, cy - u, h, h, 1.f, ACCENT, NONE, 0);
+        put(o, SH_BOX, cx, cy - u, h, h, 1.f, PRESS, NONE, 0);
     if (keys & R3D_KEY_DOWN)
-        put(o, SH_BOX, cx, cy + u, h, h, 1.f, ACCENT, NONE, 0);
+        put(o, SH_BOX, cx, cy + u, h, h, 1.f, PRESS, NONE, 0);
     if (keys & R3D_KEY_LEFT)
-        put(o, SH_BOX, cx - u, cy, h, h, 1.f, ACCENT, NONE, 0);
+        put(o, SH_BOX, cx - u, cy, h, h, 1.f, PRESS, NONE, 0);
     if (keys & R3D_KEY_RIGHT)
-        put(o, SH_BOX, cx + u, cy, h, h, 1.f, ACCENT, NONE, 0);
+        put(o, SH_BOX, cx + u, cy, h, h, 1.f, PRESS, NONE, 0);
     put(o, SH_CROSS, cx, cy, u * 1.5f, h, 1.5f, NONE, SOFT, sw);
 }
 
@@ -116,15 +151,27 @@ static void stick(Shapes *o, float cx, float cy, float ring, float dot, float tr
 {
     put(o, SH_BOX, cx, cy, ring, ring, ring, NONE, SOFT, sw);
     const float dx = st->cx * travel / 127.f, dy = -st->cy * travel / 127.f;
-    put(o, SH_BOX, cx + dx, cy + dy, dot, dot, dot, SOFT, NONE, 0);
+    /* white once it is pushed past a small dead zone, as a held button */
+    const int pushed = st->cx * st->cx + st->cy * st->cy > 24 * 24;
+    put(o, SH_BOX, cx + dx, cy + dy, dot, dot, dot, pushed ? PRESS : SOFT, NONE, 0);
 }
 
-static void abxy(Shapes *o, float cx, float cy, float d, float r, unsigned keys, float sw)
+static void abxy(Shapes *o, float cx, float cy, float d, float r, unsigned keys, float sw, float s)
 {
-    button(o, cx, cy - d, r, r, r, (keys & R3D_KEY_X) != 0, sw);
-    button(o, cx - d, cy, r, r, r, (keys & R3D_KEY_Y) != 0, sw);
-    button(o, cx + d, cy, r, r, r, (keys & R3D_KEY_A) != 0, sw);
-    button(o, cx, cy + d, r, r, r, (keys & R3D_KEY_B) != 0, sw);
+    const struct { unsigned k; float dx, dy; int g; } F[4] = {
+        {R3D_KEY_X, 0, -1, G_X}, {R3D_KEY_Y, -1, 0, G_Y}, {R3D_KEY_A, 1, 0, G_A}, {R3D_KEY_B, 0, 1, G_B}};
+    for (int i = 0; i < 4; i++) {
+        const int held = (keys & F[i].k) != 0;
+        button(o, cx + F[i].dx * d, cy + F[i].dy * d, r, r, r, held, sw);
+        letter(o, F[i].g, cx + F[i].dx * d, cy + F[i].dy * d, s, held);
+    }
+}
+
+/* L / R: the bar, its letter */
+static void shoulder(Shapes *o, float cx, float cy, float hx, float hy, int held, float sw, float s, int g)
+{
+    button(o, cx, cy, hx, hy, hy, held, sw);
+    letter(o, g, cx, cy, s, held);
 }
 
 static void shapes(const InputLayout *l, const InputState *st, Shapes *o)
@@ -134,36 +181,38 @@ static void shapes(const InputLayout *l, const InputState *st, Shapes *o)
     o->n = 0;
     if (l->strips) {
         const float sw = 1.3f, y0 = l->oy, lx = l->ox - 20.f, rx = l->ox + 340.f;
-        button(o, lx, y0 + 14.f, 14.f, 4.f, 4.f, (k & R3D_KEY_L) != 0, sw);
+        put(o, SH_BOX, lx, y0 + 120.f, 17.f, 116.f, 9.f, PANEL, NONE, 0);   /* the controller's two halves */
+        put(o, SH_BOX, rx, y0 + 120.f, 17.f, 116.f, 9.f, PANEL, NONE, 0);
+        shoulder(o, lx, y0 + 14.f, 14.f, 5.f, (k & R3D_KEY_L) != 0, sw, 1.f, G_L);
         stick(o, lx, y0 + 62.f, 13.f, 5.f, 8.f, st, sw);   /* as on the console: the stick above the D-pad */
         dpad(o, lx, y0 + 118.f, 9.f, k, sw);
         button(o, lx, y0 + 170.f, 10.f, 3.5f, 3.5f, (k & R3D_KEY_SELECT) != 0, sw);
-        button(o, rx, y0 + 14.f, 14.f, 4.f, 4.f, (k & R3D_KEY_R) != 0, sw);
-        abxy(o, rx, y0 + 70.f, 11.f, 5.5f, k, sw);
+        shoulder(o, rx, y0 + 14.f, 14.f, 5.f, (k & R3D_KEY_R) != 0, sw, 1.f, G_R);
+        abxy(o, rx, y0 + 70.f, 11.f, 6.f, k, sw, 1.f);
         button(o, rx, y0 + 170.f, 10.f, 3.5f, 3.5f, (k & R3D_KEY_START) != 0, sw);
     } else {
         const float sw = 1.1f, x0 = l->ox, y0 = l->oy;
         put(o, SH_BOX, x0 + INPUT_PANEL_W / 2.f, y0 + INPUT_PANEL_H / 2.f, INPUT_PANEL_W / 2.f, INPUT_PANEL_H / 2.f, 8.f,
             DARK, NONE, 0);
-        button(o, x0 + 19.f, y0 + 7.f, 13.f, 3.f, 3.f, (k & R3D_KEY_L) != 0, sw);
-        button(o, x0 + 97.f, y0 + 7.f, 13.f, 3.f, 3.f, (k & R3D_KEY_R) != 0, sw);
+        shoulder(o, x0 + 19.f, y0 + 7.f, 13.f, 4.f, (k & R3D_KEY_L) != 0, sw, 0.8f, G_L);
+        shoulder(o, x0 + 97.f, y0 + 7.f, 13.f, 4.f, (k & R3D_KEY_R) != 0, sw, 0.8f, G_R);
         stick(o, x0 + 19.f, y0 + 25.f, 8.f, 3.2f, 5.f, st, sw);
         dpad(o, x0 + 19.f, y0 + 47.f, 6.f, k, sw);
         if (!l->botShown) {
             put(o, SH_BOX, x0 + 58.f, y0 + 27.f, 16.f, 12.f, 2.f, NONE, SOFT, sw);
             if (touched)
-                put(o, SH_BOX, x0 + 42.f + (st->tx * 2 + 1) / 10.f, y0 + 15.f + st->ty / 10.f, 2.f, 2.f, 2.f, ACCENT, NONE,
+                put(o, SH_BOX, x0 + 42.f + (st->tx * 2 + 1) / 10.f, y0 + 15.f + st->ty / 10.f, 2.f, 2.f, 2.f, PRESS, NONE,
                     0);
         }
         button(o, x0 + 51.f, y0 + 48.f, 6.f, 2.2f, 2.2f, (k & R3D_KEY_SELECT) != 0, sw);
         button(o, x0 + 65.f, y0 + 48.f, 6.f, 2.2f, 2.2f, (k & R3D_KEY_START) != 0, sw);
-        abxy(o, x0 + 97.f, y0 + 31.f, 9.f, 4.f, k, sw);
+        abxy(o, x0 + 97.f, y0 + 31.f, 9.f, 4.5f, k, sw, 0.75f);
     }
     if (l->botShown && touched) {
         const float x = l->botX + st->tx * 2 + 1.f, y = l->botY + st->ty + 0.5f;
         put(o, SH_BOX, x, y, 8.5f, 8.5f, 8.5f, NONE, HALO, 3.f);
-        put(o, SH_BOX, x, y, 7.f, 7.f, 7.f, NONE, ACCENT, 2.f);
-        put(o, SH_BOX, x, y, 2.f, 2.f, 2.f, ACCENT, NONE, 0);
+        put(o, SH_BOX, x, y, 7.f, 7.f, 7.f, NONE, PRESS, 2.f);
+        put(o, SH_BOX, x, y, 2.f, 2.f, 2.f, PRESS, NONE, 0);
     }
 }
 

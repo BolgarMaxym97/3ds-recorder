@@ -59,6 +59,9 @@ void config_load(Config *c)
     c->mp4Inputs = false;
     snprintf(c->replayHotkey, sizeof(c->replayHotkey), "X+SELECT");   /* the module's default too */
     static char buf[MAX_FILE];
+    bool ledSet[LED_EV_COUNT] = {false};
+    LedEvent ledRead[LED_EV_COUNT];
+    ledcfg_defaults(c->ledEv, c->led);
     if (!ReadAll(buf, sizeof(buf)))
         return;
     for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
@@ -122,12 +125,21 @@ void config_load(Config *c)
             c->mp4Inputs = strcasecmp(v, "on") == 0;
         else if (strcasecmp(line, "guide") == 0)
             c->guideSeen = strcasecmp(v, "done") == 0;
+        else if (ledcfg_event(line) >= 0) {
+            const int ev = ledcfg_event(line);
+            ledSet[ev] = ledcfg_parse(ev, v, &ledRead[ev]);
+        }
     }
+    /* as the module reads them: an event without its own key follows led= (1.7) */
+    ledcfg_defaults(c->ledEv, c->led);
+    for (int i = 0; i < LED_EV_COUNT; i++)
+        if (ledSet[i])
+            c->ledEv[i] = ledRead[i];
 }
 
-bool config_set(const char *key, const char *value)
+bool config_set_many(const char *const *keys, const char *const *values, int count)
 {
-    static char in[MAX_FILE], out[MAX_FILE + 128];
+    static char in[MAX_FILE], out[MAX_FILE + 512];
     size_t n = ReadAll(in, sizeof(in));
     if (!n) {
         mkdir("sdmc:/3ds", 0777);
@@ -135,8 +147,10 @@ bool config_set(const char *key, const char *value)
         snprintf(in, sizeof(in), "%s", DEFAULTS);
         n = strlen(in);
     }
-    size_t o = 0, klen = strlen(key);
-    bool done = false;
+    bool done[8] = {false};
+    if (count > 8)
+        count = 8;
+    size_t o = 0;
     const char *p = in;
     while (*p) {
         const char *end = strchr(p, '\n');
@@ -144,21 +158,29 @@ bool config_set(const char *key, const char *value)
         const char *q = p;
         while (*q == ' ' || *q == '\t')
             q++;
-        const bool match = strncasecmp(q, key, klen) == 0 && (q[klen] == '=' || q[klen] == ' ');
-        if (match && !done) {
-            o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", key, value);
-            done = true;
-        } else if (!match && o + len < sizeof(out)) {
+        int k = -1;
+        for (int i = 0; i < count && k < 0; i++) {
+            const size_t klen = strlen(keys[i]);
+            if (strncasecmp(q, keys[i], klen) == 0 && (q[klen] == '=' || q[klen] == ' '))
+                k = i;
+        }
+        if (k >= 0 && !done[k]) {
+            o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", keys[k], values[k]);
+            done[k] = true;
+        } else if (k < 0 && o + len < sizeof(out)) {
             memcpy(out + o, p, len);
             o += len;
         }
         p += len;
     }
-    if (!done) {
-        if (o && out[o - 1] != '\n' && o + 1 < sizeof(out))
-            out[o++] = '\n';
-        o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", key, value);
-    }
+    for (int i = 0; i < count; i++)
+        if (!done[i]) {
+            if (o && out[o - 1] != '\n' && o + 1 < sizeof(out))
+                out[o++] = '\n';
+            o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", keys[i], values[i]);
+        }
+    if (o > sizeof(out) - 1)
+        o = sizeof(out) - 1;
     FILE *f = fopen(CONFIG_PATH, "w");
     if (!f)
         return false;
@@ -166,3 +188,5 @@ bool config_set(const char *key, const char *value)
     fclose(f);
     return ok;
 }
+
+bool config_set(const char *key, const char *value) { return config_set_many(&key, &value, 1); }

@@ -86,6 +86,22 @@ ol { margin: 6px 0 0; padding-left: 20px; }
 .trim #trimGo:disabled { opacity: .45; cursor: default; }
 .trim .secondary { background: var(--surface2); }
 .trim small { color: var(--muted); font-size: 13px; display: block; }
+/* the purposes as cards (Redesign 2.0): what each makes, and its size */
+.presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; margin: 8px 0 10px; }
+.presets button { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; margin: 0; padding: 10px 11px;
+  background: var(--surface2); color: var(--text); border: 2px solid transparent; border-radius: 12px; font-weight: 600; }
+.presets button b { font-size: 15px; }
+.presets button small { color: var(--muted); font-size: 12.5px; line-height: 1.3; font-weight: 500; }
+.presets button .spec { font-style: normal; color: var(--soft); font-size: 12px; font-weight: 600; }
+.presets button.on { border-color: var(--text); }
+.presets button:disabled { opacity: .4; cursor: default; }
+.nopc { color: var(--warn); font-size: 13px; display: block; margin-bottom: 6px; }
+.vhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.vhead small { color: var(--muted); font-size: 13px; }
+#versions .opts { background: none; padding: 0; margin: 0; }
+#madeList a { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; color: var(--text); text-decoration: none; border-top: 1px solid #2e343d; }
+#madeList a:first-child { border-top: 0; }
+#madeList a span { color: var(--muted); }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -103,9 +119,14 @@ ol { margin: 6px 0 0; padding-left: 20px; }
     <small data-t="scaleHint"></small>
     <div class="opt wide"><b data-t="optLayout"></b>
       <div class="seg" id="layout"><button data-v="auto" data-t="layAuto"></button><button data-v="top" data-t="layTop"></button><button data-v="bottom" data-t="layBottom"></button><button data-v="side" data-t="laySide"></button></div></div>
-    <div class="opt wide"><b data-t="optQuality"></b>
-      <div class="seg" id="quality"><button data-v="normal" data-t="qNormal"></button><button data-v="high" data-t="qHigh"></button><button data-v="edit" data-t="qEdit"></button><button data-v="discord" data-t="qDiscord"></button></div></div>
-    <small><span data-t="qualityHint"></span> <span data-t="discordHint"></span></small>
+    <b data-t="optFor"></b>
+    <div class="presets" id="quality">
+      <button data-v="normal"><b data-t="qNormal"></b><small data-t="pNormal"></small><i class="spec" data-spec="normal"></i></button>
+      <button data-v="high"><b data-t="qHigh"></b><small data-t="pHigh"></small><i class="spec" data-spec="high"></i></button>
+      <button data-v="edit"><b data-t="qEdit"></b><small data-t="pEdit"></small><i class="spec" data-spec="edit"></i></button>
+      <button data-v="discord"><b data-t="qDiscord"></b><small data-t="pDiscord"></small><i class="spec" data-spec="discord"></i></button>
+    </div>
+    <small class="nopc" id="pcOnly" hidden data-t="pcOnly"></small>
     <div class="opt"><b data-t="optInputs"></b>
       <div class="seg" id="inputs"><button data-v="0" data-t="inOff"></button><button data-v="1" data-t="inOn"></button></div></div>
     <small data-t="inputsHint"></small>
@@ -148,6 +169,13 @@ ol { margin: 6px 0 0; padding-left: 20px; }
   </div>
   <a class="btn primary" id="save" download></a>
   <div class="note info" id="howto"></div>
+  <div class="card" id="made" hidden><b data-t="madeTitle"></b><div id="madeList"></div></div>
+  <div class="card" id="versions" hidden>
+    <div class="vhead"><b data-t="another"></b><small data-t="anotherHint"></small></div>
+    <div id="versionOpts"></div>
+    <button class="primary" id="makeVersion" data-t="makeVersion"></button>
+  </div>
+  <div class="note info" id="toPc" hidden></div>
   <a class="btn link" id="again" href="" hidden data-t="again"></a>
 </div>
 

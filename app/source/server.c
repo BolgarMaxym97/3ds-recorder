@@ -63,8 +63,9 @@ static int g_srv = -1;
 static Client g_cl[SRV_CLIENTS];
 static u8 *g_page;
 static u32 g_pageLen;
+static volatile u32 g_statusAsks; /* /api/rec answered: the lid log tells if the phone got through while it was closed */
 static char g_info[160];           /* "lang":..,"version":..,"console":.. (into /api/rec) */
-static char g_token[SRV_TOKEN_LEN + 1];   /* the key in the QR address (srvtoken.h), new each start */
+static char g_token[SRV_TOKEN_LEN + 1];   /* the key in the QR address (srvtoken.h), new each app start */
 static u32 g_refused;                     /* requests without it, this start */
 static char g_offer[32];           /* the one recording served */
 /* speed: bytes sent per 250 ms slot, over the last 3 s */
@@ -337,6 +338,7 @@ static void start_request(Client *c)
         c->left = g_pageLen;
         set_head(c, "200 OK", "text/html; charset=utf-8", g_pageLen, "Content-Encoding: gzip\r\n");
     } else if (strcmp(path, "/api/rec") == 0) {
+        g_statusAsks++;
         char *json = rec_json();
         send_text(c, json ? "200 OK" : "500 Internal Server Error", "application/json", json ? json : strdup("{}"));
     } else if (strcmp(path, "/api/log") == 0) {
@@ -679,7 +681,8 @@ ServerState server_start(const char *name, const char *lang, const char *version
     if (g_thread)
         return g_stats.state;
     snprintf(g_offer, sizeof(g_offer), "%.31s", name);
-    {   /* a new key each time the transfer screen opens (the pattern of stats.c's id) */
+    if (!g_token[0]) {   /* a new key each time the app starts (the pattern of stats.c's id): a phone
+                            page keeps working when Download is left and opened again (a lid closed) */
         u8 bytes[SRV_TOKEN_BYTES];
         const bool ok = R_SUCCEEDED(psInit()) && R_SUCCEEDED(PS_GenerateRandomBytes(bytes, sizeof(bytes)));
         psExit();
@@ -797,3 +800,5 @@ void server_stats(ServerStats *out)
     LightLock_Unlock(&g_lock);
     out->kbPerSec = (u32)(sum / 1024 / 3);
 }
+
+u32 server_status_asks(void) { return g_statusAsks; }

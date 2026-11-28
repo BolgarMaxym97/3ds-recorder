@@ -19,7 +19,7 @@ typedef struct {
     int touch_y;
 } Input;
 
-typedef enum { SCR_PANEL, SCR_FIRSTRUN, SCR_HELP, SCR_SETTINGS, SCR_HOTKEY, SCR_GALLERY, SCR_PLAYER, SCR_PHONE, SCR_UNINSTALL, SCR_UNINSTALLED, SCR_GUIDE, SCR_LANG, SCR_SETGROUP, SCR_SDTEST, SCR_UPDATE } Screen;
+typedef enum { SCR_PANEL, SCR_FIRSTRUN, SCR_HELP, SCR_SETTINGS, SCR_HOTKEY, SCR_GALLERY, SCR_PLAYER, SCR_PHONE, SCR_UNINSTALL, SCR_UNINSTALLED, SCR_GUIDE, SCR_LANG, SCR_SETGROUP, SCR_SDTEST, SCR_UPDATE, SCR_LED } Screen;
 
 typedef struct {
     Screen screen, back;
@@ -32,6 +32,7 @@ typedef struct {
     bool langFirst;         /* the language list is the first run's (a Continue button, then the guide) */
     Screen langBack;        /* where the language list goes back to otherwise */
     int langBackFocus;
+    bool setFromHome;       /* a mode's page opened by the gear on its Home card: B goes back there */
     bool new3ds;
     Config cfg;
     RecStatus st;
@@ -51,9 +52,12 @@ typedef struct {
     /* hotkey capture: held = buttons down now, cand = the captured combination */
     u32 hkHeld, hkCand, hkSince;
     bool hkReview, hkWaitRelease;
+    bool hkCapture;         /* the hotkey screen listens for a new combination (A or a tap on a row); else D-pad picks a row */
     int hkStep;             /* 0: the recording hotkey, then 1: the replay hotkey (saves a clip) */
     /* gallery: selected row, first visible row, the list version seen, delete confirmation */
     int galSel, galTop;
+    int galFilter;
+    int ledEvent;           /* LED Studio: the event being set (LED_EV_*) */          /* GF_*: all, recordings, Replay clips */
     u32 galVersion, galPreviewVersion;
     bool galConfirm;
     bool galDeleting;      /* a deletion runs in the background (no second one meanwhile) */
@@ -76,6 +80,8 @@ void app_update(App *a, const Input *in);
 void app_draw_top(App *a);
 void app_draw_bottom(App *a);
 void app_exit(App *a);
+/* ZL / ZR can be read (New 3DS, ir:rst): the hotkey editor offers them */
+void app_set_zlzr(bool on);
 #ifdef UI_TOUR
 int app_tour(App *a, int lang, int step, char *name, size_t cap);
 #endif

@@ -18,7 +18,8 @@ enum { REC_STATE_STARTING, REC_STATE_IDLE, REC_STATE_RECORDING, REC_STATE_SAVING
        REC_STATE_REPLAY };
 /* REC_CMD_RELOAD: the app changed config.ini; read it now, or after the running recording */
 /* REC_CMD_SAVE_CLIP: the replay buffer's last 30 seconds become a clip (as the replay hotkey does) */
-enum { REC_CMD_NONE, REC_CMD_EXIT, REC_CMD_START, REC_CMD_STOP, REC_CMD_RELOAD, REC_CMD_SAVE_CLIP };
+/* REC_CMD_LED_PREVIEW + event (ledcfg.h LED_EV_*): LED Studio's Preview, the settings read again first */
+enum { REC_CMD_NONE, REC_CMD_EXIT, REC_CMD_START, REC_CMD_STOP, REC_CMD_RELOAD, REC_CMD_SAVE_CLIP, REC_CMD_LED_PREVIEW = 16 };
 
 typedef struct {
     u32 magic, version;

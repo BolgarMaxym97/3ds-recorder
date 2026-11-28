@@ -92,23 +92,28 @@ static void test_pixels(void)
     input_layout(&l, &both);
     InputState st = {0, 0, 0, 0, R3D_TOUCH_NONE, R3D_TOUCH_NONE, {0, 0}};
     float c[4];
-    /* A (right of the ABXY diamond: x 380 + 11, y 240 + 70): hollow when up, red when held */
-    px(&l, &st, 391.5f, 310.5f, c);
-    assert(c[3] < 0.05f);
+    /* A (right of the ABXY diamond: x 380 + 11, y 240 + 70; 6 wide): the dark panel inside when up,
+       white when held; its letter (5 x 7 cells of 1 px) light when up, dark when held */
+    px(&l, &st, 389.5f, 307.5f, c);   /* a cell of the letter's box without the letter (row 0, column 0) */
+    assert(c[3] > 0.95f && c[0] < 0.15f);
+    px(&l, &st, 391.5f, 310.5f, c);   /* the A's bar (row 3) */
+    assert(c[3] > 0.95f && c[0] > 0.6f);
     st.keys = R3D_KEY_A;
+    px(&l, &st, 389.5f, 307.5f, c);
+    assert(c[3] > 0.95f && c[0] > 0.95f && c[1] > 0.95f && c[2] > 0.95f);
     px(&l, &st, 391.5f, 310.5f, c);
-    assert(c[3] > 0.95f && c[0] > 0.95f && c[1] < 0.4f);
+    assert(c[0] < 0.15f);
     /* its outline, unpressed: grey */
     st.keys = 0;
-    px(&l, &st, 380.f + 11.f + 5.f, 310.5f, c);
+    px(&l, &st, 380.f + 11.f + 5.5f, 310.5f, c);
     assert(c[3] > 0.4f && c[0] > 0.3f && c[0] < 0.95f && c[1] > 0.3f);
-    /* the stick's dot follows the stick */
+    /* the stick's dot follows the stick, white once pushed */
     px(&l, &st, 20.f, 302.f, c);   /* above the D-pad, as on the console */
-    assert(c[3] > 0.9f);
+    assert(c[3] > 0.9f && c[0] > 0.6f && c[0] < 0.95f);
     st.cx = 127;
     px(&l, &st, 28.f, 302.f, c);
-    assert(c[3] > 0.9f);
-    /* a touch: a red ring around the point on the bottom screen */
+    assert(c[3] > 0.9f && c[0] > 0.95f);
+    /* a touch: a white ring around the point on the bottom screen */
     st.tx = 80, st.ty = 100;
     px(&l, &st, 40.f + 161.f + 6.f, 340.5f, c);
     assert(c[3] > 0.5f && c[0] > 0.6f);
@@ -120,8 +125,8 @@ static void test_pixels(void)
     uint8_t *rgb = calloc(400 * 480, 3);
     st.keys = R3D_KEY_B;
     input_draw_rgb24(rgb, 400, 480, &l, &st);
-    const uint8_t *b = rgb + ((240 + 81) * 400 + 380) * 3;
-    assert(b[0] > 200 && b[1] < 120);
+    const uint8_t *b = rgb + ((240 + 78) * 400 + 382) * 3;   /* B held: white outside its letter (row 0, column 4) */
+    assert(b[0] > 200 && b[1] > 200 && b[2] > 200);
     assert(rgb[(100 * 400 + 200) * 3] == 0);
     free(rgb);
 
@@ -131,14 +136,14 @@ static void test_pixels(void)
     InputCache cache;
     input_cache_init(&cache, mem);
     input_draw_yuv420(Y, U, V, 400, 480, &l, &st, &cache);
-    assert(Y[(240 + 81) * 400 + 380] > 60);                 /* red over black: brighter */
-    assert(V[((240 + 81) / 2) * 200 + 190] > 180);           /* and red */
+    assert(Y[(240 + 78) * 400 + 382] > 200);                /* B held: white over black */
+    assert(V[((240 + 78) / 2) * 200 + 191] > 110 && V[((240 + 78) / 2) * 200 + 191] < 146);   /* and grey, not red */
     assert(Y[100 * 400 + 200] == 16 && U[50 * 200 + 100] == 128);
     /* the same state again: the cached shading, the same result */
-    uint8_t y1 = Y[(240 + 81) * 400 + 380];
+    uint8_t y1 = Y[(240 + 78) * 400 + 382];
     memset(Y, 16, 400 * 480);
     input_draw_yuv420(Y, U, V, 400, 480, &l, &st, &cache);
-    assert(Y[(240 + 81) * 400 + 380] == y1);
+    assert(Y[(240 + 78) * 400 + 382] == y1);
     /* the corner panel, top screen only */
     InputScreens top = {400, 240, 0, 0, -1, -1};
     input_layout(&l, &top);

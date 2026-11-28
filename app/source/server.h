@@ -45,4 +45,7 @@ void server_stats(ServerStats *out);
 /* Buttons In Video: the phone page draws the buttons pressed when it makes the video itself. */
 void server_set_inputs(bool on);
 
+/* how many times the phone page asked for the status (/api/rec) since the app started */
+u32 server_status_asks(void);
+
 #endif

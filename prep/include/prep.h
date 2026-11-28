@@ -26,9 +26,10 @@
  *   base.mp4.part   ftyp + mdat being written
  *   base.ptbl       sample table so far (12 bytes per sample)
  *   base.prep       resume points: two slots, the newer valid one wins
- * A resume point is taken before every key frame (every PREP_GOP video frames), with the
+ * A resume point is taken before every third key frame (every PREP_CKPT video frames), with the
  * queue empty, so a job that is stopped, crashes or loses power goes on from there and loses
- * at most one GOP.
+ * at most three GOPs (12 s at 30 fps). Each one waits for the encoder to finish everything queued
+ * and writes both screens to the card: on an Old 3DS that cost 2-3 s every 4 s of video.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -38,6 +39,7 @@ extern "C" {
 #endif
 
 #define PREP_GOP 120   /* key frame every 120 video frames (4 s at 30 fps) */
+#define PREP_CKPT (3 * PREP_GOP)   /* a resume point every 360 video frames */
 
 typedef struct {
     int videoKbps;           /* 0: PREP_VIDEO_KBPS (prep.c) */
@@ -62,6 +64,11 @@ typedef struct {
     double readMs, decodeMs, yuvMs, pcmMs, audioMs, checkpointMs, produceWaitMs, diskMs; /* diskMs: MP4 writes */
     /* consumer (ms) */
     double videoMs, writeMs, consumeWaitMs;
+    /* where the producer's time goes besides its work (the console's log says what holds it up) */
+    double drainMs;        /* waiting for the encoder to finish everything before a resume point */
+    double producerMs;     /* the producer's whole time (prep_produce), work and waits */
+    uint32_t checkpoints, diskWrites;
+    double diskMaxMs;      /* the slowest MP4 write */
 } PrepStats;
 
 enum { PREP_MORE = 0, PREP_DONE = 1, PREP_ERROR = -1, PREP_WAIT = 2 };

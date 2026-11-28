@@ -29,7 +29,7 @@ open -g -a "$AZAHAR" --args "$REPO/app/3ds-recorder-tour.3dsx"
 last=-1 same=0
 for _ in $(seq 1 600); do
     sleep 2
-    n=$(ls "$SD/tour" 2>/dev/null | wc -l | tr -d ' ')
+    n=$( (ls "$SD/tour" 2>/dev/null || true) | wc -l | tr -d ' ') # no folder yet while Azahar starts
     if [ "$n" -gt 0 ] && [ "$n" = "$last" ]; then same=$((same + 1)); else same=0; fi
     last=$n
     [ "$same" -ge 10 ] && break

@@ -37,6 +37,7 @@
 #include "front.h"
 #include "plgring.h"
 #include "appletguard.h"
+#include "ledcfg.h"
 
 /* Luma custom SVCs (csvc.s) */
 Result svcControlMemoryUnsafe(u32 *out, u32 addr0, u32 size, MemOp op, MemPerm perm);
@@ -173,7 +174,8 @@ typedef struct {
     bool top;        /* record the top screen */
     bool bottom;     /* record the bottom screen (screens=top: off; screens=bottom: the only one) */
     u32 bottomFps;   /* bottom_fps: with both screens, the bottom one at most this often (15, 10, 5, 1); 0: fps (#18) */
-    u32 led;         /* 0 off, 1 solid, 2 pulse */
+    u32 led;         /* 0 off, 1 solid, 2 pulse: 1.7's key, what the events without their own led_* key follow */
+    LedEvent ledEv[LED_EV_COUNT];   /* LED Studio (ledcfg.h): each event's light */
     bool audio;      /* record the DSP output */
     bool audioDebug; /* diagnostics: no video, raw DSP output polls every 250 us */
     u32 maxFileMb;   /* a recording goes on in a new file past this (tests set less: max_file_mb) */
@@ -202,6 +204,10 @@ typedef struct {
     s8 o3dsCore;        /* o3ds_core=0 or 1 (a test, not in the app): the Old 3DS converter always on that core; -1 auto */
     u32 sdLimitKb;   /* sd_limit_kb=N (not in the app, a test): the card takes at most N KB/s, as a slow one would */
     bool bench;      /* codec_bench=on: CodecBench at start-up (~0.6 s on an Old 3DS), not in the app */
+    /* c420h_bench=N (a measurement, not in the app): every Nth C420 frame is also made into C420H
+       (codec.h) and thrown away, timed; idle loops count each core's free time during a recording.
+       The recording itself does not change. 0: off */
+    u32 c420hBench;
     /* n3ds_boost=off (not in the app): a New 3DS records at the speed the running program chose, no
        804 MHz + L2 (CpuBoost); for a game that misbehaves while recording (a report's next step) */
     bool n3dsBoost;
@@ -280,8 +286,11 @@ void __appInit(void)
     archiveMountSdmc();
 }
 
+static void IrrstClose(void);
+
 void __appExit(void)
 {
+    IrrstClose();   /* (ZL / ZR, if a hotkey had them) */
     ptmSysmExit();
     archiveUnmountAll();
     fsExit();
@@ -577,7 +586,6 @@ static void LedPattern(const u8 *r, const u8 *g, const u8 *b, u8 delay, u8 smoot
     g_ledWrittenTick = svcGetSystemTick();
 }
 
-static const u8 ZERO32[32];
 
 /* The battery, for the log: recordings and the replay buffer say what they started and ended
    with, and a line every ten minutes says it whatever the recorder does, so a play session with
@@ -654,11 +662,19 @@ static void LedSequence(const LedStep *steps, u32 n)
 }
 
 static bool g_ledReplay;   /* the replay buffer runs: what the LED goes back to after a signal */
+static u64 g_ledPreviewEnd;   /* osGetTime() ms: a preview from the app (LED Studio) ends then */
 static void LedReplay(void);
 
 /* Called from the main loop (every 2-50 ms). */
 static void LedTick(void)
 {
+    if (g_ledPreviewEnd && osGetTime() >= g_ledPreviewEnd) {
+        g_ledPreviewEnd = 0;
+        if (g_ledReplay)
+            LedReplay();
+        else
+            LedOff();
+    }
     if (!g_ledSeqLen || osGetTime() < g_ledStepEnd)
         return;
     if (++g_ledSeqPos < g_ledSeqLen)
@@ -673,40 +689,38 @@ static void LedTick(void)
         LedOff();
 }
 
-/* Recording: slow red breathing like a camera's REC light (LED test variant 7). */
-static void LedRecording(void)
+/* When the lasting light is written again (LedKeep): after its whole pattern (16 s at the normal
+   breath, ledcfg.h), so a new write starts where the old one would have begun again. */
+static u64 g_ledKeepTicks = 16ull * SYSCLOCK_ARM11;
+
+/* A lasting light (the recording, the replay buffer) as LED Studio set it (1.7: the red breath,
+   the faint blue). */
+static void LedLasting(const LedEvent *e)
 {
-    u8 r[32];
-    g_ledSeqLen = 0;   /* cancels a running signal */
-    g_ledReplay = false;
-    if (g_cfg.led == 0)
-    {
-        LedOff();
-        return;
-    }
-    if (g_cfg.led == 1)
-    {
-        LedSolid(0xFF, 0, 0);
-        return;
-    }
-    for (u32 i = 0; i < 32; i++)
-    {
-        const u32 t = i <= 16 ? i : 32 - i;   /* 0..16..0 */
-        r[i] = (u8)(8 + t * 247 / 16);
-    }
-    LedPattern(r, ZERO32, ZERO32, 0x08, 0x40, 0);
+    u8 r[32], g[32], b[32], delay, smoothing;
+    ledcfg_lasting_pattern(e, r, g, b, &delay, &smoothing);
+    LedPattern(r, g, b, delay, smoothing, 0);
+    /* a breath again after its whole cycle; a steady light every 16 s, as 1.7 */
+    g_ledKeepTicks = (u64)(smoothing ? ledcfg_cycle_ms(delay) : 16000u) * SYSCLOCK_ARM11 / 1000;
 }
 
-/* Replay buffer running: a faint steady blue (the recording's red breath means a file is being made). */
+/* Recording: by default slow red breathing like a camera's REC light (LED test variant 7). */
+static void LedRecording(void)
+{
+    g_ledSeqLen = 0;   /* cancels a running signal */
+    g_ledReplay = false;
+    g_ledPreviewEnd = 0;
+    LedLasting(&g_cfg.ledEv[LED_EV_REC]);
+}
+
+/* Replay buffer running: by default a faint steady blue (the recording's red breath means a file is
+   being made). */
 static void LedReplay(void)
 {
     g_ledReplay = true;
     if (g_ledSeqLen)
         return;   /* a signal is playing (clip saved): LedTick sets it after that */
-    if (g_cfg.led == 0)
-        LedOff();
-    else
-        LedSolid(0, 0, 0x28);
+    LedLasting(&g_cfg.ledEv[LED_EV_REPLAY]);
 }
 
 /* The notification LED is the system's too: a StreetPass / SpotPass notification puts its own
@@ -715,10 +729,9 @@ static void LedReplay(void)
    The MCU's LED register does not read back, so the module cannot see that: while it records, it
    writes its own light again every 16 s. The breathing pattern takes exactly that long (32 steps
    of 8/16 s), so the new one starts where the old one would have begun again. */
-#define LED_KEEP_TICKS (16ull * SYSCLOCK_ARM11)
 static void LedKeep(bool replay)
 {
-    if (g_ledSeqLen || svcGetSystemTick() - g_ledWrittenTick < LED_KEEP_TICKS)
+    if (g_ledSeqLen || svcGetSystemTick() - g_ledWrittenTick < g_ledKeepTicks)
         return;   /* a signal is playing, or not time yet */
     if (replay)
         LedReplay();
@@ -726,11 +739,32 @@ static void LedKeep(bool replay)
         LedRecording();
 }
 
-static const LedStep LED_READY[] = { { 0, 0, 0xFF, 1500 } };
-static const LedStep LED_SAVED[] = { { 0, 0xFF, 0, 600 }, { 0, 0, 0, 300 }, { 0, 0xFF, 0, 600 } };
-static const LedStep LED_ERROR[] = { { 0xFF, 0, 0, 300 }, { 0, 0, 0, 200 }, { 0xFF, 0, 0, 300 },
-                                     { 0, 0, 0, 200 }, { 0xFF, 0, 0, 300 } };
-#define LED_SIGNAL(x) LedSequence(x, sizeof(x) / sizeof(x[0]))
+/* A short signal (ready, saved, error) as LED Studio set it; nothing when it is switched off (the
+   lasting light, if any, stays). */
+static void LedSignal(int ev)
+{
+    LedcfgStep st[6];
+    const int n = ledcfg_signal(&g_cfg.ledEv[ev], st);
+    if (!n)
+        return;
+    LedStep steps[6];
+    for (int i = 0; i < n; i++)
+        steps[i] = (LedStep){ st[i].r, st[i].g, st[i].b, st[i].ms };
+    LedSequence(steps, (u32)n);
+}
+#define LED_SIGNAL(x) LedSignal(x)
+
+/* LED Studio's Preview (the app, REC_CMD_LED_PREVIEW + event): the event on the real LED; a lasting
+   light for 4 s, then back to what was lit. */
+static void LedPreview(int ev)
+{
+    if (ledcfg_lasting(ev)) {
+        g_ledSeqLen = 0;
+        LedLasting(&g_cfg.ledEv[ev]);
+        g_ledPreviewEnd = osGetTime() + 4000;
+    } else
+        LedSignal(ev);
+}
 
 /* ------------------------------------------------------------------ config file */
 
@@ -739,7 +773,7 @@ static u32 KeyByName(const char *n)
     static const struct { const char *name; u32 key; } keys[] = {
         { "A", KEY_A }, { "B", KEY_B }, { "X", KEY_X }, { "Y", KEY_Y }, { "L", KEY_L }, { "R", KEY_R },
         { "START", KEY_START }, { "SELECT", KEY_SELECT }, { "UP", KEY_DUP }, { "DOWN", KEY_DDOWN },
-        { "LEFT", KEY_DLEFT }, { "RIGHT", KEY_DRIGHT },
+        { "LEFT", KEY_DLEFT }, { "RIGHT", KEY_DRIGHT }, { "ZL", KEY_ZL }, { "ZR", KEY_ZR },
     };
     for (u32 i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
         if (strcasecmp(n, keys[i].name) == 0)
@@ -749,6 +783,7 @@ static u32 KeyByName(const char *n)
 
 static void LoadConfig(void)
 {
+    ledcfg_defaults(g_cfg.ledEv, (int)g_cfg.led);   /* (no file: 1.7's lights) */
     FILE *f = fopen(CONFIG_SD, "r");
     if (!f)
     {
@@ -773,6 +808,8 @@ static void LoadConfig(void)
         return;
     }
     char line[128];
+    bool ledSet[LED_EV_COUNT] = {false};
+    LedEvent ledRead[LED_EV_COUNT];
     g_cfg.o3dsCore = -1;   /* a test key: auto again once it is gone from the file */
     while (fgets(line, sizeof(line), f))
     {
@@ -801,7 +838,9 @@ static void LoadConfig(void)
             u32 mask = 0;
             for (char *tok = strtok(v, "+ \t"); tok; tok = strtok(NULL, "+ \t"))
                 mask |= KeyByName(tok);
-            if (__builtin_popcount(mask) < 2)   /* one button alone would start and stop at every press */
+            /* one button alone would start and stop at every press; ZL / ZR alone are fine (New 3DS:
+               games hardly use them, issue #37) */
+            if (__builtin_popcount(mask) < ((mask & (KEY_ZL | KEY_ZR)) ? 1 : 2))
                 mask = 0;
             if (mask && save)
                 g_cfg.saveKey = mask;
@@ -867,6 +906,8 @@ static void LoadConfig(void)
             g_cfg.launchHold = strcasecmp(v, "on") == 0 ? 1 : strcasecmp(v, "off") == 0 ? 0 : -1;
         else if (strcasecmp(p, "codec_bench") == 0)
             g_cfg.bench = strcasecmp(v, "on") == 0;
+        else if (strcasecmp(p, "c420h_bench") == 0)
+            g_cfg.c420hBench = (u32)strtoul(v, NULL, 10);
         else if (strcasecmp(p, "ab_test") == 0)
             g_cfg.abTest = strcasecmp(v, "on") == 0;
         else if (strcasecmp(p, "audio_debug") == 0)
@@ -876,9 +917,19 @@ static void LoadConfig(void)
             const u32 mb = (u32)atoi(v);
             g_cfg.maxFileMb = mb >= 64 && mb <= REC_MAX_FILE_MB ? mb : REC_MAX_FILE_MB;
         }
+        else if (ledcfg_event(p) >= 0)   /* LED Studio: led_rec=on,breathe,ff0000,5,normal */
+        {
+            const int ev = ledcfg_event(p);
+            ledSet[ev] = ledcfg_parse(ev, v, &ledRead[ev]);
+        }
 
     }
     fclose(f);
+    /* an event without its own key (or a key that cannot be read) follows led=, as in 1.7 */
+    ledcfg_defaults(g_cfg.ledEv, (int)g_cfg.led);
+    for (int i = 0; i < LED_EV_COUNT; i++)
+        if (ledSet[i])
+            g_cfg.ledEv[i] = ledRead[i];
 }
 
 /* ------------------------------------------------------------------ big buffers */
@@ -1683,6 +1734,139 @@ static int WideColumn(u16 *dst, const u8 *src, u32 fmt, u32 rows)
     return 1;
 }
 
+/* ------------------------------------------------------------------ C420H measurement (c420h_bench) */
+
+static bool g_hbOn;                   /* this recording measures */
+static u8 *g_hbBuf[2];                 /* the C420H bytes, thrown away */
+static volatile u32 g_hbBusy[2];
+static u32 g_hbSeen[2], g_hbFrames[2], g_hbKept[2], g_hbMaxUs[2];
+static u64 g_hbUs[2], g_hbIn[2], g_hbOut[2];
+
+/* One C420 frame (as it went into the file) made into C420H too, timed on this converter's core. */
+static void C420hBench(int sc, const u8 *c420, u32 cols, u32 len)
+{
+    if (!g_hbOn || !g_hbBuf[sc] || ++g_hbSeen[sc] % g_cfg.c420hBench)
+        return;
+    if (__atomic_exchange_n(&g_hbBusy[sc], 1u, __ATOMIC_ACQUIRE))
+        return;
+    const u64 t0 = Ticks();
+    const u32 n = (u32)codec_c420h_encode(c420, cols, 240, g_hbBuf[sc], len);   /* not smaller: 0 */
+    const u32 us = TicksToUs(Ticks() - t0);
+    g_hbFrames[sc]++;
+    g_hbUs[sc] += us;
+    if (us > g_hbMaxUs[sc])
+        g_hbMaxUs[sc] = us;
+    g_hbIn[sc] += len;
+    g_hbOut[sc] += n ? n : len;
+    if (!n)
+        g_hbKept[sc]++;
+    __atomic_store_n(&g_hbBusy[sc], 0u, __ATOMIC_RELEASE);
+}
+
+/* Idle loops: a thread at the lowest priority on cores 0 and 1 counts loops of 2000 iterations
+   while a recording runs, giving way after each (svcSleepThread(0)) to threads of its priority (the
+   converter on the game's core is one). Loops a second, against the same with the console quiet
+   (at start-up), say how much of each core was free. */
+static volatile bool g_ilRun;
+static volatile u32 g_ilCount[2];
+static Thread g_ilThread[2];
+static u64 g_ilStart;
+static u32 g_ilQuiet[2];               /* loops a second at start-up, HOME Menu idle */
+
+static void IdleLoopMain(void *arg)
+{
+    const u32 core = (u32)arg;
+    while (g_ilRun)
+    {
+        for (volatile u32 i = 0; i < 2000u; i++)
+            ;
+        g_ilCount[core]++;
+        svcSleepThread(0);
+    }
+}
+
+static void IdleLoopsStart(void)
+{
+    g_ilRun = true;
+    g_ilStart = Ticks();
+    for (u32 c = 0; c < 2; c++)
+    {
+        g_ilCount[c] = 0;
+        g_ilThread[c] = threadCreate(IdleLoopMain, (void *)c, 2 * KB, 0x3F, (s32)c, false);
+    }
+}
+
+/* Stops them; loops a second on each core (0: no thread there) */
+static void IdleLoopsStop(u32 perSec[2])
+{
+    g_ilRun = false;
+    const u64 us = TicksToUs64(Ticks() - g_ilStart);
+    for (u32 c = 0; c < 2; c++)
+    {
+        perSec[c] = 0;
+        if (!g_ilThread[c])
+            continue;
+        threadJoin(g_ilThread[c], 2000ull * 1000 * 1000);
+        threadFree(g_ilThread[c]);
+        g_ilThread[c] = NULL;
+        perSec[c] = us ? (u32)((u64)g_ilCount[c] * 1000000ull / us) : 0;
+    }
+}
+
+static void IdleLoopsQuiet(void)
+{
+    IdleLoopsStart();
+    svcSleepThread(500ll * 1000 * 1000);
+    IdleLoopsStop(g_ilQuiet);
+    Log("c420h bench: idle loops a second with the console quiet: core 0 %lu, core 1 %lu", g_ilQuiet[0], g_ilQuiet[1]);
+}
+
+static void C420hBenchStart(void)
+{
+    if (g_ilRun) /* a recording that ended another way left them counting */
+    {
+        u32 left[2];
+        IdleLoopsStop(left);
+    }
+    g_hbOn = g_cfg.c420hBench != 0;
+    for (int sc = 0; sc < 2; sc++)
+    {
+        g_hbSeen[sc] = g_hbFrames[sc] = g_hbKept[sc] = g_hbMaxUs[sc] = 0;
+        g_hbUs[sc] = g_hbIn[sc] = g_hbOut[sc] = 0;
+        g_hbBusy[sc] = 0;
+        g_hbBuf[sc] = g_cfg.c420hBench && g_c420On && !g_inPlg ? BigAlloc((sc == 0 ? 400u : 320u) * 240u) : NULL;
+    }
+    if (g_cfg.c420hBench)
+    {
+        if (!g_hbBuf[0] || !g_hbBuf[1])
+            Log("c420h bench: no memory for it in this recording (plugin or light memory profile, or C420 off)");
+        IdleLoopsStart();
+    }
+}
+
+static void C420hBenchEnd(u32 seconds)
+{
+    if (!g_hbOn)
+        return;
+    g_hbOn = false;
+    u32 loops[2];
+    IdleLoopsStop(loops);
+    for (int sc = 0; sc < 2; sc++)
+        g_hbBuf[sc] = NULL;   /* (BigFreeAll gives the memory back) */
+    const u32 n = g_cfg.c420hBench ? g_cfg.c420hBench : 1u;
+    /* the time C420H would take at every C420 frame of this recording, a second */
+    const u64 allUs = (g_hbFrames[0] ? g_hbUs[0] * g_c420Frames[0] / g_hbFrames[0] : 0) +
+                      (g_hbFrames[1] ? g_hbUs[1] * g_c420Frames[1] / g_hbFrames[1] : 0);
+    Log("c420h bench (every %lu. C420 frame, thrown away): top %lu frames, %lu us each (max %lu), %llu%% of C420 (%lu kept "
+        "as C420); bottom %lu frames, %lu us each (max %lu), %llu%%; at every C420 frame it would take %llu ms a second; "
+        "idle loops a second: core 0 %lu, core 1 %lu (quiet: %lu, %lu) = %lu%% / %lu%% free",
+        n, g_hbFrames[0], g_hbFrames[0] ? (u32)(g_hbUs[0] / g_hbFrames[0]) : 0, g_hbMaxUs[0],
+        g_hbIn[0] ? g_hbOut[0] * 100u / g_hbIn[0] : 0, g_hbKept[0], g_hbFrames[1],
+        g_hbFrames[1] ? (u32)(g_hbUs[1] / g_hbFrames[1]) : 0, g_hbMaxUs[1], g_hbIn[1] ? g_hbOut[1] * 100u / g_hbIn[1] : 0,
+        seconds ? allUs / seconds / 1000u : 0, loops[0], loops[1], g_ilQuiet[0], g_ilQuiet[1],
+        g_ilQuiet[0] ? loops[0] * 100u / g_ilQuiet[0] : 0, g_ilQuiet[1] ? loops[1] * 100u / g_ilQuiet[1] : 0);
+}
+
 static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 *dst, u32 cap, u32 *magic,
                        bool *key, bool busy)
 {
@@ -1757,6 +1941,7 @@ static u32 EncodeFrame(int sc, const u8 *src, u32 fmt, u32 cols, u32 stride, u8 
                             : (u32)codec_c420_encode_conv(src, cols, rows, stride, fmt, fb_column_to_rgb565, dst);
             if (len)
             {
+                C420hBench(sc, dst, cols, len);
                 if (g_c420Keep[sc] && len <= cols * rows)
                     memcpy(g_c420Keep[sc], dst, len);
                 g_codecFrames[sc] = 0;   /* the next XR32 frame is a keyframe */
@@ -2413,6 +2598,122 @@ static Result HidOpen(void)
     if (R_FAILED(rc))
         HidClose();
     return rc;
+}
+
+/* ZL / ZR (New 3DS) are not in the PAD register: ir:rst has them, in its own shared memory (libctru
+   irrst.c: the latest of 8 entries, each { current, pressed, released, C-stick }, from word 8). Opened
+   only when a hotkey holds ZL or ZR (IrrstWanted), so nothing changes for anyone else; New 3DS only.
+   What happens goes to the log (Share Statistics: no New 3DS here to test on). */
+#define IRRST_SHM_VA   0x10010000u
+static Handle g_irSrv, g_irMem;
+static vu32  *g_irShm;
+static bool   g_irTried;
+static u32    g_irSeen;   /* ZL / ZR seen held, for the log */
+
+static void IrrstClose(void)
+{
+    if (g_irShm)
+    {   /* IRRST:Shutdown, as libctru irrstExit: the Initialize undone */
+        u32 *cmd = getThreadCommandBuffer();
+        cmd[0] = IPC_MakeHeader(0x3, 0, 0);
+        svcSendSyncRequest(g_irSrv);
+        svcUnmapMemoryBlock(g_irMem, IRRST_SHM_VA);
+    }
+    g_irShm = NULL;
+    if (g_irMem)
+        svcCloseHandle(g_irMem);
+    if (g_irSrv)
+        svcCloseHandle(g_irSrv);
+    g_irMem = g_irSrv = 0;
+}
+
+static Result IrrstInitialize(void);
+
+static void IrrstOpen(void)
+{
+    if (g_irTried)
+        return;
+    g_irTried = true;
+    s64 n3ds = 0;
+    svcGetSystemInfo(&n3ds, 0x10000, 0x201);
+    if (!n3ds)
+        return;
+    Result rc = srvGetServiceHandle(&g_irSrv, "ir:rst");
+    u32 *cmd = getThreadCommandBuffer();
+    if (R_SUCCEEDED(rc))
+    {
+        cmd[0] = IPC_MakeHeader(0x1, 0, 0);   /* IRRST:GetHandles */
+        rc = svcSendSyncRequest(g_irSrv);
+        if (R_SUCCEEDED(rc))
+            rc = (Result)cmd[1];
+    }
+    if (R_SUCCEEDED(rc))
+    {
+        g_irMem = cmd[3];
+        if (cmd[4])
+            svcCloseHandle(cmd[4]);   /* the update event: not used */
+        rc = svcMapMemoryBlock(g_irMem, IRRST_SHM_VA, MEMPERM_READ, MEMPERM_DONTCARE);
+        if (R_SUCCEEDED(rc))
+            g_irShm = (vu32 *)IRRST_SHM_VA;
+    }
+    const Result init = R_SUCCEEDED(rc) ? IrrstInitialize() : 0;
+    Log("ZL/ZR: ir:rst %s (%08lX, init %08lX)", g_irShm ? "open" : "not open", rc, init);
+    if (!g_irShm)
+        IrrstClose();
+}
+
+static bool IrrstWanted(void) { return ((g_cfg.hotkey | g_cfg.saveKey) & (KEY_ZL | KEY_ZR)) != 0; }
+
+/* IRRST:Initialize (10 ms, no raw C-stick), as libctru irrstInit: the entries are updated then */
+static Result IrrstInitialize(void)
+{
+    u32 *cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(0x2, 2, 0);
+    cmd[1] = 10;
+    cmd[2] = 0;
+    Result rc = svcSendSyncRequest(g_irSrv);
+    return R_SUCCEEDED(rc) ? (Result)cmd[1] : rc;
+}
+
+/* ir:rst is the system's: a game (or this app) that used the C-stick shuts it down when it ends, and
+   the entries stop. Their tick (words 0-1) not moving for 2 s: Initialize again. */
+static void IrrstKeepAlive(void)
+{
+    static u32 lastTick;
+    static u64 lastMoved;
+    static bool logged;
+    const u64 now = osGetTime();
+    if (g_irShm[0] != lastTick) {
+        lastTick = g_irShm[0];
+        lastMoved = now;
+        return;
+    }
+    if (now - lastMoved < 2000)
+        return;
+    lastMoved = now;
+    const Result rc = IrrstInitialize();
+    if (!logged) {
+        logged = true;
+        Log("ZL/ZR: ir:rst stopped, initialized again (%08lX)", rc);
+    }
+}
+
+/* ZL / ZR held now, 0 when ir:rst is not open */
+static u32 IrrstKeys(void)
+{
+    if (!g_irShm)
+        return 0;
+    IrrstKeepAlive();
+    u32 id = g_irShm[4];
+    if (id > 7)
+        id = 7;
+    const u32 k = g_irShm[8 + id * 4] & (KEY_ZL | KEY_ZR);
+    if (k & ~g_irSeen)
+    {
+        g_irSeen |= k;
+        Log("ZL/ZR: %s seen held", (k & KEY_ZL) ? "ZL" : "ZR");
+    }
+    return k;
 }
 
 /* Recording start: the buttons on (inputs=on) when the HID shared memory is there. */
@@ -5919,6 +6220,8 @@ static bool StartRecordingAs(bool replay)
             (unsigned)TEST_VAR_COUNT, g_testVar->name, g_convCores[g_convActive], g_packCores[g_packActive]);
         IdleProbe("recording starts");
     }
+    if (!replay)
+        C420hBenchStart();
     return true;
 }
 
@@ -6358,9 +6661,9 @@ static void StopRecording(const char *why, bool releaseFirst)
         if (saveClip || R_FAILED(g_writeRc))
         {
             if (clip)
-                LED_SIGNAL(LED_SAVED);
+                LED_SIGNAL(LED_EV_SAVED);
             else
-                LED_SIGNAL(LED_ERROR);
+                LED_SIGNAL(LED_EV_ERROR);
         }
         else if (!g_ledSeqLen)
             LedOff();
@@ -6411,6 +6714,7 @@ static void StopRecording(const char *why, bool releaseFirst)
         g_lastRoot[JOIN_NAME_LEN] = 0;
     }
     g_curRoot[0] = 0;
+    C420hBenchEnd(seconds);
     if (g_testVar)
         IdleProbe("recording ends");
     Log("recording saved: %s, %lu s, %llu KB, frames %lu + %lu, dropped %lu, throttled %lu, ring max %lu KB, "
@@ -6481,9 +6785,9 @@ static void StopRecording(const char *why, bool releaseFirst)
     g_convHold = false;
     g_shared.state = REC_STATE_IDLE;
     if (R_FAILED(g_shared.lastError))
-        LED_SIGNAL(LED_ERROR);
+        LED_SIGNAL(LED_EV_ERROR);
     else
-        LED_SIGNAL(LED_SAVED);
+        LED_SIGNAL(LED_EV_SAVED);
     PrepareNext();
 }
 
@@ -6804,7 +7108,7 @@ int main(void)
         g_shared.state = REC_STATE_ERROR;
         g_shared.lastError = (s32)0xE0000004;
         Log("start-up failed: threadCreate");
-        LED_SIGNAL(LED_ERROR);
+        LED_SIGNAL(LED_EV_ERROR);
         for (;;)
         {
             if (g_shared.cmd == REC_CMD_EXIT)
@@ -6843,6 +7147,8 @@ int main(void)
     }
     else if (g_cfg.bench)
         CodecBench();
+    if (g_cfg.c420hBench)
+        IdleLoopsQuiet();
     Log("start: %s, %lu ms after the kernel, waited %lu ms for the card and services; launch on startup %s", g_bootStart ? "WITH THE CONSOLE" : "by the app or the plugin",
         (u32)(TicksToUs64(g_startTick) / 1000u), (u32)g_bootWaitMs, g_cfg.autostart ? "on" : "off");
     if (g_olderWaitMs)
@@ -6858,7 +7164,7 @@ int main(void)
     if (!g_cfg.replay && g_sd)   /* off (the app turns it off after a power-on): the card gets its 512 MB back */
         ReplayRemoveFiles();
     g_shared.state = REC_STATE_IDLE;
-    LED_SIGNAL(LED_READY);
+    LED_SIGNAL(LED_EV_READY);
     PrepareNext();
 
     /* Power-off and reboot (leaving System Settings reboots the console, O3DS 2026-11-07): ptm
@@ -6914,6 +7220,7 @@ int main(void)
     u64 homePressAt = 0;
     u32 lastPlg = 0;
     bool reloadPending = false;
+    int ledPreview = -1;   /* LED Studio's Preview waits for the reload of its settings */
     u64 lastSdCheck = 0;
     u64 startedLogAt = 0;    /* an application started: its log line is due at this tick */
     u64 appMemFixAt = 0, appMemFixFrom = 0;   /* AppMemFix is due (an application ended with the limit low) */
@@ -7134,7 +7441,7 @@ int main(void)
             if (g_recording && g_replay)
                 StopRecording("a recording goes on", false);
             if (!g_recording && !ResumeStart())   /* joined only after PauseStop (lid, HOME); a start with the console stands alone */
-                LED_SIGNAL(LED_ERROR);
+                LED_SIGNAL(LED_EV_ERROR);
         }
         if (nid == 0x10C)   /* its process is looked at a moment later: nothing of ours in its first instant */
         {
@@ -7212,6 +7519,12 @@ int main(void)
         }
         if (cmd == REC_CMD_RELOAD)
             reloadPending = true;
+        if (cmd >= REC_CMD_LED_PREVIEW && cmd < REC_CMD_LED_PREVIEW + LED_EV_COUNT)
+        {   /* LED Studio's Preview: the settings it just saved, then the event on the LED */
+            reloadPending = true;
+            /* not while recording: it would play when the recording stops, over its own signal */
+            ledPreview = g_recording ? -1 : (int)(cmd - REC_CMD_LED_PREVIEW);
+        }
         if (reloadPending && !g_recording)   /* never mid-recording: fps / screens / audio stay as they started */
         {
             reloadPending = false;
@@ -7234,6 +7547,12 @@ int main(void)
             Log("settings reloaded (hotkey mask %03lX, fps %lu, screens %s, audio %s, led %lu)", g_cfg.hotkey, g_cfg.fps,
                 ScreensName(), g_cfg.audio ? "on" : "off", g_cfg.led);
         }
+        if (ledPreview >= 0 && !g_recording && !reloadPending)
+        {
+            Log("LED preview: %s", LEDCFG_KEY[ledPreview]);
+            LedPreview(ledPreview);
+            ledPreview = -1;
+        }
 
         if (lidClosed && !g_recording)   /* asleep: no LED, no buttons, no screens until the lid opens */
         {
@@ -7246,7 +7565,9 @@ int main(void)
         if (g_inOn)
             InputPoll();
         bool toggle = false;
-        const u32 pad = ~REG32(PAD_VA) & 0xFFFu;
+        if (IrrstWanted())
+            IrrstOpen();
+        const u32 pad = (~REG32(PAD_VA) & 0xFFFu) | IrrstKeys();
         if ((pad & g_cfg.hotkey) == g_cfg.hotkey)
         {
             toggle = !comboHeld;
@@ -7326,7 +7647,7 @@ int main(void)
                     if (replayNormal)
                         WaitMemoryBack();
                     if (!StartRecording())
-                        LED_SIGNAL(LED_ERROR);
+                        LED_SIGNAL(LED_EV_ERROR);
                 }
                 else if (save || cmd == REC_CMD_SAVE_CLIP)
                 {
@@ -7381,7 +7702,7 @@ int main(void)
             if (why)
                 StopRecording(why, false);
             if (goOn && !StartRecording()) /* ~1-2 s between the two files */
-                LED_SIGNAL(LED_ERROR);
+                LED_SIGNAL(LED_EV_ERROR);
             if (cmd == REC_CMD_EXIT)
                 break;
             /* the pad, notifications and the lid are read here too: at most 20 ms late */
@@ -7394,7 +7715,7 @@ int main(void)
         if ((toggle || cmd == REC_CMD_START) && !g_shutdownSeen && !lidClosed)
         {
             if (!StartRecording())
-                LED_SIGNAL(LED_ERROR);
+                LED_SIGNAL(LED_EV_ERROR);
             continue;
         }
         /* The clip hotkey with no replay buffer running (Replay off, HOME Menu alone, a game's first
@@ -7403,7 +7724,7 @@ int main(void)
         if (save && !g_shutdownSeen && !lidClosed)
         {
             Log("clip hotkey: no replay buffer runs (%s)", !g_cfg.replay ? "Replay is off" : "it has not started here");
-            LED_SIGNAL(LED_ERROR);
+            LED_SIGNAL(LED_EV_ERROR);
         }
         /* the replay buffer: on whenever the setting is and nothing else records. Not while a
            recording is about to go on (lid, HOME), nor while the next recording's file is still

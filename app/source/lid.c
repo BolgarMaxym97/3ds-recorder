@@ -8,6 +8,7 @@
 
 #include "prepare.h"
 #include "recorder.h"
+#include "server.h"
 #include "update.h"
 
 #define POLL_MS        100u
@@ -16,6 +17,7 @@
 #define BATTERY_LOW    1u       /* PTMU_GetBatteryLevel 0..5: 1 is the red LED */
 
 static bool g_ptmu, g_closed, g_refused;
+static u32 g_asksAtClose;           /* the phone page's status asks when the lid closed (Wi-Fi kept or not) */
 static volatile bool g_awakeDone;   /* the work ended with the lid closed and no sleep came after */
 static u64 g_lastPoll, g_closedAt, g_lastLog;
 static aptHookCookie g_hook;
@@ -114,12 +116,14 @@ bool lid_step(bool enabled)
         if (closed) {
             g_closedAt = g_lastLog = now;
             g_awakeDone = false;
+            g_asksAtClose = server_status_asks();
             app_log("lid closed: %s (battery %u/5%s)", refuse ? "the work goes on, sleep refused" : "nothing to do, sleep",
                     level, charging ? ", charging" : "");
         } else
-            app_log("lid opened after %llu s%s (battery %u/5%s)", (unsigned long long)((now - g_closedAt) / 1000),
+            app_log("lid opened after %llu s%s (battery %u/5%s); the phone page asked %lu times meanwhile",
+                    (unsigned long long)((now - g_closedAt) / 1000),
                     g_awakeDone ? ", the console stayed awake after the work was done" : "", level,
-                    charging ? ", charging" : "");
+                    charging ? ", charging" : "", (unsigned long)(server_status_asks() - g_asksAtClose));
         g_closed = closed;
     } else if (closed && now - g_lastLog >= LOG_EVERY_MS) {
         g_lastLog = now;

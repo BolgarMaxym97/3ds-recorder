@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 #include "i18n.h"
+#include "ledcfg.h"
 
 #define CONFIG_PATH "sdmc:/3ds/recorder/config.ini"
 
@@ -21,7 +22,8 @@ typedef struct {
     int bottomFps;    /* bottom_fps: the bottom screen's own rate with both screens (15, 10, 5, 1); 0: the same as fps */
     bool lossless;    /* quality=lossless: every frame exact; auto (the default): 3D frames in half the bytes */
     bool audio;
-    int led;          /* 0 off, 1 solid, 2 pulse */
+    int led;          /* 0 off, 1 solid, 2 pulse (1.7's key: the events without their own led_* key follow it) */
+    LedEvent ledEv[LED_EV_COUNT];   /* LED Studio: each event's light (ledcfg.h) */
     char hotkey[48];  /* as written, e.g. R+SELECT */
     Lang lang;        /* lang=<code> (i18n.h LANGS); English when missing or unknown */
     bool langSet;     /* config.ini has lang=: the language was chosen (first run asks) */
@@ -44,5 +46,7 @@ void config_load(Config *c);
 /* Sets key=value: replaces the key's line, or appends one. Creates the file with the module's
  * defaults when it is missing. */
 bool config_set(const char *key, const char *value);
+/* Several keys in one write (at most 8): the module reads the file once, whole. */
+bool config_set_many(const char *const *keys, const char *const *values, int count);
 
 #endif

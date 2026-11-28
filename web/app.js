@@ -52,6 +52,12 @@
       fastPc: 'fast: the computer\'s video encoder', readErr: 'Could not read the file (%1).', failedLocal: 'Could not make the video (%1).', again: 'Convert another file',
       webm: 'This browser can only make WebM videos. For an MP4, open this page in Chrome, Edge or Safari.',
       optInputs: "Buttons", inOff: "Hide", inOn: "Show", inputsHint: "The buttons pressed, beside the bottom screen or in a corner (recordings from 1.6.0 on).", qDiscord: "Discord", discordHint: "Discord: under 10 MB, the size Discord takes without Nitro.", discordLong: "Too long for 10 MB: the picture will be blurry. Below the video you can cut a shorter part.", noInputs: "This recording has no button presses: it was made before 1.6.0 or with Record Buttons off.", trimTitle: "Cut a part", trimStart: "Start here", trimEnd: "End here", trimGo: "Make this part", trimHint: "Play the video and pause where the part should start: “Start here”. Then where it should end: “End here”.", trimLabel: "part %1–%2",
+      optFor: 'For', pNormal: 'Small, plays everywhere', pHigh: 'A higher bitrate, sharp pixels', pEdit: 'Every frame a keyframe, for editors', pDiscord: 'Fits without Nitro',
+      pcOnly: 'Over the console\'s Wi-Fi this browser makes videos only in real time and at 1×: YouTube and Editing are made on a computer (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Your videos', another: 'Need another version?', anotherHint: 'made on this phone', makeVersion: 'Make this version',
+      consoleMp4: 'the console\'s MP4', toPc: 'Long recordings? Faster on a computer: put the SD card in and open bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'Waiting for the console… Is its lid open and the Download screen on? The page goes on by itself.',
+      anotherNow: 'YouTube, Editing or Discord? Pick it now: this phone makes it from the recording, the console’s MP4 is not waited for.',
     },
     uk: {
       mb: 'МБ', gb: 'ГБ', length: 'Тривалість', size: 'Розмір', eta: 'Час передачі', s1: 'Завантаження з консолі', s2: 'Робимо відео',
@@ -84,6 +90,20 @@
       fastPc: 'швидко: відеокодер комп\'ютера', readErr: 'Не вдалося прочитати файл (%1).', failedLocal: 'Не вдалося зробити відео (%1).', again: 'Сконвертувати інший файл',
       webm: 'Цей браузер уміє робити лише відео WebM. Для MP4 відкрийте цю сторінку в Chrome, Edge чи Safari.',
       optInputs: "Кнопки", inOff: "Сховати", inOn: "Показати", inputsHint: "Натиснуті кнопки збоку від нижнього екрана або в куті (записи з 1.6.0).", qDiscord: "Discord", discordHint: "Discord: до 10 МБ, скільки Discord приймає без Nitro.", discordLong: "Задовге для 10 МБ: картинка буде розмита. Під відео можна вирізати коротший фрагмент.", noInputs: "У цьому записі немає натискань: його зроблено до 1.6.0 або з вимкненим «Записувати кнопки».", trimTitle: "Вирізати фрагмент", trimStart: "Початок тут", trimEnd: "Кінець тут", trimGo: "Зробити фрагмент", trimHint: "Увімкніть відео й поставте на паузу там, де має початися фрагмент: «Початок тут». Потім там, де має закінчитися: «Кінець тут».", trimLabel: "фрагмент %1–%2",
+      optFor: 'Для чого',
+      pNormal: 'Малий, грає всюди',
+      pHigh: 'Вищий бітрейт, чіткі пікселі',
+      pEdit: 'Кожен кадр ключовий, для монтажу',
+      pDiscord: 'Влізе без Nitro',
+      pcOnly: 'Через Wi-Fi консолі цей браузер робить відео лише в реальному часі й у 1×: YouTube і монтаж — на комп\'ютері (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Ваші відео',
+      another: 'Потрібна інша версія?',
+      anotherHint: 'зробить цей телефон',
+      makeVersion: 'Зробити цю версію',
+      consoleMp4: 'MP4 з консолі',
+      toPc: 'Довгі записи? На комп\'ютері швидше: вставте SD-карту й відкрийте bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'Чекаю на консоль… Кришка відкрита, екран «Завантажити» відкритий? Сторінка продовжить сама.',
+      anotherNow: 'YouTube, монтаж чи Discord? Оберіть зараз: телефон зробить це з запису, без очікування MP4 з консолі.',
     },
     es: {
       mb: 'MB', gb: 'GB', length: 'Duración', size: 'Tamaño', eta: 'Tiempo de transferencia', s1: 'Descarga desde la consola', s2: 'Creación del video',
@@ -116,6 +136,20 @@
       fastPc: 'rápido: codificador de video de tu PC', readErr: 'No se pudo leer el archivo (%1).', failedLocal: 'No se pudo crear el video (%1).', again: 'Convertir otro archivo',
       webm: 'Este navegador solo puede crear videos WebM. Para obtener un MP4, abre esta página en Chrome, Edge o Safari.',
       optInputs: "Botones", inOff: "Ocultar", inOn: "Mostrar", inputsHint: "Los botones pulsados, junto a la pantalla inferior o en una esquina (grabaciones desde la 1.6.0).", qDiscord: "Discord", discordHint: "Discord: menos de 10 MB, lo que Discord acepta sin Nitro.", discordLong: "Demasiado largo para 10 MB: la imagen se verá borrosa. Debajo del video puedes recortar una parte más corta.", noInputs: "Esta grabación no tiene pulsaciones: se hizo antes de la 1.6.0 o con Grabar botones desactivado.", trimTitle: "Recortar una parte", trimStart: "Empieza aquí", trimEnd: "Termina aquí", trimGo: "Crear esta parte", trimHint: "Reproduce el video y pausa donde debe empezar la parte: «Empieza aquí». Luego donde debe terminar: «Termina aquí».", trimLabel: "parte %1–%2",
+      optFor: 'Para',
+      pNormal: 'Pequeño, se ve en todas partes',
+      pHigh: 'Más bitrate, píxeles nítidos',
+      pEdit: 'Cada fotograma clave, para editar',
+      pDiscord: 'Cabe sin Nitro',
+      pcOnly: 'Por la Wi-Fi de la consola este navegador solo hace vídeos en tiempo real y a 1×: YouTube y Edición se hacen en un ordenador (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Tus vídeos',
+      another: '¿Otra versión?',
+      anotherHint: 'hecha en este móvil',
+      makeVersion: 'Hacer esta versión',
+      consoleMp4: 'el MP4 de la consola',
+      toPc: '¿Grabaciones largas? En un ordenador es más rápido: pon la tarjeta SD y abre bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'Esperando a la consola… ¿Está abierta y en la pantalla “Descargar”? La página sigue sola.',
+      anotherNow: '¿YouTube, Edición o Discord? Elígelo ya: este móvil lo hace desde la grabación, sin esperar el MP4 de la consola.',
     },
     pt: {
       mb: 'MB', gb: 'GB', length: 'Duração', size: 'Tamanho', eta: 'Tempo de transferência', s1: 'Download do console', s2: 'Criação do vídeo',
@@ -148,6 +182,20 @@
       fastPc: 'rápido: codificador de vídeo do computador', readErr: 'Não foi possível ler o arquivo (%1).', failedLocal: 'Não foi possível criar o vídeo (%1).', again: 'Converter outro arquivo',
       webm: 'Este navegador só consegue criar vídeos WebM. Para um MP4, abra esta página no Chrome, Edge ou Safari.',
       optInputs: "Botões", inOff: "Ocultar", inOn: "Mostrar", inputsHint: "Os botões apertados, ao lado da tela de baixo ou num canto (gravações a partir da 1.6.0).", qDiscord: "Discord", discordHint: "Discord: menos de 10 MB, o que o Discord aceita sem Nitro.", discordLong: "Longo demais para 10 MB: a imagem vai ficar borrada. Abaixo do vídeo você pode cortar um trecho menor.", noInputs: "Esta gravação não tem botões: foi feita antes da 1.6.0 ou com Gravar botões desligado.", trimTitle: "Cortar um trecho", trimStart: "Começa aqui", trimEnd: "Termina aqui", trimGo: "Fazer este trecho", trimHint: "Reproduza o vídeo e pause onde o trecho deve começar: “Começa aqui”. Depois onde deve terminar: “Termina aqui”.", trimLabel: "trecho %1–%2",
+      optFor: 'Para',
+      pNormal: 'Pequeno, toca em todo lugar',
+      pHigh: 'Bitrate maior, pixels nítidos',
+      pEdit: 'Cada quadro um keyframe, para editar',
+      pDiscord: 'Cabe sem Nitro',
+      pcOnly: 'Pelo Wi-Fi do console este navegador só faz vídeos em tempo real e em 1×: YouTube e Edição se fazem no computador (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Seus vídeos',
+      another: 'Outra versão?',
+      anotherHint: 'feita neste celular',
+      makeVersion: 'Fazer esta versão',
+      consoleMp4: 'o MP4 do console',
+      toPc: 'Gravações longas? No computador é mais rápido: coloque o cartão SD e abra bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'Aguardando o console… Ele está aberto e na tela “Baixar”? A página continua sozinha.',
+      anotherNow: 'YouTube, Edição ou Discord? Escolha agora: este celular faz a partir da gravação, sem esperar o MP4 do console.',
     },
     it: {
       mb: 'MB', gb: 'GB', length: 'Durata', size: 'Dimensione', eta: 'Tempo di trasferimento', s1: 'Download dalla console', s2: 'Creazione del video',
@@ -180,6 +228,20 @@
       fastPc: 'veloce: codificatore video del computer', readErr: 'Impossibile leggere il file (%1).', failedLocal: 'Impossibile creare il video (%1).', again: 'Converti un altro file',
       webm: 'Questo browser può creare solo video WebM. Per un MP4, apri questa pagina in Chrome, Edge o Safari.',
       optInputs: "Pulsanti", inOff: "Nascondi", inOn: "Mostra", inputsHint: "I pulsanti premuti, accanto allo schermo inferiore o in un angolo (registrazioni dalla 1.6.0).", qDiscord: "Discord", discordHint: "Discord: sotto i 10 MB, quanto Discord accetta senza Nitro.", discordLong: "Troppo lungo per 10 MB: l’immagine sarà sfocata. Sotto il video puoi tagliare una parte più breve.", noInputs: "Questa registrazione non ha pulsanti: è stata fatta prima della 1.6.0 o con Registra pulsanti disattivato.", trimTitle: "Taglia una parte", trimStart: "Inizia qui", trimEnd: "Finisci qui", trimGo: "Crea questa parte", trimHint: "Riproduci il video e metti in pausa dove deve iniziare la parte: «Inizia qui». Poi dove deve finire: «Finisci qui».", trimLabel: "parte %1–%2",
+      optFor: 'Per',
+      pNormal: 'Leggero, si apre ovunque',
+      pHigh: 'Bitrate più alto, pixel nitidi',
+      pEdit: 'Ogni fotogramma chiave, per il montaggio',
+      pDiscord: 'Ci sta senza Nitro',
+      pcOnly: 'Con il Wi-Fi della console questo browser fa video solo in tempo reale e a 1×: YouTube e Montaggio si fanno su un computer (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'I tuoi video',
+      another: 'Un’altra versione?',
+      anotherHint: 'fatta su questo telefono',
+      makeVersion: 'Crea questa versione',
+      consoleMp4: 'l’MP4 della console',
+      toPc: 'Registrazioni lunghe? Su un computer è più veloce: inserisci la scheda SD e apri bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'In attesa della console… È aperta e sulla schermata “Scarica”? La pagina riprende da sola.',
+      anotherNow: 'YouTube, Montaggio o Discord? Sceglilo ora: questo telefono lo crea dalla registrazione, senza aspettare l’MP4 della console.',
     },
     fr: {
       mb: 'Mo', gb: 'Go', length: 'Durée', size: 'Taille', eta: 'Durée du transfert', s1: 'Téléchargement depuis la console',
@@ -219,6 +281,20 @@
       failedLocal: 'Impossible de créer la vidéo (%1).', again: 'Convertir un autre fichier',
       webm: 'Ce navigateur ne peut créer que des vidéos WebM. Pour un MP4, ouvrez cette page dans Chrome, Edge ou Safari.',
       optInputs: "Boutons", inOff: "Masquer", inOn: "Afficher", inputsHint: "Les boutons appuyés, à côté de l’écran du bas ou dans un coin (enregistrements depuis la 1.6.0).", qDiscord: "Discord", discordHint: "Discord : moins de 10 Mo, ce que Discord accepte sans Nitro.", discordLong: "Trop long pour 10 Mo : l’image sera floue. Sous la vidéo, vous pouvez découper un passage plus court.", noInputs: "Cet enregistrement n’a pas de boutons : il a été fait avant la 1.6.0 ou avec Enregistrer les boutons désactivé.", trimTitle: "Découper un passage", trimStart: "Début ici", trimEnd: "Fin ici", trimGo: "Créer ce passage", trimHint: "Lancez la vidéo et mettez-la en pause là où le passage doit commencer : « Début ici ». Puis là où il doit finir : « Fin ici ».", trimLabel: "passage %1–%2",
+      optFor: 'Pour',
+      pNormal: 'Léger, se lit partout',
+      pHigh: 'Débit plus haut, pixels nets',
+      pEdit: 'Chaque image une image clé, pour le montage',
+      pDiscord: 'Passe sans Nitro',
+      pcOnly: 'Par le Wi-Fi de la console, ce navigateur ne fait des vidéos qu’en temps réel et en 1× : YouTube et Montage se font sur un ordinateur (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Vos vidéos',
+      another: 'Une autre version ?',
+      anotherHint: 'faite sur ce téléphone',
+      makeVersion: 'Faire cette version',
+      consoleMp4: 'le MP4 de la console',
+      toPc: 'De longs enregistrements ? Plus rapide sur un ordinateur : mettez la carte SD et ouvrez bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: 'En attente de la console… Est-elle ouverte, sur l’écran « Télécharger » ? La page reprend toute seule.',
+      anotherNow: 'YouTube, Montage ou Discord ? Choisissez maintenant : ce téléphone le crée depuis l’enregistrement, sans attendre le MP4 de la console.',
     },
     de: {
       mb: 'MB', gb: 'GB', length: 'Dauer', size: 'Größe', eta: 'Übertragungsdauer', s1: 'Download von der Konsole', s2: 'Video erstellen',
@@ -251,6 +327,20 @@
       fastPc: 'schnell: Video-Encoder des Computers', readErr: 'Die Datei konnte nicht gelesen werden (%1).', failedLocal: 'Das Video konnte nicht erstellt werden (%1).', again: 'Weitere Datei umwandeln',
       webm: 'Dieser Browser kann nur WebM-Videos erstellen. Für eine MP4-Datei öffne diese Seite in Chrome, Edge oder Safari.',
       optInputs: "Tasten", inOff: "Ausblenden", inOn: "Zeigen", inputsHint: "Die gedrückten Tasten, neben dem unteren Bildschirm oder in einer Ecke (Aufnahmen ab 1.6.0).", qDiscord: "Discord", discordHint: "Discord: unter 10 MB, so viel nimmt Discord ohne Nitro.", discordLong: "Zu lang für 10 MB: Das Bild wird unscharf. Unter dem Video kannst du einen kürzeren Teil ausschneiden.", noInputs: "Diese Aufnahme hat keine Tastendrücke: Sie wurde vor 1.6.0 oder mit ausgeschaltetem „Tasten aufzeichnen“ gemacht.", trimTitle: "Teil ausschneiden", trimStart: "Hier anfangen", trimEnd: "Hier enden", trimGo: "Diesen Teil erstellen", trimHint: "Spiel das Video ab und halte dort an, wo der Teil anfangen soll: „Hier anfangen“. Dann dort, wo er enden soll: „Hier enden“.", trimLabel: "Teil %1–%2",
+      optFor: 'Wofür',
+      pNormal: 'Klein, läuft überall',
+      pHigh: 'Höhere Bitrate, scharfe Pixel',
+      pEdit: 'Jedes Bild ein Keyframe, für den Schnitt',
+      pDiscord: 'Passt ohne Nitro',
+      pcOnly: 'Über das WLAN der Konsole macht dieser Browser Videos nur in Echtzeit und in 1×: YouTube und Schnitt am Computer (bolgarmaxym97.github.io/3ds-recorder).',
+      madeTitle: 'Deine Videos',
+      another: 'Noch eine Version?',
+      anotherHint: 'auf diesem Handy gemacht',
+      makeVersion: 'Diese Version machen',
+      consoleMp4: 'MP4 der Konsole',
+      toPc: 'Lange Aufnahmen? Am Computer geht es schneller: SD Card einstecken und bolgarmaxym97.github.io/3ds-recorder öffnen',
+      reconnect: 'Warte auf die Konsole … Ist sie aufgeklappt und auf „Herunterladen“? Die Seite macht von selbst weiter.',
+      anotherNow: 'YouTube, Schnitt oder Discord? Jetzt wählen: Dieses Handy erstellt es aus der Aufnahme, ohne auf das MP4 der Konsole zu warten.',
     },
     'zh-Hans': {
       mb: 'MB', gb: 'GB', length: '时长', size: '大小', eta: '传输时间', s1: '从主机下载', s2: '生成视频',
@@ -283,6 +373,20 @@
       fastPc: '快速：使用电脑的视频编码器', readErr: '无法读取文件（%1）。', failedLocal: '无法生成视频（%1）。', again: '转换其他文件',
       webm: '此浏览器只能生成WebM视频。如需MP4，请在Chrome、Edge或Safari中打开此页面。',
       optInputs: "按键", inOff: "隐藏", inOn: "显示", inputsHint: "按下的按键，显示在下屏旁边或角落（1.6.0起的录像）。", qDiscord: "Discord", discordHint: "Discord：小于10 MB，即没有Nitro时Discord接受的大小。", discordLong: "对10 MB来说太长：画面会模糊。可在视频下方剪出较短的片段。", noInputs: "这段录像没有按键记录：录于1.6.0之前，或“记录按键”已关闭。", trimTitle: "剪出片段", trimStart: "从这里开始", trimEnd: "到这里结束", trimGo: "生成此片段", trimHint: "播放视频，在片段开始处暂停，点“从这里开始”；再在结束处暂停，点“到这里结束”。", trimLabel: "片段 %1–%2",
+      optFor: '用途',
+      pNormal: '体积小，到处可播',
+      pHigh: '码率更高，像素清晰',
+      pEdit: '每帧都是关键帧，用于剪辑',
+      pDiscord: '无需Nitro即可发送',
+      pcOnly: '通过主机的Wi-Fi，此浏览器只能实时以1×制作视频：YouTube和剪辑请在电脑上制作（bolgarmaxym97.github.io/3ds-recorder）。',
+      madeTitle: '你的视频',
+      another: '还需要别的版本？',
+      anotherHint: '由这部手机制作',
+      makeVersion: '制作此版本',
+      consoleMp4: '主机的MP4',
+      toPc: '录像很长？在电脑上更快：插入SD卡并打开bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: '正在等待主机……主机是否打开并停留在“下载”画面？页面会自动继续。',
+      anotherNow: '需要 YouTube、剪辑或 Discord 版本？现在就选：手机直接从录像制作，无需等待主机的 MP4。',
     },
     'zh-Hant': {
       mb: 'MB', gb: 'GB', length: '長度', size: '大小', eta: '傳輸時間', s1: '從主機下載', s2: '製作影片',
@@ -315,6 +419,20 @@
       fastPc: '快速：使用電腦的影片編碼器', readErr: '無法讀取檔案（%1）。', failedLocal: '無法製作影片（%1）。', again: '轉換其他檔案',
       webm: '此瀏覽器只能製作 WebM 影片。若要 MP4，請在 Chrome、Edge 或 Safari 中開啟此頁面。',
       optInputs: "按鍵", inOff: "隱藏", inOn: "顯示", inputsHint: "按下的按鍵，顯示在下螢幕旁邊或角落（1.6.0 起的錄影）。", qDiscord: "Discord", discordHint: "Discord：小於 10 MB，即沒有 Nitro 時 Discord 接受的大小。", discordLong: "對 10 MB 來說太長：畫面會模糊。可在影片下方剪出較短的片段。", noInputs: "這段錄影沒有按鍵記錄：錄於 1.6.0 之前，或「記錄按鍵」已關閉。", trimTitle: "剪出片段", trimStart: "從這裡開始", trimEnd: "到這裡結束", trimGo: "產生此片段", trimHint: "播放影片，在片段開始處暫停，點「從這裡開始」；再在結束處暫停，點「到這裡結束」。", trimLabel: "片段 %1–%2",
+      optFor: '用途',
+      pNormal: '檔案小，到處可播',
+      pHigh: '位元率更高，像素清晰',
+      pEdit: '每格都是關鍵影格，用於剪輯',
+      pDiscord: '不需Nitro即可傳送',
+      pcOnly: '透過主機的Wi-Fi，此瀏覽器只能即時以1×製作影片：YouTube和剪輯請在電腦上製作（bolgarmaxym97.github.io/3ds-recorder）。',
+      madeTitle: '你的影片',
+      another: '還需要其他版本？',
+      anotherHint: '由這支手機製作',
+      makeVersion: '製作此版本',
+      consoleMp4: '主機的MP4',
+      toPc: '錄影很長？在電腦上更快：插入SD卡並開啟bolgarmaxym97.github.io/3ds-recorder',
+      reconnect: '正在等待主機……主機是否打開並停留在「下載」畫面？頁面會自動繼續。',
+      anotherNow: '需要 YouTube、剪輯或 Discord 版本？現在就選：手機直接從錄影製作，無需等待主機的 MP4。',
     },
     ja: {
       mb: 'MB', gb: 'GB', length: '長さ', size: 'サイズ', eta: '転送時間', s1: '本体からダウンロード', s2: '動画を作成',
@@ -347,6 +465,20 @@
       fastPc: '高速：パソコンの動画エンコーダー', readErr: 'ファイルを読み込めませんでした（%1）。', failedLocal: '動画を作成できませんでした（%1）。', again: 'ほかのファイルを変換',
       webm: 'このブラウザーではWebM動画しか作成できません。MP4にするには、このページをChrome、Edge、Safariで開いてください。',
       optInputs: "ボタン", inOff: "表示しない", inOn: "表示する", inputsHint: "押したボタンを下画面の横か隅に表示します（1.6.0以降の録画）。", qDiscord: "Discord", discordHint: "Discord：Nitroなしで送れる10 MB以下にします。", discordLong: "10 MBには長すぎます：画質がぼやけます。動画の下で短い部分を切り出せます。", noInputs: "この録画にはボタンの記録がありません（1.6.0より前、または「ボタンを記録」がオフ）。", trimTitle: "部分を切り出す", trimStart: "ここから", trimEnd: "ここまで", trimGo: "この部分を作る", trimHint: "動画を再生し、部分の始まりで一時停止して「ここから」、終わりで一時停止して「ここまで」を押します。", trimLabel: "部分 %1–%2",
+      optFor: '用途',
+      pNormal: '小さく、どこでも再生',
+      pHigh: '高ビットレート、くっきりした画素',
+      pEdit: '全フレームがキーフレーム、編集用',
+      pDiscord: 'Nitroなしで送れる',
+      pcOnly: '本体のWi-Fi経由では、このブラウザはリアルタイムかつ1×でしか動画を作れません。YouTubeと編集用はパソコンで作ってください（bolgarmaxym97.github.io/3ds-recorder）。',
+      madeTitle: '作った動画',
+      another: '別のバージョンも？',
+      anotherHint: 'このスマホで作ります',
+      makeVersion: 'このバージョンを作る',
+      consoleMp4: '本体のMP4',
+      toPc: '長い録画は？パソコンのほうが速い：SDカードを入れてbolgarmaxym97.github.io/3ds-recorderを開いてください',
+      reconnect: '本体を待っています… 本体を開いて「ダウンロード」の画面にしていますか？ページは自動で続きます。',
+      anotherNow: 'YouTube・編集用・Discord用が必要なら今選んでください：このスマートフォンが録画から作るので、本体のMP4を待ちません。',
     },
   };
   let L = TEXT.en;
@@ -396,6 +528,8 @@
   const opts = { scale: 1, eq: true, layout: 'auto', quality: 'normal', inputs: false }; // local mode: size, sound, screens, purpose, buttons (remembered in the browser)
   let trim = null; // local mode: { from, to } in seconds of the recording, the part being made (not remembered)
   let lastFast = false; // the video on the page was made the fast way (a part of it can be cut)
+  let custom = LOCAL;   // the page's options apply (a computer; on the phone: "Need another version?")
+  const made = [];      // the videos made on this page: [{ label, href, fname, size }]
 
   // Local mode: which screens go into the video and where (the composite picture is 400 wide: the top
   // screen above, the bottom one centred under it). blits: [sx, sy, sw, sh, dx, dy] from it; null: as it is.
@@ -449,6 +583,7 @@
   }
   function mb(bytes) {
     return bytes >= 1 << 30 ? (bytes / (1 << 30)).toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ' + t('gb')
+      : bytes < 10 << 20 ? (bytes / (1 << 20)).toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ' + t('mb')
       : Math.round(bytes / (1 << 20)) + ' ' + t('mb');
   }
   function duration(sec) { return sec >= 90 ? '≈ ' + Math.round(sec / 60) + ' ' + t('min') : '≈ ' + Math.round(sec) + ' ' + t('sec'); }
@@ -557,8 +692,8 @@
           lastErr = e;
           fails = have > before ? 0 : fails + 1; // progress resets the count: only a dead link gives up
           report(`retry ${this.url.split('/').pop()} @${a + have} (${have - before} B moved): ${why(e)}, fail ${fails}`);
-          if (fails >= 6) throw lastErr;
-          await sleep(1000 * fails); // the console may be busy (503) or the signal weak
+          if (fails >= 30 || this.error) throw lastErr; // ~2 min without a byte (a lid closed a while)
+          await sleep(Math.min(1000 * fails, 5000)); // the console may be busy (503) or the signal weak
         } finally {
           clearTimeout(timer);
         }
@@ -1140,8 +1275,26 @@
     $('keep').hidden = true;
     $('result').hidden = false;
     document.querySelectorAll('#result .share').forEach((b) => b.remove()); // from the video made before (a part)
-    $('trim').hidden = !(LOCAL && lastFast);
-    if (LOCAL && lastFast) trimSetup();
+    $('trim').hidden = !(custom && lastFast);
+    if (custom && lastFast) trimSetup();
+    const purpose = custom ? t({ high: 'qHigh', edit: 'qEdit', discord: 'qDiscord' }[opts.quality] || 'qNormal') + (opts.scale > 1 ? ' · ' + opts.scale + '×' : '') : t('consoleMp4');
+    made.push({ label: purpose + (trim ? ' · ' + t('trimLabel', clock(trim.from), clock(trim.to)) : ''), href, fname, size: blob.size });
+    if (made.length > 1) {
+      const list = $('madeList');
+      list.textContent = '';
+      for (const v of made) {
+        const a = document.createElement('a');
+        a.href = v.href;
+        a.download = v.fname;
+        a.textContent = v.label + ' ';
+        const sz = document.createElement('span');
+        sz.textContent = mb(v.size);
+        a.append(sz);
+        list.append(a);
+      }
+      $('made').hidden = false;
+    }
+    if (!LOCAL) { $('made').after($('versions')); $('versions').querySelector('small').textContent = t('anotherHint'); versionsSetup(); }
     report(`offer ${fname}: ${blob.type} ${blob.size} B, share ${!!navigator.canShare}`);
     // Web Share with files exists only on https pages; offer it where it does
     const file = typeof File !== 'undefined' ? new File([blob], fname, { type: blob.type }) : null;
@@ -1154,6 +1307,41 @@
     }
     save.addEventListener('click', () => { report('save tapped'); step(3, 'done'); });
     if (LOCAL) $('again').hidden = false;
+  }
+
+  // On the phone, under the console's MP4: the computer page's purposes and options, made here from
+  // the .r3d (the browser's encoder; over the console's Wi-Fi Android browsers have none: 1× in real time)
+  let versionsReady = false;
+  function versionsSetup() {
+    $('versions').hidden = false;
+    $('toPc').textContent = t('toPc');
+    $('toPc').hidden = false;
+    if (versionsReady) return;
+    versionsReady = true;
+    const optsCard = $('pick').querySelector('.opts');
+    $('versionOpts').append(optsCard);
+    localOptions();
+    if (typeof VideoEncoder === 'undefined') { // no fast encoder: nothing bigger than 1×
+      for (const v of ['high', 'edit']) { const b = $('quality').querySelector(`[data-v="${v}"]`); if (b) b.disabled = true; }
+      $('scale').querySelectorAll('button').forEach((b) => { b.disabled = b.dataset.v !== '1'; });
+      if (opts.quality === 'high' || opts.quality === 'edit') opts.quality = 'normal';
+      opts.scale = 1;
+      $('pcOnly').hidden = false;
+    }
+    $('makeVersion').onclick = () => {
+      job++; // the console's MP4 is not waited for any more (it is still made there, for later)
+      if (consoleDl) { consoleDl.error = new Error('another version'); consoleDl = null; }
+      custom = true;
+      trim = null;
+      report(`another version: ${opts.quality} ${opts.scale}x ${opts.layout} buttons ${opts.inputs}`);
+      $('versions').hidden = true;
+      $('result').hidden = true;
+      $('long').hidden = true;
+      $('steps').hidden = false;
+      $('s1').querySelector('b').textContent = t('s1'); // the .r3d from the console, then the video here
+      $('s2').querySelector('b').textContent = t('s2');
+      browserVideo();
+    };
   }
 
   async function main() {
@@ -1185,8 +1373,13 @@
     $('diag').href = keyed('/log.txt');
     $('diag').addEventListener('click', () => report('diagnostics file saved'));
     step(3, '');
-    if (info.prep && info.prep !== 'failed') consoleVideo();
-    else browserVideo();
+    if (info.prep && info.prep !== 'failed') {
+      // the other versions are offered now: picked before the console's MP4 is there, nothing is made twice
+      $('steps').after($('versions'));
+      versionsSetup();
+      $('versions').querySelector('small').textContent = t('anotherNow');
+      consoleVideo();
+    } else browserVideo();
   }
 
   /* ------------------------------------------------------------ local mode: a file on the computer */
@@ -1228,7 +1421,14 @@
     if (!['auto', 'top', 'bottom', 'side'].includes(opts.layout)) opts.layout = 'auto';
     if (!(opts.quality in QUALITY)) opts.quality = 'normal';
     seg('layout', () => opts.layout, (v) => { opts.layout = v; });
-    seg('quality', () => opts.quality, (v) => { opts.quality = v; });
+    const SPEC = { normal: '1× · 400×480', high: '3× · 1200×1440', edit: '2× · 800×960', discord: '1× · < 10 MB' };
+    const SCALE_FOR = { normal: 1, high: 3, edit: 2, discord: 1 };
+    document.querySelectorAll('.spec').forEach((el) => { el.textContent = SPEC[el.dataset.spec] || ''; });
+    seg('quality', () => opts.quality, (v) => {
+      opts.quality = v;
+      opts.scale = SCALE_FOR[v] || 1; // a purpose sets the size it is for; the size can still be changed after
+      $('scale').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(opts.scale)));
+    });
     opts.inputs = opts.inputs === true;
     seg('inputs', () => (opts.inputs ? 1 : 0), (v) => { opts.inputs = v === '1'; });
   }
@@ -1288,14 +1488,30 @@
 
   /* ------------------------------------------------------------ the console's MP4 */
 
+  // The console's status; a request that hangs (the lid closed, the Wi-Fi gone) is given up after 6 s
+  async function recStatus() {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch(keyed('/api/rec'), { cache: 'no-store', signal: ctl.signal });
+      if (r.status === 403) { const e = new Error('403'); e.notFound = true; throw e; }
+      return await r.json();
+    } finally { clearTimeout(timer); }
+  }
+
+  let job = 0;           // a newer flow ("another version" picked) stops the console's
+  let consoleDl = null;  // the console's MP4 being downloaded
+
   async function consoleVideo() {
+    const my = ++job;
     $('s1').querySelector('b').textContent = t('c1');
     $('s2').querySelector('b').textContent = t('c2');
     $('error').hidden = true;
-    let st = info, fails = 0, seen = null, left = 0;
+    let st = info, fails = 0, seen = null, left = 0, lostAt = 0;
     const since = performance.now();
     step(2, '', 0, t('waiting'), '');
     while (st.prep !== 'ready') {
+      if (my !== job) return;
       if (st.prep === 'failed' || (st.prep === 'none' && performance.now() - since > 20000)) {
         $('s1').querySelector('b').textContent = t('s1');
         $('s2').querySelector('b').textContent = t('s2');
@@ -1306,16 +1522,25 @@
       const pct = (st.prepPct || 0) / 10, now = performance.now();
       if (!seen && pct > 0) seen = { pct, at: now };
       else if (seen && pct > seen.pct + 1) left = ((100 - pct) * (now - seen.at)) / (pct - seen.pct) / 1000;
-      step(1, 'on', pct, Math.floor(pct) + '%',
+      step(1, 'on', pct, Math.floor(pct) + '%', fails >= 2 ? t('reconnect') :
         (st.prep === 'working' ? t('c1x') : t('c1q')) + (left ? ' · ' + t('left', duration(left)) : ''));
       await sleep(1000);
+      if (my !== job) return;
+      // the console may not answer for a while (its lid closed, the Download screen left and
+      // opened again): asked again and again, the page goes on where it was when it answers
       try {
-        st = await (await fetch(keyed('/api/rec'), { cache: 'no-store' })).json();
+        const next = await recStatus();
+        if (next.name !== name) { fail(t('notFound')); return; }
+        if (fails >= 2) report(`console back after ${Math.round((performance.now() - lostAt) / 1000)} s without an answer`);
+        st = next;
         fails = 0;
       } catch (e) {
-        if (++fails >= 5) { fail(t('lost'), consoleVideo); return; }
+        if (e.notFound) { fail(t('notFound')); return; }
+        if (++fails === 2) { lostAt = performance.now(); report('console not answering: ' + why(e)); }
+        if (fails >= 2 && performance.now() - lostAt > 15 * 60 * 1000) { fail(t('lost'), consoleVideo); return; }
       }
     }
+    if (my !== job) return;
     step(1, 'done', 100, t('ready'), '');
     report(`console MP4 ready: ${st.mp4} B after ${Math.round((performance.now() - since) / 1000)} s on the page`);
     $('size').textContent = mb(st.mp4);
@@ -1335,7 +1560,7 @@
       return;
     }
     const parts = [];
-    const dl = new Download(keyed('/rec/' + encodeURIComponent(stem + '.mp4')), st.mp4, async (piece) => { parts.push(piece); },
+    const dl = consoleDl = new Download(keyed('/rec/' + encodeURIComponent(stem + '.mp4')), st.mp4, async (piece) => { parts.push(piece); },
       (g, size, rate) => {
         const rest = rate ? (size - g) / rate : 0;
         step(2, g >= size ? 'done' : 'on', (g / size) * 100, Math.floor((g / size) * 100) + '%',
@@ -1344,10 +1569,13 @@
     try {
       await dl.run();
     } catch (e) {
+      if (my !== job) return; // another version was picked meanwhile
       report('MP4 download failed: ' + why(e));
       fail(e.notFound ? t('notFound') : t('lost'), e.notFound ? null : consoleVideo);
       return;
     }
+    consoleDl = null;
+    if (my !== job) return;
     const secs = (performance.now() - dl.t0) / 1000;
     report(`MP4 downloaded: ${dl.got} B in ${secs.toFixed(1)} s (${Math.round(dl.got / 1024 / secs)} KB/s)`);
     step(2, 'done', 100, t('ready'));
@@ -1372,11 +1600,11 @@
 
     const height = info.both ? 480 : 240;
     const canDraw = typeof OffscreenCanvas !== 'undefined'; // upscales and layouts are drawn on one
-    let scale = LOCAL && canDraw ? opts.scale : 1;
-    const layout = LOCAL && canDraw ? opts.layout : 'auto';
-    let quality = LOCAL ? opts.quality : 'normal';
-    // the buttons: the page's choice on a computer; on the phone, the console's Buttons In Video setting
-    const inputs = LOCAL ? opts.inputs : info.keys === true; // the console's Buttons In Video, for a recording that kept them
+    let scale = custom && canDraw ? opts.scale : 1;
+    const layout = custom && canDraw ? opts.layout : 'auto';
+    let quality = custom ? opts.quality : 'normal';
+    // the buttons: the page's choice (a computer, a version asked for); else the console's Buttons In Video
+    const inputs = custom ? opts.inputs : info.keys === true; // the console's Buttons In Video, for a recording that kept them
     const view = viewFor({ both: info.both, bottomOnly: info.bottomOnly, height }, layout);
     const fps = info.fps || 30;
     const seconds = trim ? trim.to - trim.from : info.ms / 1000;

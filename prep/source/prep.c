@@ -142,6 +142,10 @@ struct PrepJob {
     State s;
     /* producer */
     uint16_t *px[2];
+    /* A screen whose last frame was C420: its words, made into YUV straight (yuv_c420); px gets the
+       picture only when something needs it (a delta frame of that screen, a resume point) */
+    uint8_t *c420[2];
+    int pxStale[2];
     uint8_t *payload, *yuv;             /* yuv: the picture as it is now (updated a screen at a time) */
     VO_AUDIO_CODECAPI aapi;
     VO_HANDLE ah;
@@ -262,7 +266,7 @@ static int wait_drained(PrepJob *j)
             return PREP_ERROR;
         j->opt.sleepUs(1000);
     }
-    j->st.produceWaitMs += ms_since(j, t0);
+    j->st.drainMs += ms_since(j, t0);
     return 0;
 }
 
@@ -331,6 +335,52 @@ static void yuv_screen(const PrepJob *j, int sc)
     }
 }
 
+/* One screen's C420 words (codec.h) into the picture at (ox, oy), the same bytes as decoding them
+   into px and yuv_screen: a C420 block is a YUV 4:2:0 block (2 x 2, rows paired the same way). */
+static void yuv_c420(const PrepJob *j, int sc)
+{
+    const int W = 400, cols = sc ? 320 : 400, ox = sc ? 40 : 0, oy = sc && !j->bottomOnly ? 240 : 0;
+    uint8_t *Y = j->yuv, *U = Y + W * j->H, *V = U + W * j->H / 4;
+    const uint32_t *words = (const uint32_t *)j->c420[sc];   /* column pair x / 2: 120 words, row pair r / 2 */
+    codec_c420_init();
+    /* rows outside, as yuv_screen: the picture is written in order, a word read per block (a cache
+       line holds 8 row pairs of a column pair, used by the next 7 rounds) */
+    for (int r = 0; r < 240; r += 2) {
+        const int y = 238 - r;   /* stored rows r, r + 1 = picture rows y + 1, y */
+        uint8_t *y0 = Y + (oy + y) * W + ox, *y1 = y0 + W;
+        uint8_t *u = U + ((oy + y) / 2) * (W / 2) + ox / 2, *v = V + ((oy + y) / 2) * (W / 2) + ox / 2;
+        const uint32_t *wp = words + r / 2;
+        for (int x = 0; x < cols; x += 2, wp += 120) {
+            const uint32_t w = *wp;
+            uint16_t p[4];   /* (x, r) (x, r + 1) (x + 1, r) (x + 1, r + 1) */
+            CODEC_C420_BLOCK(w, p);
+            const uint32_t a = p[1], b = p[0], d = p[3], e = p[2];
+            y0[x] = Y_OF(a), y0[x + 1] = Y_OF(d), y1[x] = Y_OF(b), y1[x + 1] = Y_OF(e);
+            const uint32_t r0 = a >> 11, r1 = b >> 11, r2 = d >> 11, r3 = e >> 11;
+            const uint32_t g0 = (a >> 5) & 63, g1 = (b >> 5) & 63, g2 = (d >> 5) & 63, g3 = (e >> 5) & 63;
+            const uint32_t b0 = a & 31, b1 = b & 31, b2 = d & 31, b3 = e & 31;
+            const int32_t su = g_ur[r0] + g_ur[r1] + g_ur[r2] + g_ur[r3] + g_ug[g0] + g_ug[g1] + g_ug[g2] +
+                               g_ug[g3] + g_ub[b0] + g_ub[b1] + g_ub[b2] + g_ub[b3];
+            const int32_t sv = g_vr[r0] + g_vr[r1] + g_vr[r2] + g_vr[r3] + g_vg[g0] + g_vg[g1] + g_vg[g2] +
+                               g_vg[g3] + g_vb[b0] + g_vb[b1] + g_vb[b2] + g_vb[b3];
+            u[x / 2] = (uint8_t)(((su >> 2) + 128 + 32768) >> 8);
+            v[x / 2] = (uint8_t)(((sv >> 2) + 128 + 32768) >> 8);
+        }
+    }
+}
+
+/* [P] px of a screen whose last frame was C420, made when something needs it */
+static void px_fresh(PrepJob *j, int sc)
+{
+    if (!j->pxStale[sc])
+        return;
+    const uint64_t t0 = now_us(j);
+    const uint32_t cols = sc ? 320 : 400;
+    codec_c420_decode(j->c420[sc], (size_t)cols * 240, j->px[sc], cols, 240);
+    j->pxStale[sc] = 0;
+    j->st.decodeMs += ms_since(j, t0);
+}
+
 /* ------------------------------------------------------------------ [C] output */
 
 static int tbl_add(PrepJob *j, uint32_t offset, uint32_t size, uint32_t info)
@@ -353,7 +403,11 @@ static int flush_full(PrepJob *j)
         j->olen[i] = 0;
         STORE(j->ofull[i], 0);
         j->onext ^= 1;
-        j->st.diskMs += ms_since(j, t0);
+        const double ms = ms_since(j, t0);
+        j->st.diskMs += ms;
+        j->st.diskWrites++;
+        if (ms > j->st.diskMaxMs)
+            j->st.diskMaxMs = ms;
     }
     return 0;
 }
@@ -599,6 +653,8 @@ static int checkpoint(PrepJob *j, uint64_t recStart)
         for (uint32_t t = j->in->tail; t != j->in->head && s->inQueued < IN_SAVED; t++)
             s->inQ[s->inQueued++] = j->in->q[t % INPUT_QUEUE];
     }
+    px_fresh(j, 0);
+    px_fresh(j, 1);
     uint32_t lens[2];
     lens[0] = (uint32_t)codec_xr32_encode_strided(scratch, (const uint8_t *)j->px[0], 400, 240, 480, 1, 1, data);
     lens[1] = (uint32_t)codec_xr32_encode_strided(scratch, (const uint8_t *)j->px[1], 320, 240, 480, 1, 1, data + lens[0]);
@@ -614,6 +670,7 @@ static int checkpoint(PrepJob *j, uint64_t recStart)
     if (bad)
         return fail(j, "write failed (SD card full?)");
     j->st.checkpointMs += ms_since(j, t0);
+    j->st.checkpoints++;
     return 0;
 }
 
@@ -691,8 +748,12 @@ static int produce_picture(PrepJob *j, uint64_t tick, uint64_t recStart)
     State *s = &j->s;
     const uint64_t t0 = now_us(j);
     for (int sc = 0; sc < 2; sc++)
-        if (s->dirty & (1u << sc) && SCREEN_SHOWN(j, sc))
-            yuv_screen(j, sc);
+        if (s->dirty & (1u << sc) && SCREEN_SHOWN(j, sc)) {
+            if (j->pxStale[sc])
+                yuv_c420(j, sc);
+            else
+                yuv_screen(j, sc);
+        }
     const size_t bytes = 400 * (size_t)j->H * 3 / 2;
     const InputState *in = j->in ? input_track_at(j->in, (uint32_t)(tick * (1000000ull / GRID_HZ))) : NULL;
     const int repeated = j->lastPic >= 0 && memcmp(j->lastYuv, j->yuv, bytes) == 0 && (!in || same_input(in, &s->inDrawn));
@@ -701,9 +762,9 @@ static int produce_picture(PrepJob *j, uint64_t tick, uint64_t recStart)
         return PREP_ERROR;
     if (repeated)
         s->dirty = 0;
-    /* a resume point: every PREP_GOP pictures, and as often while a picture stays (not with one waiting) */
-    const int savePoint = repeated ? tick >= j->checkpointTick + (uint64_t)PREP_GOP * GRID_HZ / j->fps
-                                   : s->videoFrames && s->videoFrames % PREP_GOP == 0;
+    /* a resume point: every PREP_CKPT pictures, and as often while a picture stays (not with one waiting) */
+    const int savePoint = repeated ? tick >= j->checkpointTick + (uint64_t)PREP_CKPT * GRID_HZ / j->fps
+                                   : s->videoFrames && s->videoFrames % PREP_CKPT == 0;
     if (savePoint && !j->skipCk && !j->pendingPic) {
         if (wait_drained(j) || checkpoint(j, recStart))
             return PREP_ERROR;
@@ -780,7 +841,9 @@ static int produce(PrepJob *j);
 
 int prep_produce(PrepJob *j)
 {
+    const uint64_t t0 = now_us(j);
     const int r = produce(j);
+    j->st.producerMs += ms_since(j, t0);
     STORE(j->producerExited, 1);
     return r;
 }
@@ -890,16 +953,24 @@ static int produce(PrepJob *j)
         const int key = (rh.screen & R3D_SCREEN_KEY) != 0;
         t0 = now_us(j);
         int bad = 0;
+        if (rh.magic != R3D_MAGIC_CFRAME && !(!key && s->needKey[sc])) {
+            px_fresh(j, sc);   /* a delta needs the picture it changes (a key frame of a few runs too) */
+        }
         if (rh.magic == R3D_MAGIC_FRAME)
             memcpy(j->px[sc], j->payload, n * 2);
         else if (!key && s->needKey[sc])
             continue;
+        else if (rh.magic == R3D_MAGIC_CFRAME) {
+            bad = rh.len != (uint32_t)cols * 240;
+            if (!bad) {
+                memcpy(j->c420[sc], j->payload, rh.len);
+                j->pxStale[sc] = 1;
+            }
+        }
         else if (rh.magic == R3D_MAGIC_YFRAME)
             bad = codec_xr32_decode(j->payload, rh.len, j->px[sc], n, key);
         else if (rh.magic == R3D_MAGIC_QFRAME)
             bad = codec_q565_decode(j->payload, rh.len, j->px[sc], n);
-        else if (rh.magic == R3D_MAGIC_CFRAME)
-            bad = codec_c420_decode(j->payload, rh.len, j->px[sc], cols, 240);
         else if (rh.magic == R3D_MAGIC_HFRAME) {
             static HuffTables tables;   /* one conversion at a time */
             bad = huff_xr32_decode(j->payload, rh.len, j->px[sc], n, key, &tables);
@@ -1473,6 +1544,7 @@ static int start_fresh(PrepJob *j, uint64_t srcSize)
     j->s.srcOffset = sizeof(R3dFileHeader);
     memset(j->px[0], 0, TOP_N * 2);
     memset(j->px[1], 0, BOT_N * 2);
+    j->pxStale[0] = j->pxStale[1] = 0;
     j->part = open_file(j, "mp4.part", "w+b");
     j->tbl = open_file(j, "ptbl", "w+b");
     j->prep = open_file(j, "prep", "w+b");
@@ -1501,6 +1573,7 @@ static int try_resume(PrepJob *j, uint64_t srcSize)
     FILE *f = open_file(j, "prep", "r+b");
     if (!f)
         return 0;
+    j->pxStale[0] = j->pxStale[1] = 0;
     if (load_slot(f, &j->s, j->px[0], j->px[1]) < 0 || j->s.srcSize != srcSize) {
         fclose(f);
         return 0;
@@ -1562,6 +1635,8 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
     j->rsStep = j->inRate / OUT_RATE;
     j->px[0] = malloc(TOP_N * 2);
     j->px[1] = malloc(BOT_N * 2);
+    j->c420[0] = malloc(400 * 240);
+    j->c420[1] = malloc(320 * 240);
     j->payload = malloc(codec_xr32_max_size(TOP_N) + 64);
     const size_t picBytes = 400 * (size_t)j->H * 3 / 2;
     j->yuv = malloc(picBytes);
@@ -1582,7 +1657,7 @@ PrepJob *prep_open(const char *src, const char *base, const PrepOptions *opt, ch
             goto error;
         }
     }
-    if (!j->obuf[0] || !j->obuf[1] || !j->px[0] || !j->px[1] || !j->payload || !j->yuv || !j->lastYuv || !j->pic[PIC_SLOTS - 1] || !j->pic[0] || !j->pic[1]) {
+    if (!j->obuf[0] || !j->obuf[1] || !j->px[0] || !j->px[1] || !j->c420[0] || !j->c420[1] || !j->payload || !j->yuv || !j->lastYuv || !j->pic[PIC_SLOTS - 1] || !j->pic[0] || !j->pic[1]) {
         fail(j, "out of memory");
         goto error;
     }
@@ -1660,6 +1735,8 @@ void prep_close(PrepJob *j)
     free(j->scratch);
     free(j->px[0]);
     free(j->px[1]);
+    free(j->c420[0]);
+    free(j->c420[1]);
     free(j->payload);
     free(j->yuv);
     free(j->lastYuv);
